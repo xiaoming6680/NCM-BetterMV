@@ -1,0 +1,12 @@
+{
+  "song": "水仙LONE - Time Flies (NetEase 3325660944, instrumental, wiki BPM 101)",
+  "note": "Sections only, from eval --bars levels (no lyrics). Soft intro; main groove (one texture throughout, so drop or chorus); two filtered transition bars (treble cut, bass swell); dark bass-less breakdown; main groove again; end.",
+  "sections": [
+    { "name": "intro", "start": 0, "end": 20.0 },
+    { "name": "drop|chorus", "start": 20.0, "end": 71.8 },
+    { "name": "break|bridge", "start": 71.8, "end": 76.5 },
+    { "name": "break", "start": 76.5, "end": 95.3 },
+    { "name": "drop|chorus", "start": 95.3, "end": 132.9 },
+    { "name": "outro", "start": 132.9, "end": 138.82 }
+  ]
+}

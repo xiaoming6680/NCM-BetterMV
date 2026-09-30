@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="512" height="512">
+  <!-- BetterMV. The tile is the Better plugins' continuous-corner square; the mark is a play button that is a
+       tunnel of triangles, the plugin's push tunnel seen head-on (white bands and holes, one even-odd path). -->
+  <defs>
+    <linearGradient id="bmv-base" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff8a5b"/><stop offset=".5" stop-color="#ff3d7f"/><stop offset="1" stop-color="#7c4dff"/>
+    </linearGradient>
+    <linearGradient id="bmv-edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".5"/><stop offset=".12" stop-color="#fff" stop-opacity=".2"/><stop offset="1" stop-color="#fff" stop-opacity=".16"/>
+    </linearGradient>
+    <clipPath id="bmv-clip"><path d="M64 0c12.6 0 18.9 0 23.71 2.45a22.5 22.5 0 0 1 9.83 9.83c2.45 4.81 2.45 11.11 2.45 23.71V64c0 12.6 0 18.9-2.45 23.71a22.5 22.5 0 0 1-9.83 9.83c-4.81 2.45-11.11 2.45-23.71 2.45H36c-12.6 0-18.9 0-23.71-2.45a22.5 22.5 0 0 1-9.83-9.83C0 82.9 0 76.6 0 64V36c0-12.6 0-18.9 2.45-23.71a22.5 22.5 0 0 1 9.83-9.83C17.1 0 23.4 0 36 0Z"/></clipPath>
+  </defs>
+  <path d="M64 0c12.6 0 18.9 0 23.71 2.45a22.5 22.5 0 0 1 9.83 9.83c2.45 4.81 2.45 11.11 2.45 23.71V64c0 12.6 0 18.9-2.45 23.71a22.5 22.5 0 0 1-9.83 9.83c-4.81 2.45-11.11 2.45-23.71 2.45H36c-12.6 0-18.9 0-23.71-2.45a22.5 22.5 0 0 1-9.83-9.83C0 82.9 0 76.6 0 64V36c0-12.6 0-18.9 2.45-23.71a22.5 22.5 0 0 1 9.83-9.83C17.1 0 23.4 0 36 0Z" fill="url(#bmv-base)"/>
+  <path d="M64 0c12.6 0 18.9 0 23.71 2.45a22.5 22.5 0 0 1 9.83 9.83c2.45 4.81 2.45 11.11 2.45 23.71V64c0 12.6 0 18.9-2.45 23.71a22.5 22.5 0 0 1-9.83 9.83c-4.81 2.45-11.11 2.45-23.71 2.45H36c-12.6 0-18.9 0-23.71-2.45a22.5 22.5 0 0 1-9.83-9.83C0 82.9 0 76.6 0 64V36c0-12.6 0-18.9 2.45-23.71a22.5 22.5 0 0 1 9.83-9.83C17.1 0 23.4 0 36 0Z" fill="none" stroke="url(#bmv-edge)" stroke-width="2" vector-effect="non-scaling-stroke" clip-path="url(#bmv-clip)"/>
+  <path d="M37.92 27.50Q30.12 23.00 30.12 32.01L30.12 67.99Q30.12 77.00 37.92 72.50L69.08 54.50Q76.88 50.00 69.08 45.50ZM40.72 35.60Q35.73 32.72 35.73 38.48L35.73 61.52Q35.73 67.28 40.72 64.40L60.67 52.88Q65.66 50.00 60.67 47.12ZM42.28 40.10Q38.85 38.12 38.85 42.08L38.85 57.92Q38.85 61.88 42.28 59.90L55.99 51.98Q59.42 50.00 55.99 48.02ZM43.37 43.25Q41.03 41.90 41.03 44.60L41.03 55.40Q41.03 58.10 43.37 56.75L52.72 51.35Q55.06 50.00 52.72 48.65ZM44.54 46.63Q43.37 45.95 43.37 47.30L43.37 52.70Q43.37 54.05 44.54 53.37L49.21 50.68Q50.38 50.00 49.21 49.32Z" fill="#fff" fill-rule="evenodd"/>
+</svg>

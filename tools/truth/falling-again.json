@@ -1,0 +1,71 @@
+{
+  "song": "NURKO / Roniit - Falling Again (NetEase 565841089)",
+  "note": "Sections only, annotated from the lyric timing and per-bar loudness / low-band level (2026-09-30). 'a|b' = either label is right. 130.2 and 230.6 are the downbeats of the corrected grid (the old grid was broken there).",
+  "sections": [
+    {
+      "name": "intro",
+      "start": 0,
+      "end": 29.8
+    },
+    {
+      "name": "verse",
+      "start": 29.8,
+      "end": 54.9
+    },
+    {
+      "name": "chorus",
+      "start": 54.9,
+      "end": 80.0
+    },
+    {
+      "name": "drop|chorus|bridge",
+      "start": 80.0,
+      "end": 102.0
+    },
+    {
+      "name": "build|pre",
+      "start": 102.0,
+      "end": 105.1
+    },
+    {
+      "name": "drop",
+      "start": 105.1,
+      "end": 130.2
+    },
+    {
+      "name": "break|verse|bridge|build",
+      "start": 130.2,
+      "end": 142.8
+    },
+    {
+      "name": "chorus",
+      "start": 142.8,
+      "end": 155.3
+    },
+    {
+      "name": "drop|chorus|build",
+      "start": 155.3,
+      "end": 177.3
+    },
+    {
+      "name": "build|pre",
+      "start": 177.3,
+      "end": 180.4
+    },
+    {
+      "name": "drop",
+      "start": 180.4,
+      "end": 205.5
+    },
+    {
+      "name": "drop",
+      "start": 205.5,
+      "end": 230.6
+    },
+    {
+      "name": "outro",
+      "start": 230.6,
+      "end": 268.9
+    }
+  ]
+}

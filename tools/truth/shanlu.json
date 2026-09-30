@@ -1,0 +1,14 @@
+{
+  "song": "毛不易 - 一程山路 (NetEase 1417849873)",
+  "note": "Sections only, from eval --bars/--lines (levels per bar, lyric repeat groups, no text). Chorus = the 4-line block sung twice (first line is a pickup late in the bar before). Instrumental interlude after chorus 1: calmer, far less treble. After chorus 2: new lines at chorus loudness, then a soft sung coda repeating the last couplet.",
+  "sections": [
+    { "name": "intro", "start": 0, "end": 28.1 },
+    { "name": "verse", "start": 28.1, "end": 56.0 },
+    { "name": "chorus", "start": 56.0, "end": 83.9 },
+    { "name": "bridge|break", "start": 83.9, "end": 111.7 },
+    { "name": "verse", "start": 111.7, "end": 139.5 },
+    { "name": "chorus", "start": 139.5, "end": 167.3 },
+    { "name": "bridge|chorus", "start": 167.3, "end": 195.2 },
+    { "name": "outro", "start": 195.2, "end": 215.8 }
+  ]
+}

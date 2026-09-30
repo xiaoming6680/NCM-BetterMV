@@ -1,0 +1,76 @@
+{
+  "song": "BUNT. / Graham - Maybe (NetEase 2142927883)",
+  "note": "Sections only, annotated from the lyric timing and per-bar loudness / low-band level (2026-09-30). 'a|b' = either label is right. Boundaries moved +0.34 s (half a beat) to the corrected beat grid, where the kicks and the bass entries are (e.g. the drop at 49.42 s).",
+  "sections": [
+    {
+      "name": "intro",
+      "start": 0,
+      "end": 8.24
+    },
+    {
+      "name": "verse|chorus",
+      "start": 8.24,
+      "end": 30.24
+    },
+    {
+      "name": "pre|build|verse",
+      "start": 30.24,
+      "end": 32.94
+    },
+    {
+      "name": "drop|chorus",
+      "start": 32.94,
+      "end": 43.94
+    },
+    {
+      "name": "break|build",
+      "start": 43.94,
+      "end": 49.44
+    },
+    {
+      "name": "drop",
+      "start": 49.44,
+      "end": 65.84
+    },
+    {
+      "name": "break",
+      "start": 65.84,
+      "end": 71.34
+    },
+    {
+      "name": "verse",
+      "start": 71.34,
+      "end": 90.54
+    },
+    {
+      "name": "verse|chorus",
+      "start": 90.54,
+      "end": 112.54
+    },
+    {
+      "name": "build|pre",
+      "start": 112.54,
+      "end": 126.24
+    },
+    {
+      "name": "drop|chorus",
+      "start": 126.24,
+      "end": 137.24
+    },
+    {
+      "name": "break|build",
+      "start": 137.24,
+      "end": 142.64
+    },
+    {
+      "name": "drop",
+      "start": 142.64,
+      "end": 159.14
+    },
+    {
+      "name": "outro",
+      "start": 159.14,
+      "end": 170.1
+    }
+  ]
+}

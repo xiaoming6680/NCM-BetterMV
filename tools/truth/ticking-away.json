@@ -1,0 +1,76 @@
+{
+  "song": "VALORANT / Grabbitz / bbno$ - Ticking Away (NetEase 2068401809)",
+  "note": "Sections only, annotated from the lyric timing and per-bar loudness / low-band level (2026-09-30). 'a|b' = either label is right. 90.1-100.2: the first half of chorus 2 is stripped (no bass), so a build reading is right too. The last chorus line is held to 181.0 s, where the final drop starts.",
+  "sections": [
+    {
+      "name": "intro",
+      "start": 0,
+      "end": 6.7
+    },
+    {
+      "name": "intro|drop",
+      "start": 6.7,
+      "end": 16.8
+    },
+    {
+      "name": "verse",
+      "start": 16.8,
+      "end": 37.0
+    },
+    {
+      "name": "pre",
+      "start": 37.0,
+      "end": 47.1
+    },
+    {
+      "name": "chorus",
+      "start": 47.1,
+      "end": 69.9
+    },
+    {
+      "name": "verse",
+      "start": 69.9,
+      "end": 90.1
+    },
+    {
+      "name": "chorus|pre|build",
+      "start": 90.1,
+      "end": 100.2
+    },
+    {
+      "name": "chorus",
+      "start": 100.2,
+      "end": 110.3
+    },
+    {
+      "name": "drop",
+      "start": 110.3,
+      "end": 130.5
+    },
+    {
+      "name": "break",
+      "start": 130.5,
+      "end": 135.5
+    },
+    {
+      "name": "bridge|verse",
+      "start": 135.5,
+      "end": 158.3
+    },
+    {
+      "name": "chorus",
+      "start": 158.3,
+      "end": 181.0
+    },
+    {
+      "name": "drop",
+      "start": 181.0,
+      "end": 191.1
+    },
+    {
+      "name": "outro",
+      "start": 191.1,
+      "end": 205.3
+    }
+  ]
+}

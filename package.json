@@ -1,0 +1,23 @@
+{
+  "name": "ncm-better-mv",
+  "version": "0.7.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "eval": "bun tools/eval-analysis.ts",
+    "plugin": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-plugin.ps1",
+    "pack": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-plugin.ps1"
+  },
+  "dependencies": {
+    "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/three": "^0.186.0",
+    "vite": "^8.3.0"
+  },
+  "peerDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

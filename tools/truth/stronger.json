@@ -1,0 +1,26 @@
+{
+  "song": "Kanye West - Stronger (NetEase 18969069)",
+  "note": "Sections only, from eval --bars/--lines. Two refrain blocks always in the same order: an 8-line block sung 4 times (chorus, or its first half) and the 4-bar hook sung 9 times (chorus). Rap verses = unique lines; the second verse's back half has the bass pulled down. After chorus 3 and 4 a third repeated 4-bar block (post-chorus / bridge), after chorus 3 followed by a vamp of one chanted line; a 2-bar quiet breakdown; bridge lines; a quieter lead-in; the hook repeated to the end.",
+  "sections": [
+    { "name": "intro", "start": 0, "end": 4.8 },
+    { "name": "chorus|pre", "start": 4.8, "end": 23.3 },
+    { "name": "chorus", "start": 23.3, "end": 32.5 },
+    { "name": "verse", "start": 32.5, "end": 69.5 },
+    { "name": "chorus|pre", "start": 69.5, "end": 87.9 },
+    { "name": "chorus", "start": 87.9, "end": 97.2 },
+    { "name": "verse", "start": 97.2, "end": 115.6 },
+    { "name": "verse|pre", "start": 115.6, "end": 134.1 },
+    { "name": "chorus|pre", "start": 134.1, "end": 152.6 },
+    { "name": "chorus", "start": 152.6, "end": 161.8 },
+    { "name": "bridge|chorus", "start": 161.8, "end": 171.0 },
+    { "name": "bridge|chorus|drop", "start": 171.0, "end": 189.5 },
+    { "name": "chorus|pre", "start": 189.5, "end": 207.9 },
+    { "name": "chorus", "start": 207.9, "end": 226.4 },
+    { "name": "bridge|chorus", "start": 226.4, "end": 244.9 },
+    { "name": "break", "start": 244.9, "end": 249.5 },
+    { "name": "bridge", "start": 249.5, "end": 265.7 },
+    { "name": "build|bridge|pre", "start": 265.7, "end": 272.6 },
+    { "name": "chorus", "start": 272.6, "end": 309.5 },
+    { "name": "outro", "start": 309.5, "end": 311.95 }
+  ]
+}

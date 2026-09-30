@@ -1,0 +1,49 @@
+name: Build plugin
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Type check
+        run: bunx tsc --noEmit
+      - name: Pack the plugin
+        shell: pwsh
+        run: ./scripts/pack-plugin.ps1
+      - name: Check the package
+        shell: pwsh
+        run: |
+          # No work names in the bundle (the plugin is promoted on its own) and every file the manifest needs is packed.
+          if (Select-String -Path dist/plugin/bettermv.js -Pattern '《' -Quiet) { throw 'bettermv.js 里出现了作品名（《…》）' }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path dist/*.plugin).Path)
+          try {
+            $names = $zip.Entries.FullName
+            foreach ($need in @('manifest.json', 'bettermv.js', 'preview.jpg', 'LICENSE', 'fonts/OFL.txt')) {
+              if ($names -notcontains $need) { throw "安装包缺少 $need" }
+            }
+            if (@($names | Where-Object { $_ -like 'previews/*.webp' }).Count -lt 21) { throw '场景示意图不全' }
+          } finally { $zip.Dispose() }
+          $version = (Get-Content plugin/manifest.json -Raw | ConvertFrom-Json).version
+          $hash = (Get-FileHash (Resolve-Path dist/*.plugin).Path -Algorithm SHA256).Hash
+          "version $version  sha256 $hash" | Tee-Object dist/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BetterMV
+          path: |
+            dist/*.plugin
+            dist/SHA256SUMS.txt
+          if-no-files-found: error

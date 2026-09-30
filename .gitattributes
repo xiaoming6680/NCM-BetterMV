@@ -1,0 +1,6 @@
+*.jpg binary
+*.png binary
+*.webp binary
+*.ttf binary
+*.plugin binary
+promo/** -linguist-detectable

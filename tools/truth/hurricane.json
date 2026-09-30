@@ -1,0 +1,17 @@
+{
+  "song": "BUNT. / HON / SMBDY - Hurricane (NetEase 1836011652)",
+  "note": "Sections only, from eval --bars/--lines. A 16-bar block of repeated lines (each twice in the song) sung over a building beat = chorus (its first bars may be a pre-chorus); loud unsung stretch after it = drop. Near-silent 2 bars before verse 2. After chorus 2: new long lines (bridge), 8 instrumental bars rising into the last drop (the chorus' last line held over the gap bar).",
+  "sections": [
+    { "name": "intro", "start": 0, "end": 21.8 },
+    { "name": "verse", "start": 21.8, "end": 39.3 },
+    { "name": "chorus|pre", "start": 39.3, "end": 74.2 },
+    { "name": "drop", "start": 74.2, "end": 91.6 },
+    { "name": "break", "start": 91.6, "end": 96.0 },
+    { "name": "verse", "start": 96.0, "end": 113.5 },
+    { "name": "chorus|pre", "start": 113.5, "end": 148.4 },
+    { "name": "bridge", "start": 148.4, "end": 165.8 },
+    { "name": "build|drop", "start": 165.8, "end": 183.3 },
+    { "name": "drop", "start": 183.3, "end": 216.0 },
+    { "name": "outro", "start": 216.0, "end": 232.26 }
+  ]
+}

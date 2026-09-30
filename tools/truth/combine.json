@@ -1,0 +1,14 @@
+{
+  "song": "Bustre - Combine (NetEase 31877908, instrumental drum & bass, wiki BPM 86)",
+  "note": "Sections only, from eval --bars levels (no lyrics), on the 87 BPM grid (one bar = two drum & bass bars; every section is 8, 16 or 24 of them). Drum intro; darker stretch without hats; rising build ending in a bar without bass; drop (bass fading over its last two bars); bass-less breakdown ending in a quiet gap bar; second drop (bass gone in its last bar); two dark transition bars; DJ outro and fade.",
+  "sections": [
+    { "name": "intro", "start": 0, "end": 22.2 },
+    { "name": "intro|break|verse", "start": 22.2, "end": 44.3 },
+    { "name": "build|pre", "start": 44.3, "end": 66.3 },
+    { "name": "drop", "start": 66.3, "end": 132.5 },
+    { "name": "break", "start": 132.5, "end": 154.6 },
+    { "name": "drop", "start": 154.6, "end": 198.8 },
+    { "name": "outro|break", "start": 198.8, "end": 204.3 },
+    { "name": "outro", "start": 204.3, "end": 249.66 }
+  ]
+}

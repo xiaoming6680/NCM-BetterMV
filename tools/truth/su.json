@@ -1,0 +1,22 @@
+{
+  "song": "CORSAK胡梦周 / 马吟吟 - 溯 Reverse (NetEase 1294951288)",
+  "note": "Sections only, from eval --bars / --lines and per-beat levels (2026-09-30); times on the analysis' bar grid (140 BPM, 1.71 s bars). Future bass: soft verse without bass, verse with the full beat, a 6-bar block of hook lines (G10 ×6, G11 ×5) over lighter bass = chorus, then 4 bars where the bass drops out under a snare roll and riser, one hook line sung over it = build; unsung loud 14 bars = drop; each drop ends with 2 loud bars where a hook line comes back (drop 1: sung straight into verse 2, whose lines are verse 1's again, over the full beat). After drop 2: 6 quiet bars without drums or bass, hook lines sung sparsely (breakdown), then 2 bass-less riser bars into the last drop. Inferred rather than read off the levels: the build starting at 42.6 / 111.2 rather than a bar later (the bass fades over 2 bars), and verse 2 starting at 73.5 (where the singing comes back) rather than at 75.2 / 76.9 (where the verse beat pattern starts).",
+  "sections": [
+    { "name": "intro", "start": 0, "end": 7.06 },
+    { "name": "verse", "start": 7.06, "end": 20.77 },
+    { "name": "verse|pre", "start": 20.77, "end": 32.34 },
+    { "name": "chorus", "start": 32.34, "end": 42.63 },
+    { "name": "build", "start": 42.63, "end": 49.49 },
+    { "name": "drop", "start": 49.49, "end": 73.49 },
+    { "name": "verse", "start": 73.49, "end": 100.92 },
+    { "name": "chorus", "start": 100.92, "end": 111.2 },
+    { "name": "build", "start": 111.2, "end": 118.06 },
+    { "name": "drop", "start": 118.06, "end": 142.06 },
+    { "name": "drop|chorus", "start": 142.06, "end": 145.49 },
+    { "name": "bridge|break", "start": 145.49, "end": 155.78 },
+    { "name": "build", "start": 155.78, "end": 159.2 },
+    { "name": "drop", "start": 159.2, "end": 183.2 },
+    { "name": "drop|chorus|outro", "start": 183.2, "end": 186.63 },
+    { "name": "outro", "start": 186.63, "end": 192.03 }
+  ]
+}

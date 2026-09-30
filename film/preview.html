@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>BetterMV 预览图</title>
+<script>if (location.search.includes('store')) document.documentElement.classList.add('store');</script>
+<style>
+/* The README cover (880 × 440, rendered at 2x) and, with ?store, the BetterNCM store preview (960 × 480), laid out as
+   BetterDownload's: store cards are 150 px tall, crop the image with background-size: cover and lay the plugin's name
+   over the bottom 65 px, so the store version keeps the icon in the upper half and leaves the name to the card.
+   Behind the icon, faintly, the plugin's own push tunnel (film/art/tunnel-h.jpg). */
+@font-face { font-family: PF; src: local("PingFang SC Medium"), local("PingFangSC-Medium"); font-weight: 500; }
+@font-face { font-family: Archivo; src: url(/fonts/Archivo-w1000-700.ttf); font-weight: 700; }
+:root { --w: 880px; --h: 440px; --s: 138px; --cy: 156px; --brand: linear-gradient(135deg, #ff8a5b, #ff3d7f 50%, #7c4dff); }
+:root.store { --w: 960px; --h: 480px; --s: 150px; --cy: 162px; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { position: relative; width: var(--w); height: var(--h); overflow: hidden; background: #000; color: #f5f5f7; font-family: PF, "Microsoft YaHei UI", sans-serif; -webkit-font-smoothing: antialiased; }
+.art { position: absolute; left: 50%; top: var(--cy); width: calc(var(--w) * 1.25); height: calc(var(--w) * 1.25 * 9 / 16); transform: translate(-50%, -50%);
+  background: url(art/tunnel-h.jpg) center / cover; opacity: .34; filter: saturate(1.1); }
+.vignette { position: absolute; inset: 0; background: radial-gradient(56% 64% at 50% calc(var(--cy) / var(--h) * 100%), transparent 30%, rgba(0,0,0,.85) 78%, #000 100%); }
+.l { position: absolute; left: 50%; top: var(--cy); transform: translate(-50%, -50%); }
+.haze { width: calc(var(--s) * 1.9); height: calc(var(--s) * 1.9); border-radius: 50%; background: var(--brand); filter: blur(calc(var(--s) * .5)); opacity: .5; }
+.core { width: calc(var(--s) * 1.04); height: calc(var(--s) * 1.04); border-radius: 30%; background: var(--brand); filter: blur(calc(var(--s) * .16)); opacity: .8; }
+.icon { width: var(--s); height: var(--s); }
+.copy { position: absolute; left: 0; right: 0; top: 262px; text-align: center; white-space: nowrap; }
+.copy h1 { font: 700 54px Archivo; letter-spacing: -.02em; line-height: 1; }
+.copy p { margin-top: 16px; font-size: 19px; font-weight: 500; letter-spacing: .04em; line-height: 1; color: #a1a1a6; }
+.store .copy { display: none; }
+</style>
+</head>
+<body>
+<div class="art"></div>
+<div class="vignette"></div>
+<div class="l haze"></div>
+<div class="l core"></div>
+<img class="l icon" src="logo.svg" alt="">
+<div class="copy"><h1>BetterMV</h1><p>网易云音乐插件 · 放任何一首歌，实时生成一支 MV</p></div>
+</body>
+</html>

@@ -1,0 +1,28 @@
+name: 问题反馈
+description: 报告 BetterMV 的使用问题，或某首歌生成得不对
+title: "[问题] "
+body:
+  - type: input
+    id: versions
+    attributes:
+      label: 版本信息
+      description: Windows、网易云音乐、BetterNCM 和 BetterMV 的版本，以及显卡型号。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 操作步骤与实际结果
+      description: 怎么触发的问题，MV 页上显示了什么提示；卡顿的话说一下画质设置。
+    validations:
+      required: true
+  - type: input
+    id: song
+    attributes:
+      label: 哪首歌
+      description: 歌名和歌手，或网易云的歌曲链接（生成得不对、风格选错时最有用）。
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+      description: 可以附截图或录屏。请不要提交账号信息或歌曲文件。

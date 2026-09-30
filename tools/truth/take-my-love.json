@@ -1,0 +1,16 @@
+{
+  "song": "TIC / Paperman - TAKE MY LOVE (NetEase 3364903300)",
+  "note": "Sections only, from eval --bars/--lines. The 4-line hook (sung 6-11 times) over the full beat = chorus; the soft bass-less opening with the hook = intro. Loud stretches with only a one-line chop = drops. Verse 2 (unique lines) starts over the full beat, then thins out; one-bar bass gaps mark the phrase ends before choruses and drops.",
+  "sections": [
+    { "name": "intro", "start": 0, "end": 18.2 },
+    { "name": "chorus", "start": 18.2, "end": 33.9 },
+    { "name": "chorus", "start": 33.9, "end": 65.4 },
+    { "name": "drop", "start": 65.4, "end": 89.0 },
+    { "name": "verse|drop", "start": 89.0, "end": 96.9 },
+    { "name": "verse|pre", "start": 96.9, "end": 112.6 },
+    { "name": "chorus", "start": 112.6, "end": 142.1 },
+    { "name": "drop", "start": 142.1, "end": 159.8 },
+    { "name": "drop", "start": 159.8, "end": 191.3 },
+    { "name": "outro", "start": 191.3, "end": 195.25 }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "song": "Stephen Sanchez - Until I Found You (NetEase 1874585362)",
+  "note": "Sections only, from eval --bars/--lines. Chorus = the 4-line block sung three times (lines start just before the bar); the 2-line block before choruses 1 and 2 is the pre-chorus (rising, bass enters with the chorus). Loud instrumental interlude after chorus 2. Outro from the end of the last line (tail + fade).",
+  "sections": [
+    { "name": "intro", "start": 0, "end": 9.6 },
+    { "name": "verse", "start": 9.6, "end": 27.4 },
+    { "name": "pre|verse", "start": 27.4, "end": 38.1 },
+    { "name": "chorus", "start": 38.1, "end": 59.5 },
+    { "name": "verse", "start": 59.5, "end": 84.4 },
+    { "name": "pre|verse", "start": 84.4, "end": 95.1 },
+    { "name": "chorus", "start": 95.1, "end": 116.5 },
+    { "name": "bridge", "start": 116.5, "end": 137.9 },
+    { "name": "chorus", "start": 137.9, "end": 159.2 },
+    { "name": "outro", "start": 159.2, "end": 177.7 }
+  ]
+}

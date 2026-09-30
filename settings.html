@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>BetterMV 设置页</title>
+  <style>
+    html, body { margin: 0; background: #888; }
+    main { display: flex; flex-wrap: wrap; gap: 16px; padding: 16px; align-items: flex-start; }
+    .panel { flex: 1 1 640px; padding: 20px 24px; border-radius: 8px; }
+    .light { background: #fff; color: #333; }
+    .dark { background: #1f1f23; color: #e8e8e8; }
+  </style>
+</head>
+<body>
+  <main><div class="panel light" id="light"></div><div class="panel dark" id="dark"></div></main>
+  <script type="module" src="/src/dev/settings.ts"></script>
+</body>
+</html>
