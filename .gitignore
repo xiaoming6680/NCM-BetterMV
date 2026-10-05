@@ -3,6 +3,8 @@ dist/
 # Local test media, lyrics and probe output (copyrighted songs stay out of the repo)
 /dev/
 /out/
+# Reference videos dropped in the root
+/*.mp4
 
 # Promo renders, soundtracks and the songs they cut from
 build/
