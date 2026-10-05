@@ -65,13 +65,13 @@ export async function checkPack(): Promise<boolean> {
 }
 
 async function fetchBlob(url: string, size: number, onBytes: (n: number) => void): Promise<Blob> {
-  const r = await fetch(url, { cache: 'no-store' });
+  const r = await fetch(url, { cache: 'no-store' }).catch(() => { throw new Error('下载中断，请检查网络后重试'); });
   if (!r.ok || !r.body) throw new Error(`下载失败（HTTP ${r.status}）`);
   const reader = r.body.getReader();
   const chunks: BlobPart[] = [];
   let got = 0;
   for (;;) {
-    const { done, value } = await reader.read();
+    const { done, value } = await reader.read().catch(() => { throw new Error('下载中断，请检查网络后重试'); });
     if (done) break;
     chunks.push(value as Uint8Array<ArrayBuffer>);
     got += value.length;
@@ -94,7 +94,10 @@ export async function installPack(): Promise<void> {
   set({ kind: 'installing', done: 0, total: 0, note: '正在读取文件清单…' });
   try {
     const dir = await packDir();
-    const manifest: Manifest = await (await fetch(RELEASE + 'aligner.json', { cache: 'no-store' })).json();
+    const list = await fetch(RELEASE + 'aligner.json', { cache: 'no-store' }).catch(() => null);
+    if (!list) throw new Error('无法连接 GitHub，请检查网络后重试');
+    if (!list.ok) throw new Error(`无法获取文件清单（HTTP ${list.status}）`);
+    const manifest: Manifest = await list.json().catch(() => { throw new Error('文件清单无法读取，请稍后重试'); });
     if (manifest.version !== PACK_VERSION) throw new Error('对齐包版本与插件不匹配，请先更新插件');
     const total = manifest.files.reduce((n, f) => n + f.size, 0);
     let done = 0;
