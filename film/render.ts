@@ -139,6 +139,12 @@ async function images(): Promise<void> {
   await (await page.$('#dark'))!.screenshot({ path: path.join(docs, 'settings.jpg'), type: 'jpeg', quality: 92 });
   console.log(path.join(docs, 'settings.jpg'));
   await page.close();
+  // The MV page's controls with the play list open, over the plugin's push tunnel (the dev page's ?mv&demo).
+  const mv = await still('/settings.html?mv&demo', 1280, 720, 1.5);
+  await mv.waitForTimeout(600);
+  await mv.screenshot({ path: path.join(docs, 'controls.jpg'), type: 'jpeg', quality: 92 });
+  console.log(path.join(docs, 'controls.jpg'));
+  await mv.close();
 }
 
 /** The README cover's picture: the plugin's own push tunnel in The Nights' drop, no HUD. */
