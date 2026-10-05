@@ -81,7 +81,7 @@ export function* analyzeSteps(samples: Float32Array, sampleRate: number, opts: A
   const downbeats = beats.filter((_, i) => beatInBar[i] === 0);
   yield* pause(0.91);
   const rmsLin = sqrtArr(spec.power);
-  const hits = yield* detectHits(ons, fps, levelDb, rmsLin, slicer, 0.91, 0.95);
+  const hits = yield* detectHits(ons, fps, levelDb, rmsLin, beats, slicer, 0.91, 0.95);
   const sections = findSections({ features: feats, beats, bars: makeBars(beats, beatInBar, duration), duration, rms: rmsLin, fps, lyrics, hits, low: spec.low, high: spec.high });
   yield* pause(0.97);
 

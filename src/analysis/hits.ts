@@ -1,8 +1,9 @@
-// Drum hits from the band onset functions (adaptive peak picking) that are percussive transients: kicks and snares
-// must dominate the mix for a moment and decay fast, hats must decay fast, so bass/guitar notes, strums and sustained
-// vocals are not counted as drums; a snare must crack below 5 kHz more than above (else it is a hat), and kicks are
-// picked against the local level so the soft ones of a quiet chorus count too. Accents: broadband onsets with a clear loudness jump (drops, stabs, crashes, the
-// first hit after a gap).
+// Drum hits from the band onset functions (adaptive peak picking). Kicks and snares are kept by small logistic
+// models over each peak's features (how strong the onset is, how it stands out of the mix, how sharply the band
+// rises over the moment before, how fast it decays, where it sits on the beat grid), fitted on six songs against
+// onsets from separated drum stems (docs/ANALYSIS.md); kicks are picked against the local level so the soft ones of
+// a quiet chorus are candidates too. Hats must decay fast. Accents: broadband onsets with a clear loudness jump
+// (drops, stabs, crashes, the first hit after a gap).
 import type { Hit } from '../types.ts';
 import type { Onsets } from './onset.ts';
 import { quantile, type Slicer } from './util.ts';
@@ -70,26 +71,34 @@ export function pickPeaks(odf: Float32Array, o: PeakOptions, fps = 100): number[
  */
 export const LATENCY = { kick: 0.029, snare: 0.005, hat: 0.007, accent: 0.004 };
 
-/**
- * Percussiveness of a peak at frame f: how strongly the band's rise dominates the whole mix right after it, and how
- * fast the band decays (level 150 ms later relative to the peak). Drums score > 0; bass or guitar notes, which rise
- * inside a full mix and ring on, score < 0. `rc`/`rs` centre and scale the dominance for the band.
- */
-function percussive(odf: Float32Array, level: Float32Array, full: Float32Array, f: number, rc: number, rs: number): number {
-  const T = odf.length;
-  let pk = 0;
-  for (let k = f; k < Math.min(T, f + 5); k++) if (level[k] > pk) pk = level[k];
-  const decay = level[Math.min(T - 1, f + 15)] / (pk || 1e-12);
-  const dominance = odf[f] / (full[Math.min(T - 1, f + 2)] || 1e-12);
-  return (dominance - rc) / rs - (decay - 0.5) / 0.15;
-}
-
-/** Hits whose percussiveness is below this are dropped (tuned so drum hits pass and bass/guitar notes mostly do not). */
-const PERCUSSIVE_MIN = -0.5;
 /** Kicks are picked against the local level (±4 s), but not below this share of the song's (see pickPeaks). */
 const KICK_LOCAL = 4, KICK_LOCAL_MIN = 0.5;
-/** A snare's amplitude rise over 1–5 kHz must be at least this many times its rise above 5 kHz. */
-const SNARE_MID = 2;
+
+/**
+ * The kick and snare gates: logit = bias + Σ weight × feature, kept when the probability reaches `threshold`.
+ * Features of a peak at frame f (band level = the kick bins, or the mel bands above 1 kHz):
+ * - odf: ln of the onset value over its 99th percentile;
+ * - dominance: ln of the onset value over the whole mix's amplitude 20 ms later;
+ * - rise: ln of the band's peak level (f … f+40 ms) over its mean level 30–80 ms before;
+ * - decay: the band's level 150 ms later over the peak;
+ * - grid4 / grid8: distance in beats to the nearest beat / eighth note.
+ * The old gates (dominance and a fast decay; a snare's 1–5 kHz rise ≥ 2 × its rise above 5 kHz) threw away most
+ * kicks with a bass or a long tail under them and the bright snares of pop, and kept off-beat hats: against six
+ * songs' drum stems the kick F went 0.72 → 0.79 and the snare F 0.49 → 0.79 (each song held out of its own fit).
+ * The snare gate leans on the beat: a grid half a beat off would cost the snares.
+ */
+const KICK_GATE = { odf: 2.0946, dominance: -0.2519, rise: 0.5866, decay: 0, grid4: 0, grid8: -16.6363, bias: 1.6905, threshold: 0.34 };
+const SNARE_GATE = { odf: 3.188, dominance: -0.2099, rise: -0.8695, decay: -2.6032, grid4: -8.6747, grid8: -11.9825, bias: 3.7696, threshold: 0.55 };
+
+/** Distance in beats from t to the nearest point of the beat grid divided into `div` per beat. */
+function gridDistance(beats: ArrayLike<number>, t: number, div: number): number {
+  const n = beats.length;
+  if (n < 2) return 0;
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (beats[m] <= t) lo = m; else hi = m; }
+  const ph = ((t - beats[lo]) / (beats[hi] - beats[lo] || 0.5)) * div;
+  return Math.abs(ph - Math.round(ph)) / div;
+}
 
 /**
  * @param levelDb frame level in dB (for accents)
@@ -100,6 +109,7 @@ export function* detectHits(
   fps: number,
   levelDb: Float32Array,
   fullAmp: Float32Array,
+  beats: ArrayLike<number>,
   slicer: Slicer,
   p0: number,
   p1: number,
@@ -111,35 +121,33 @@ export function* detectHits(
       slicer.resume();
     }
   }
-  /** Peaks → hits; drum bands are gated by percussiveness, which also scales the strength (0.35..1). */
-  const toHits = (odf: Float32Array, frames: number[], latency: number, level?: Float32Array, rc = 0, rs = 1): Hit[] => {
+  /** Peaks → hits, without a gate (hats). */
+  const toHits = (odf: Float32Array, frames: number[], latency: number): Hit[] => {
     const p99 = quantile(odf, 0.99) || 1;
+    return frames.map(f => [round3(Math.max(0, f / fps - latency)), round3(Math.min(1, odf[f] / p99))] as Hit);
+  };
+  /** Peaks → hits through a gate (see KICK_GATE); the probability also scales the strength (0.35 at the threshold … 1). */
+  const gated = (odf: Float32Array, frames: number[], latency: number, level: Float32Array, g: typeof KICK_GATE): Hit[] => {
+    const p99 = quantile(odf, 0.99) || 1, T = odf.length, ln = (x: number) => Math.log(x + 1e-4);
     const out: Hit[] = [];
     for (const f of frames) {
-      let w = 1;
-      if (level) {
-        const sc = percussive(odf, level, fullAmp, f, rc, rs);
-        if (sc < PERCUSSIVE_MIN) continue;
-        w = Math.min(1, Math.max(0.35, 0.7 + 0.15 * sc));
-      }
-      out.push([round3(Math.max(0, f / fps - latency)), round3(Math.min(1, odf[f] / p99) * w)]);
+      const t = f / fps - latency;
+      let pk = 0, pre = 0, n = 0;
+      for (let k = f; k < Math.min(T, f + 5); k++) if (level[k] > pk) pk = level[k];
+      for (let k = Math.max(0, f - 8); k <= Math.max(0, f - 3); k++) { pre += level[k]; n++; }
+      const logit = g.bias + g.odf * ln(odf[f] / p99) + g.dominance * ln(odf[f] / (fullAmp[Math.min(T - 1, f + 2)] || 1e-12))
+        + g.rise * ln(pk / (pre / Math.max(1, n) || 1e-12)) + g.decay * (level[Math.min(T - 1, f + 15)] / (pk || 1e-12))
+        + g.grid4 * gridDistance(beats, t, 1) + g.grid8 * gridDistance(beats, t, 2);
+      const p = 1 / (1 + Math.exp(-logit));
+      if (p < g.threshold) continue;
+      const w = Math.min(1, 0.35 + (0.65 * (p - g.threshold)) / (1 - g.threshold));
+      out.push([round3(Math.max(0, t)), round3(Math.min(1, odf[f] / p99) * w)]);
     }
     return out;
   };
-  const kick = toHits(ons.kick, pickPeaks(ons.kick, { maxHalf: ms(30), avgHalf: ms(100), delta: 0.35, minGap: ms(90), local: KICK_LOCAL, localMin: KICK_LOCAL_MIN }, fps), LATENCY.kick, ons.lowLevel, 1.0, 0.2);
+  const kick = gated(ons.kick, pickPeaks(ons.kick, { maxHalf: ms(30), avgHalf: ms(100), delta: 0.35, minGap: ms(90), local: KICK_LOCAL, localMin: KICK_LOCAL_MIN }, fps), LATENCY.kick, ons.lowLevel, KICK_GATE);
   yield* pause(0.25);
-  // A snare or clap cracks in the 1–5 kHz bands; a hat, even an open one, rises mostly above 5 kHz. (Against Clarity's
-  // drum stem most false snares were hats: 1–5 kHz / above-5 kHz rise ratio p50 1.7 for hats, 2.5 for snares, 9 for
-  // claps; the gate took snare precision from 0.32 to 0.64 at a small loss of recall.)
-  const snareFrames = pickPeaks(ons.snare, { maxHalf: ms(30), avgHalf: ms(100), delta: 0.45, minGap: ms(80) }).filter(f => {
-    let mid = 0, high = 0;
-    for (let k = Math.max(0, f - 1); k <= Math.min(ons.snare.length - 1, f + 1); k++) {
-      mid = Math.max(mid, ons.snareMid[k]);
-      high = Math.max(high, ons.snareHigh[k]);
-    }
-    return mid >= SNARE_MID * high;
-  });
-  const snare = toHits(ons.snare, snareFrames, LATENCY.snare, ons.highLevel, 0.13, 0.06);
+  const snare = gated(ons.snare, pickPeaks(ons.snare, { maxHalf: ms(30), avgHalf: ms(100), delta: 0.45, minGap: ms(80) }), LATENCY.snare, ons.highLevel, SNARE_GATE);
   yield* pause(0.5);
   // Hats are quiet, so only their decay is checked: the > 6 kHz level must fall to ≤ 65 % within 80 ms (a strummed
   // guitar or a sung sibilant rings on).
