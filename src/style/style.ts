@@ -236,7 +236,7 @@ export function chooseStyle(a: Analysis, wiki?: { genres: string[]; tags: string
     if (lively && !calm) return { style: PULSE, reason: `标签：${wiki!.tags.slice(0, 2).join('、')}`, features };
     return bpm < 100 ? { style: BALLAD, reason: `${genre}，${Math.round(bpm)} BPM`, features } : { style: PULSE, reason: `${genre}，${Math.round(bpm)} BPM`, features };
   }
-  if (drops > 0) return { style: PULSE, reason: '有 drop', features };
-  if (drumsPerSecond >= 1.6) return { style: PULSE, reason: '鼓点密', features };
-  return { style: BALLAD, reason: '鼓点稀、没有 drop', features };
+  if (drops > 0) return { style: PULSE, reason: '含 drop', features };
+  if (drumsPerSecond >= 1.6) return { style: PULSE, reason: '鼓点密集', features };
+  return { style: BALLAD, reason: '鼓点稀疏、无 drop', features };
 }

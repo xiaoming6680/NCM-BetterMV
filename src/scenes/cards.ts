@@ -99,7 +99,7 @@ export class CardsScene implements MvScene {
     this.notes = [
       `速度 ${w.bpm} → ${SEED[spec.seed]}`,
       `鼓 ${w.drums}/秒 → ${carve}`,
-      `人声 ${Math.round(w.sung * 100)}% → ${spec.stretch > 1.3 ? '修长' : spec.stretch > 1.1 ? '略长' : '矮胖'}`,
+      `人声 ${Math.round(w.sung * 100)}% → ${spec.stretch > 1.3 ? '修长' : spec.stretch > 1.1 ? '略长' : '粗短'}`,
     ].map((s, i) => mk('note' + i, s, 'bold', 0.048));
     this.scene.add(this.crystal.group, this.lines.mesh);
     this.resize(init.aspect);

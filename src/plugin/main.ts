@@ -99,7 +99,7 @@ function start(client: Client): void {
 
   async function prepareCurrent(): Promise<void> {
     const song = playingSong(client.store);
-    if (!song) { overlay.status('先在网易云里放一首歌'); return; }
+    if (!song) { overlay.status('请先在网易云音乐中播放歌曲'); return; }
     // Already showing this song (reopened after closing): just take the loading note away.
     if (player?.song?.id === song.id) { overlay.status(null); return; }
     if (preparing?.id === song.id) return;
@@ -112,7 +112,7 @@ function start(client: Client): void {
     try {
       let prepared = ready.get(song.id);
       if (!prepared) {
-        overlay.status('读取歌曲…');
+        overlay.status('正在读取歌曲…');
         const [audio, lyric, wiki, cover] = await Promise.all([
           getAudio(client, song.id, () => job.cancelled), fetchLyric(song.id), fetchWiki(song.id), loadCover(song.cover),
         ]);
@@ -122,7 +122,7 @@ function start(client: Client): void {
           {
             pause: nextFrame,
             cancelled: () => job.cancelled,
-            onProgress: (stage, p) => overlay.status(stage === 'decode' ? '解码中…' : `分析中 ${Math.round(p * 100)}%`),
+            onProgress: (stage, p) => overlay.status(stage === 'decode' ? '正在解码…' : `正在分析 ${Math.round(p * 100)}%`),
           },
         );
         ready.set(song.id, prepared);
@@ -132,13 +132,13 @@ function start(client: Client): void {
       plan(prepared, config);
       // The progress bar shows the song's structure: its sections, the choruses and drops in the cover's colour.
       overlay.setStructure(prepared.analysis.sections.map((x): BarSection => ({ start: x.start, end: x.end, name: SECTION[x.label], loud: x.label === 'chorus' || x.label === 'drop' })), prepared.palette.css.signal);
-      overlay.status('准备画面…');
+      overlay.status('正在准备画面…');
       await player.warm(nextFrame, () => job.cancelled);
       if (job.cancelled) return;
       overlay.status(null);
       describe(prepared);
     } catch (e) {
-      if (!(e instanceof Cancelled)) overlay.status('没能生成 MV：' + ((e as Error)?.message || e));
+      if (!(e instanceof Cancelled)) overlay.status('无法生成 MV：' + ((e as Error)?.message || e));
     } finally {
       if (preparing === job) preparing = null;
     }
@@ -146,7 +146,7 @@ function start(client: Client): void {
 
   async function open(): Promise<void> {
     overlay.show();
-    overlay.status('准备中…');
+    overlay.status('正在准备…');
     fonts ??= loadFonts(file => readPluginFile('fonts/' + file));
     await fonts;
     if (!player) {
@@ -206,6 +206,6 @@ plugin.onLoad(() => {
   (window as any)[KEY] = {};
   findClient().then(client => {
     if (client) start(client);
-    else console.warn('[BetterMV] 没找到网易云的内部模块，插件未启动');
+    else console.warn('[BetterMV] 未找到网易云的内部模块，插件未启动');
   });
 });

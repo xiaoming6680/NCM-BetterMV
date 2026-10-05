@@ -92,5 +92,5 @@ export async function getAudio(client: Client, id: number, cancelled: () => bool
     const c = await readCachedAudio(client, id);
     if (c) return c;
   }
-  throw new Error('拿不到这首歌的完整音频');
+  throw new Error('无法获取这首歌曲的完整音频');
 }

@@ -50,7 +50,7 @@ const clock = (s: number) => { s = Math.max(0, s); return `${Math.floor(s / 60)}
 export function mvButton(onClick: () => void): HTMLButtonElement {
   const b = document.createElement('button');
   b.textContent = 'MV';
-  b.title = 'BetterMV：为这首歌生成 MV（Ctrl+Shift+M）';
+  b.title = 'BetterMV：为当前歌曲生成 MV（Ctrl+Shift+M）';
   b.style.cssText = `position:fixed;right:22px;bottom:92px;z-index:2147480000;height:30px;padding:0 13px;border:1px solid rgba(255,255,255,.18);` +
     `border-radius:15px;background:rgba(18,18,22,.72);color:#fff;font:700 12px/28px ${FONT};letter-spacing:.14em;cursor:pointer;` +
     `backdrop-filter:blur(10px);box-shadow:0 4px 18px rgba(0,0,0,.25);transition:background .2s,transform .2s`;
@@ -477,11 +477,11 @@ const TINT = (a: number) => `rgba(127,127,127,${a})`;
 const CHECK = '<svg viewBox="0 0 12 12" width="10" height="10"><path d="M2.5 6.2l2.3 2.3 4.7-5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 const STYLE_NOTE: Record<Config['style'], string> = {
-  auto: '按网易云的曲风和标签选：说唱用“字”，国风用“墨”，电子、舞曲、摇滚用“律动”，民谣、古典、轻音乐用“抒情”；没有标签时听鼓点和 drop。',
-  pulse: '硬切踩拍，发丝线和光，drop 冲进推进隧道。适合电子、舞曲、摇滚。',
-  ballad: '长镜头、柔光、慢慢推移，转场柔和、不闪。适合慢歌、民谣、轻音乐。',
-  word: '歌词就是画面：字墙、海报排版、网点印刷。适合说唱。',
-  ink: '封面画成宣纸上的水墨，歌词竖排，墨迹洇开转场。适合国风、古风。',
+  auto: '根据网易云的曲风标签选择：说唱为“字”，国风为“墨”，电子、舞曲、摇滚为“律动”，民谣、古典、轻音乐为“抒情”；无标签时依据鼓点和 drop 判断。',
+  pulse: '踩拍硬切，细线与光效，drop 处进入推进隧道。适合电子、舞曲、摇滚。',
+  ballad: '长镜头、柔光、缓慢推移，转场柔和、无闪烁。适合慢歌、民谣、轻音乐。',
+  word: '以歌词为画面主体：字墙、海报排版、网点印刷。适合说唱。',
+  ink: '封面呈现为宣纸水墨，歌词竖排，以墨迹晕染转场。适合国风、古风。',
 };
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, css: string, text?: string): HTMLElementTagNameMap[K] {
@@ -547,9 +547,9 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
 
   // Header: what it is, and the keys.
   if (!compact) view.append(el('div', 'font-size:20px;font-weight:800;letter-spacing:.02em', 'BetterMV'));
-  if (!compact) view.append(el('div', 'opacity:.7;margin-top:2px', '为正在播放的歌实时生成一支 3D MV：场景用它的封面搭，镜头按歌曲结构剪辑，风格按曲风自动选。'));
+  if (!compact) view.append(el('div', 'opacity:.7;margin-top:2px', '为正在播放的歌曲实时生成 3D MV：以封面构建场景，按歌曲结构剪辑镜头，按曲风自动选择风格。'));
   const keys = el('div', 'display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px;font-size:12px;opacity:.85');
-  for (const [key, what] of [['Ctrl+Shift+M', '打开（或点播放栏上方的 MV）'], ['Esc', '退出'], ['空格', '暂停'], ['← →', '快退快进'], ['↑ ↓', '音量']]) {
+  for (const [key, what] of [['Ctrl+Shift+M', '打开（或点击播放栏上方的 MV）'], ['Esc', '退出'], ['空格', '播放 / 暂停'], ['← →', '快退 / 快进'], ['↑ ↓', '音量']]) {
     const item = el('span', 'display:inline-flex;align-items:center;gap:6px');
     item.append(el('kbd', `font:11px/1 Consolas,${FONT};padding:3px 6px;border-radius:4px;border:1px solid ${TINT(0.4)};border-bottom-width:2px`, key), document.createTextNode(what));
     keys.append(item);
@@ -610,14 +610,14 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   section('画面');
   const styleNote = el('div', 'font-size:12px;opacity:.6', STYLE_NOTE[config.style]);
   row('风格', segmented('style', [['auto', '自动'], ['pulse', '律动'], ['ballad', '抒情'], ['word', '字'], ['ink', '墨']], () => { styleNote.textContent = STYLE_NOTE[config.style]; }), styleNote);
-  row('画质', segmented('quality', [['high', '高'], ['mid', '中'], ['low', '低']]), '卡顿时调低');
+  row('画质', segmented('quality', [['high', '高'], ['mid', '中'], ['low', '低']]), '画面卡顿时调低');
   // Picture delay, no slider: − and + step 10 ms (held, they repeat), the number can be typed, and back to zero.
   const lat = el('div', 'display:flex;align-items:center;gap:10px');
   const stepper = el('div', `display:inline-flex;align-items:stretch;height:28px;border:1px solid ${TINT(0.35)};border-radius:8px;overflow:hidden`);
   const latency = el('input', `width:64px;border:0;border-left:1px solid ${TINT(0.25)};border-right:1px solid ${TINT(0.25)};background:transparent;` +
     'color:inherit;text-align:center;font:13px Consolas,monospace;outline:none;padding:0');
   latency.inputMode = 'numeric';
-  latency.title = '可以直接输入，↑ ↓ 键每次 10 ms';
+  latency.title = '可直接输入；↑ ↓ 键每次调整 10 ms';
   const showLatency = () => { const ms = config.latencyMs; latency.value = (ms > 0 ? '+' : '') + ms; zero.style.visibility = ms ? 'visible' : 'hidden'; };
   const setLatency = (ms: number) => {
     ms = Math.max(LATENCY_MIN, Math.min(LATENCY_MAX, Math.round(ms)));
@@ -653,26 +653,26 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   stepper.append(step('−', -10, '画面提前 10 ms'), latency, step('+', 10, '画面推后 10 ms'));
   lat.append(stepper, el('span', 'font-size:12px;opacity:.7', 'ms'), zero);
   showLatency();
-  row('画面延迟', lat, compact ? '画面比声音早就点 +（蓝牙耳机常需 +150~250），边看边调' : '画面比声音早就点 +（蓝牙耳机常需 +150~250）；在 MV 页右上角的设置里可以边看边调');
+  row('画面延迟', lat, compact ? '画面早于声音时调大（蓝牙耳机通常需 +150～250 ms），可在播放中实时调整' : '画面早于声音时调大（蓝牙耳机通常需 +150～250 ms）；也可在 MV 页右上角的设置中实时调整');
 
   section('界面');
-  row('MV 按钮', toggle('button'), '播放栏上方的 MV 按钮；关掉后用 Ctrl+Shift+M 打开');
-  row('控制栏', toggle('controls'), 'MV 页面底部的播放控制，鼠标不动时自动隐藏');
+  row('MV 按钮', toggle('button'), '显示在播放栏上方；关闭后可用 Ctrl+Shift+M 打开');
+  row('控制栏', toggle('controls'), 'MV 页底部的播放控制，鼠标静止时自动隐藏');
 
   // Scenes: each one on or off; resting on one shows its sketch.
   const off = new Set(config.off);
   const using = stylesUsing();
   const count = el('span', 'font-size:12px;opacity:.6');
-  const allOn = ghost('全部打开', () => { off.clear(); refresh(); save(); });
+  const allOn = ghost('全部开启', () => { off.clear(); refresh(); save(); });
   const aside = el('div', 'display:flex;align-items:center;gap:10px');
   aside.append(count, allOn);
   section('场景', aside);
-  view.append(el('div', 'font-size:12px;opacity:.6;margin:8px 0 2px', '点一下开关；鼠标停在场景上看示意图。关掉的场景由同一段落的其他场景顶上，改动马上用到 MV 上。'));
+  view.append(el('div', 'font-size:12px;opacity:.6;margin:8px 0 2px', '点击切换开关，鼠标悬停可查看示意图。关闭的场景由同一段落的其他场景替代，修改即时生效。'));
   const paints: Array<() => void> = [];
   let warnTimer = 0;
   const refresh = () => {
     paints.forEach(p => p());
-    count.textContent = `已开 ${SCENES.length - off.size} / ${SCENES.length}`;
+    count.textContent = `已开启 ${SCENES.length - off.size} / ${SCENES.length}`;
     count.style.color = '';
     allOn.style.display = off.size ? '' : 'none';
   };
@@ -688,7 +688,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     s.note.textContent = info.note;
     const by = using.get(info.id) ?? [];
     const chosen = config.style === 'auto' ? null : STYLES[config.style].name;
-    s.foot.textContent = `用于：${by.join(' · ') || '—'}` + (chosen && !by.includes(chosen) ? `（现在选的“${chosen}”不用它）` : '');
+    s.foot.textContent = `用于：${by.join(' · ') || '—'}` + (chosen && !by.includes(chosen) ? `（当前风格“${chosen}”不使用）` : '');
     s.img.style.visibility = 'hidden';
     s.blank.textContent = '';
     void preview(info.id).then(url => {
@@ -737,7 +737,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
       });
       b.onclick = () => {
         if (!off.has(info.id) && off.size >= SCENES.length - 1) {
-          count.textContent = '至少留一个场景';
+          count.textContent = '至少保留一个场景';
           count.style.color = ACCENT;
           clearTimeout(warnTimer);
           warnTimer = window.setTimeout(refresh, 1800);
