@@ -2,10 +2,12 @@
 // the border sit at the back, those near the centre come forward. Each sheet carries only its own cluster; the
 // back plate is the whole picture with the foreground painted out, so moving the camera opens up depth without
 // holes or doubles. Light comes from behind: sheet edges glow, each sheet drops a soft shadow on the one behind.
+// The words are one more layer of the stack, set just behind the front sheet to one side of the picture: that sheet
+// covers them where its cut-out reaches, and the camera's moves slide them against the paper.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, inOutCubic, lerp, rng, smooth } from './types.ts';
-import { LyricRig, type Align } from './lyricRig.ts';
+import { LyricRig } from './lyricRig.ts';
 
 const LAYERS = 6;
 const GAP = 0.85;
@@ -267,6 +269,9 @@ export class Diorama implements MvScene {
     this.scene.add(this.dust);
 
     this.rig = new LyricRig(palette, 'poem');
+    this.rig.frame = { vh: 7.5, vw: 10 };
+    this.rig.depthTest = true;
+    this.rig.place = (root, st) => { root.position.set((st.index % 2 ? 1 : -1) * SIZE * 0.33, 0.2, -GAP * 0.5); };
     this.scene.add(this.rig.group);
     this.resize(init.aspect);
   }
@@ -335,8 +340,6 @@ export class Diorama implements MvScene {
 
     ctx.fx.bloom = this.init.palette.light ? 0.1 : 0.45 + rms * 0.25;
     ctx.fx.fade = Math.max(ctx.fx.fade, shot.variant === 'pullback' ? 0.8 * smooth(ctx.music.endingProgress(t) * 1.6 - 0.6) : 0);
-    // Lyrics sit on the side the camera is not moving towards.
-    this.rig.align = (side > 0 ? 'left' : 'right') as Align;
     this.rig.onLight = this.init.palette.light;
     this.rig.update(cam, ctx.lyrics, t, ctx.aspect, rms);
   }

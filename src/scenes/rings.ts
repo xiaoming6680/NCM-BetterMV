@@ -1,11 +1,13 @@
 // Rings: concentric hairline arcs like a dial, each ring cut into a different number of segments and turning
 // its own way — in pulse they hold, then tick one segment on every beat; an outer ring of 16 steps lights up
 // across the bar like a sequencer; the cover sits in the middle as a disc and swells on the kicks.
+// The words run round a ring of their own between the dial and the sequencer, the word being sung at the top: the
+// ring turns a notch as each word begins and the sung words trail away round it; the translation round the bottom.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, inOutCubic, lerp, outExpo, rng } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
-import { LyricRig } from './lyricRig.ts';
+import { LyricOrbit } from './lyricSpace.ts';
 
 const SEGMENTS = [3, 6, 8, 12, 16, 24, 32, 48, 64];
 const discVertex = /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
@@ -22,7 +24,7 @@ export class Rings implements MvScene {
   readonly camera = new THREE.PerspectiveCamera(42, 16 / 9, 0.1, 200);
   private lines = new LineBatch(6000);
   private disc: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
-  private rig: LyricRig;
+  private orbit: LyricOrbit;
   private resolution = new THREE.Vector2(1920, 1080);
   private pixelRatio = 1;
   private colors: Array<[number, number, number]>;
@@ -37,8 +39,9 @@ export class Rings implements MvScene {
       uniforms: { uCover: { value: init.cover }, uGlow: { value: 0 } },
     }));
     this.scene.add(this.disc, this.lines.mesh);
-    this.rig = new LyricRig(palette, look === 'ballad' ? 'poem' : 'hook');
-    this.scene.add(this.rig.group);
+    this.orbit = new LyricOrbit(palette, { style: look === 'ballad' ? 'poem' : 'hook', em: 0.55, radius: 3.2, mode: 'flat', trans: { em: 0.26, radius: 2.3 } });
+    this.orbit.group.position.z = 0.15;
+    this.scene.add(this.orbit.group);
     this.resize(init.aspect);
   }
 
@@ -82,7 +85,7 @@ export class Rings implements MvScene {
       // Pulse: one segment per beat, snapping; ballad: a slow steady turn.
       const turn = soft ? t * 0.08 * dir * (1 + ring * 0.1) : dir * step * (beatI + outExpo(clamp01(ph / 0.25)));
       const rgb = this.colors[ring % 3 === 2 ? 2 : ring % 3 === 1 ? 1 : 0];
-      const I = (0.35 + 0.08 * ring) * (1 + (ring < 3 ? kick * 2.2 : 0)) * (0.8 + energy * 0.4);
+      const I = (0.35 + 0.08 * ring) * (1 + (ring < 3 ? kick * 1.2 : 0)) * (0.8 + energy * 0.4);
       const fill = 0.62 + 0.25 * Math.sin(ring * 1.7 + random() * 6);
       for (let s = 0; s < n; s++) this.arc(r, z, turn + s * step, turn + s * step + step * fill, ring === 0 ? 2.2 : 1.2, rgb, I);
     }
@@ -117,7 +120,6 @@ export class Rings implements MvScene {
     cam.updateMatrixWorld();
 
     ctx.fx.bloom = soft ? 0.45 : 0.5 + kick * 0.3;
-    this.rig.align = sign > 0 ? 'left' : 'right';
-    this.rig.update(cam, ctx.lyrics, t, ctx.aspect, energy);
+    this.orbit.update(ctx.lyrics, t, energy);
   }
 }

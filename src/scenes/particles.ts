@@ -6,7 +6,7 @@
 // bright subject) keeps only its subject: the ground is left out, and a light ground becomes the paper they float on.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, inOutCubic, lerp, rng } from './types.ts';
+import { clamp01, inOutCubic, lerp, outExpo, rng } from './types.ts';
 import { LyricRig } from './lyricRig.ts';
 
 const N = 176; // points per side
@@ -40,7 +40,7 @@ const vertexShader = /* glsl */ `
     }
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
     gl_PointSize = uPx * (0.9 + lum * 1.4) * (1.0 + uKick * 0.6) * aW / max(0.5, -mv.z);
-    vColor = aColor * (0.9 + uKick * 0.8);
+    vColor = aColor * (0.95 + uKick * 0.35);
     vA = (0.7 + lum * 0.3) * aW;
     gl_Position = projectionMatrix * mv;
   }`;
@@ -117,8 +117,15 @@ export class Particles implements MvScene {
     const points = new THREE.Points(g, this.material);
     points.frustumCulled = false;
     this.scene.add(points);
+    // The words hang in front of the cloud of points, so the slow orbit slides them across it; ballad lines to one
+    // side. Each line comes in from deeper in the cloud.
     this.rig = new LyricRig(palette, look === 'ballad' ? 'poem' : 'hook');
     this.rig.onLight = onPaper;
+    this.rig.frame = { vh: 5.2, vw: 8.5 };
+    this.rig.place = (root, st) => {
+      const s = look === 'ballad' ? (st.index % 2 ? 1 : -1) * 2.6 : 0;
+      root.position.set(s, 0, 1.8 - (1 - outExpo((st.age + 0.5) / 0.8)) * 2.5);
+    };
     this.scene.add(this.rig.group);
     this.resize(init.aspect);
   }
@@ -168,7 +175,6 @@ export class Particles implements MvScene {
     // (Bloom on a light ground only washes the points out.)
     ctx.fx.bloom = this.onPaper ? 0.03 : soft ? 0.45 : 0.55 + kick * 0.3;
     if (this.onPaper) ctx.fx.vignette = 0.2;
-    this.rig.align = side > 0 ? 'left' : 'right';
     this.rig.update(cam, ctx.lyrics, t, ctx.aspect, shot.section.energy);
   }
 }

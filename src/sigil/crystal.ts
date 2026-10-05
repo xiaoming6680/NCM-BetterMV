@@ -119,7 +119,7 @@ const fragmentShader = /* glsl */ `
     vec3 cover = texture2D(uCover, vLocal.xy * 0.45 + 0.5 + n.xy * 0.12).rgb;
     vec3 col = cover * (0.12 + 0.22 * facing) + uTint * (fres * 0.75 + uGlow * 0.2) + uRim * pow(fres, 5.0) * 0.5;
     // Facets flash on the beat, some more than others.
-    col *= 1.0 + uFlash * (0.3 + 1.4 * step(0.6, vRand));
+    col *= 1.0 + uFlash * (0.2 + 0.8 * step(0.6, vRand));
     gl_FragColor = vec4(col * uAlpha, 1.0);
   }`;
 
@@ -200,7 +200,7 @@ export class Crystal {
     const p = this.pose;
     if (p.alpha <= 0.002) return;
     const m = this.group.matrixWorld, rim = this.palette.paper, sig = this.palette.signal;
-    const I = intensity * p.alpha * (1 + 1.5 * p.flash) * 0.75;
+    const I = intensity * p.alpha * (1 + 0.9 * p.flash) * 0.75;
     const a = this.tmp, b = this.tmp2;
     if (p.burst < 0.005) {
       for (const [i, j] of this.edgeList) {
@@ -221,7 +221,7 @@ export class Crystal {
     });
     // The core: the seed's dual at 40 %, counter-rotating, in the signal colour.
     const core = this.core, cs = 0.4 * (1 + 0.6 * p.burst), turn = -2 * p.turn;
-    const cosT = Math.cos(turn), sinT = Math.sin(turn), J = intensity * p.alpha * (0.8 + 1.2 * p.flash);
+    const cosT = Math.cos(turn), sinT = Math.sin(turn), J = intensity * p.alpha * (0.8 + 0.7 * p.flash);
     const put = (v: Vec, out: THREE.Vector3) => out.set((v[0] * cosT - v[2] * sinT) * cs, v[1] * cs, (v[0] * sinT + v[2] * cosT) * cs).applyMatrix4(m);
     for (const f of core.f) for (let e = 0; e < f.length; e++) {
       put(core.v[f[e]], a); put(core.v[f[(e + 1) % f.length]], b);

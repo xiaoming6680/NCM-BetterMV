@@ -3,7 +3,7 @@
 // camera position and scaled to match — so from anywhere else they are shards scattered through space, and from
 // exactly there they line up, pixel for pixel, into the cover. The camera drifts round the side, whips to the magic
 // angle on a downbeat (the pieces close, a flash, a hairline frame round the cover), holds a beat, and drifts off
-// again as it falls apart.
+// again as it falls apart, on round until the shot ends.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, lerp, outExpo, rng, smooth } from './types.ts';
@@ -21,6 +21,8 @@ export class AlignScene implements MvScene {
   private rig: LyricRig;
   private resolution = new THREE.Vector2(1920, 1080);
   private pixelRatio = 1;
+  /** 0 → 1 as the camera whips onto the angle: the words' last stretch home. */
+  private settled = 0;
 
   constructor(private init: SceneInit) {
     const { palette } = init;
@@ -50,7 +52,21 @@ export class AlignScene implements MvScene {
     g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map: init.cover, side: THREE.DoubleSide, toneMapped: true }));
     mesh.frustumCulled = false;
+    // The words are cut up like the cover: each word moved along the line of sight from the magic camera to a depth of
+    // its own and scaled to match, so from that one angle it is where it belongs. A word comes in from deep off its
+    // place and flies most of the way home as it is sung (readable from anywhere); the rest of the way it falls into
+    // place with the cover when the camera whips onto the angle, and stays there as the camera drifts off (left
+    // scattered, the line would read as jumbled words once the view leaves the angle).
     this.rig = new LyricRig(palette, 'hook');
+    const vh = 2 * EYE * Math.tan(THREE.MathUtils.degToRad(20));
+    this.rig.frame = { vh, vw: vh * 1.6 };
+    this.rig.place = root => { root.position.set(0, 0, 0.02); };
+    this.rig.warp = (m, key, age) => {
+      const off = (0.55 + 0.8 * rng(key * 7919 + 13)()) - 1;
+      const s = 1 + off * (0.22 * (1 - this.settled) + 0.78 * (1 - smooth(age / 0.45)));
+      m.position.set(m.position.x * s, m.position.y * s, EYE + (m.position.z - EYE) * s);
+      m.scale.multiplyScalar(s);
+    };
     this.scene.add(mesh, this.lines.mesh, this.rig.group);
     this.resize(init.aspect);
   }
@@ -84,9 +100,11 @@ export class AlignScene implements MvScene {
       const e = outExpo((t - (tm - whip)) / whip), before = th0 + (tm - whip - shot.start) * 0.08 * side;
       th = lerp(before, 0, e); ph = lerp(ph0, 0, e);
     } else {
-      const off = smooth((t - tm - beat) / (bar * 1.5));
-      th = -0.45 * side * off; ph = -0.12 * off;
+      // …and keeps drifting once it is off (it used to stop dead there, the frame frozen for the rest of the shot).
+      const after = Math.max(0, t - tm - beat), off = smooth(after / (bar * 1.5));
+      th = -(0.45 * off + 0.06 * after) * side; ph = -0.12 * off - 0.02 * after;
     }
+    this.settled = smooth((t - (tm - whip)) / whip);
     const cam = this.camera;
     cam.position.set(EYE * Math.sin(th) * Math.cos(ph), EYE * Math.sin(ph), EYE * Math.cos(th) * Math.cos(ph));
     cam.lookAt(0, 0, 0);
@@ -117,7 +135,6 @@ export class AlignScene implements MvScene {
     ctx.fx.flash = Math.max(ctx.fx.flash, 0.15 * Math.exp(-Math.max(0, t - tm) / 0.08) * (t >= tm ? 1 : 0));
     ctx.fx.bloom = 0.3 + 0.3 * closed;
     ctx.fx.vignette = 0.5;
-    this.rig.align = side > 0 ? 'left' : 'right';
     this.rig.update(cam, ctx.lyrics, t, ctx.aspect, shot.section.energy);
   }
 }

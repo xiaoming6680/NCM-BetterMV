@@ -1,10 +1,13 @@
 // Shatter: the album cover as a wall of triangles. In a chorus every downbeat sends a flip wave across it
 // (each triangle turns over, showing its signal-coloured back); on a drop the wall bursts and the camera
 // flies through the swarm, which throbs on the kicks and sparkles on the hats.
+// The words are printed on the wall (a LyricLayer sampled by the wall's shader): they turn over with the triangles
+// they are printed on; when the wall bursts, the shards carrying them stay where they were, so the line hangs whole
+// in the swarm.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, inOutCubic, lerp, outExpo, rng, smooth } from './types.ts';
-import { LyricRig } from './lyricRig.ts';
+import { LyricLayer } from './lyricSpace.ts';
 
 const M = 48;
 const SIZE = 16;
@@ -14,10 +17,19 @@ const vertexShader = /* glsl */ `
   attribute vec4 aRand;
   attribute vec2 aCell;
   attribute vec3 aBary;
-  uniform float uExplode, uTime, uFlip, uKick, uSpin, uShake, uPattern;
+  uniform float uExplode, uTime, uFlip, uKick, uSpin, uShake, uPattern, uHoldTilt, uHoldYaw;
+  uniform sampler2D uLyric;
+  uniform vec4 uLyricRect;
+  uniform float uLyricOn;
   varying vec2 vUv;
+  // How much type is printed at a point of the wall (the glyphs' light, not their dark bed).
+  float ink(vec2 wall) {
+    vec2 q = (wall - uLyricRect.xy) / uLyricRect.zw + 0.5;
+    if (uLyricOn < 0.5 || q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0) return 0.0;
+    return dot(texture2D(uLyric, q).rgb, vec3(0.2126, 0.7152, 0.0722));
+  }
   varying vec3 vBary;
-  varying float vRand;
+  varying float vRand, vHeld;
   mat3 rot(vec3 axis, float a) {
     axis = normalize(axis);
     float s = sin(a), c = cos(a), oc = 1.0 - c;
@@ -38,7 +50,13 @@ const vertexShader = /* glsl */ `
     else key = aRand.w * 0.85;                                                        // scattered
     float f = clamp((uFlip - key) / 0.2, 0.0, 1.0);
     local = rot(axis, (1.0 - cos(f * 3.14159265)) * 3.14159265) * local;
-    float e = uExplode;
+    // The shards carrying the words stay in the wall when it bursts, so the line hangs in the middle of the swarm.
+    // Sampled at points fixed per triangle (not per vertex): a triangle held at one corner and flung at the others
+    // stretched into a long sliver from the words out into the swarm.
+    const float r = ${(SIZE / M * 0.3).toFixed(3)};
+    float held = smoothstep(0.08, 0.25, max(max(ink(aCenter.xy), max(ink(aCenter.xy + vec2(r, 0.0)), ink(aCenter.xy - vec2(r, 0.0)))),
+      max(ink(aCenter.xy + vec2(0.0, r)), ink(aCenter.xy - vec2(0.0, r)))));
+    float e = uExplode * (1.0 - held);
     vec3 dir = normalize(vec3(aRand.x - 0.5, aRand.y - 0.5, aRand.z * 0.9 + 0.15));
     vec3 pc = aCenter + dir * e * (5.0 + aRand.w * 24.0);
     float swirl = e * (uTime * 0.16 * (0.4 + aRand.w) + aRand.z * 0.6) * uSpin;
@@ -47,26 +65,46 @@ const vertexShader = /* glsl */ `
     pc += (aRand.xyz - 0.5) * uShake * 0.25;
     local = rot(aRand.zxy - 0.5, e * (uTime * (0.5 + aRand.y) + aRand.x * 9.0)) * local;
     local *= 1.0 + e * uKick * 0.5;
+    // Seen from above, the held words fall back flat as the wall bursts, face up, turned to read the right way up from
+    // where the camera is, and grow to stay legible from that height (they stand again as the wall gathers).
+    float lie = uHoldTilt * step(0.5, held) * uExplode;
+    mat3 lay = rot(vec3(0.0, 1.0, 0.0), uHoldYaw * lie) * rot(vec3(1.0, 0.0, 0.0), -1.5707963 * lie);
+    float big = 1.0 + 0.9 * lie;
+    pc = lay * pc * big;
+    local = lay * local * big;
+    vHeld = step(0.5, held) * uExplode;
     vUv = uv; vBary = aBary; vRand = aRand.w;
+    // A shard nearing the lens shrinks away rather than sweep across the frame as a long smear.
+    vec4 mc = modelViewMatrix * vec4(pc, 1.0);
+    local *= smoothstep(0.6, 3.5, -mc.z);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pc + local, 1.0);
   }`;
 
 const fragmentShader = /* glsl */ `
-  uniform sampler2D uCover;
+  uniform sampler2D uCover, uLyric;
+  uniform vec4 uLyricRect;
+  uniform float uLyricOn;
   uniform vec3 uSignal, uAccent, uPaper, uInk;
   uniform float uExplode, uKick, uHat, uEdge, uTime;
   varying vec2 vUv;
   varying vec3 vBary;
-  varying float vRand;
+  varying float vRand, vHeld;
   void main() {
     // Backs: dark glass tinted by the signal (a few by the accent); the rim does the shining.
     vec3 back = mix(uInk * 1.6, mix(uSignal, uAccent, step(0.8, vRand)), 0.18 + 0.5 * (1.0 - uExplode) + 0.1 * vRand);
     vec3 col = gl_FrontFacing ? texture2D(uCover, vUv).rgb : back;
+    // The words, printed on the face of the wall (rect: centre and size in wall units).
+    vec2 q = ((vUv - 0.5) * ${SIZE.toFixed(1)} - uLyricRect.xy) / uLyricRect.zw + 0.5;
+    if (gl_FrontFacing && uLyricOn > 0.5 && q.x > 0.0 && q.x < 1.0 && q.y > 0.0 && q.y < 1.0) {
+      vec4 w = texture2D(uLyric, q);
+      col = col * (1.0 - w.a) + w.rgb;
+    }
     float edge = min(min(vBary.x, vBary.y), vBary.z);
     vec3 rim = gl_FrontFacing ? uPaper * 1.4 : mix(uSignal, uPaper, 0.3) * 1.6;
-    col = mix(col, rim, (1.0 - smoothstep(0.0, 0.03 + 0.05 * uExplode, edge)) * uEdge);
-    col *= 1.0 + uKick * uExplode * 0.9;
-    col += uPaper * step(0.94, fract(vRand * 91.7 + floor(uTime * 9.0) * 0.37)) * uHat * uExplode * 2.5;
+    // (The held shards carrying the words keep quiet: no rims, no kick, no sparkle to wash the type out.)
+    col = mix(col, rim, (1.0 - smoothstep(0.0, 0.03 + 0.05 * uExplode, edge)) * uEdge * (1.0 - 0.9 * vHeld));
+    col *= 1.0 + uKick * uExplode * 0.4 * (1.0 - vHeld);
+    col += uPaper * step(0.94, fract(vRand * 91.7 + floor(uTime * 9.0) * 0.37)) * uHat * uExplode * 2.5 * (1.0 - vHeld);
     gl_FragColor = vec4(col, 1.0);
   }`;
 
@@ -75,7 +113,7 @@ export class Shatter implements MvScene {
   readonly camera = new THREE.PerspectiveCamera(42, 16 / 9, 0.1, 500);
   private material: THREE.ShaderMaterial;
   private dust: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
-  private rig: LyricRig;
+  private layer: LyricLayer;
 
   constructor(private init: SceneInit) {
     const { palette } = init;
@@ -119,6 +157,7 @@ export class Shatter implements MvScene {
         uCover: { value: init.cover }, uSignal: { value: palette.signal.clone() }, uAccent: { value: palette.accent.clone() },
         uPaper: { value: palette.paper.clone() }, uInk: { value: palette.ink.clone() }, uExplode: { value: 0 }, uTime: { value: 0 }, uFlip: { value: -1 },
         uKick: { value: 0 }, uHat: { value: 0 }, uEdge: { value: 0.35 }, uSpin: { value: 1 }, uShake: { value: 0 }, uPattern: { value: 0 },
+        uLyric: { value: null }, uLyricRect: { value: new THREE.Vector4(0, 0, SIZE, SIZE) }, uLyricOn: { value: 0 }, uHoldTilt: { value: 0 }, uHoldYaw: { value: 0 },
       },
     });
     const mesh = new THREE.Mesh(geometry, this.material);
@@ -135,8 +174,13 @@ export class Shatter implements MvScene {
     this.dust = new THREE.Points(dg, new THREE.PointsMaterial({ color: palette.paper.clone(), size: 0.12, transparent: true, opacity: 0.35, depthWrite: false }));
     this.scene.add(this.dust);
 
-    this.rig = new LyricRig(palette, 'hook');
-    this.scene.add(this.rig.group);
+    this.layer = new LyricLayer(palette, 'hook');
+    this.material.uniforms.uLyric.value = this.layer.target.texture;
+    this.scene.add(this.layer.token);
+    this.scene.onBeforeRender = renderer => {
+      this.layer.render(renderer);
+      this.material.uniforms.uLyricOn.value = this.layer.on ? 1 : 0;
+    };
     this.resize(init.aspect);
   }
 
@@ -177,6 +221,8 @@ export class Shatter implements MvScene {
     u.uPattern.value = Math.floor(rng((info.bar * 2654435761) ^ shot.seed)() * 6);
     u.uFlip.value = drop ? -1 : -0.25 + inOutCubic(Math.min(1, info.barPhase * 1.35)) * 1.6;
     u.uEdge.value = drop ? 0.55 : 0.28 + kick * 0.3;
+    // The overhead camera (the drop's usual one) sees the wall edge on: there the held words lie down.
+    u.uHoldTilt.value = ['wall', 'wall-close', 'wall-dutch', 'wall-edge', 'wall-orbit', 'swarm-a', 'swarm-b', 'swarm-d'].includes(shot.variant) ? 0 : 1;
 
     const cam = this.camera;
     const k = clamp01(ctx.shotT / Math.max(0.3, shot.end - shot.start));
@@ -184,6 +230,9 @@ export class Shatter implements MvScene {
     const sign = random() < 0.5 ? -1 : 1;
     let fov = 42, roll = 0;
     const target = new THREE.Vector3(0, 0, 0);
+    // Where on the wall the words are set: the part the camera frames (the whole wall, or the patch it is close on).
+    const rect = this.material.uniforms.uLyricRect.value as THREE.Vector4;
+    rect.set(0, 0, SIZE * Math.min(1, ctx.aspect), SIZE);
     switch (shot.variant) {
       case 'wall': {
         cam.position.set(Math.sin(k * 2.2) * 1.2 * sign, 0.4 + Math.sin(k * 1.7) * 0.5, lerp(25, 18, inOutCubic(k)));
@@ -195,6 +244,8 @@ export class Shatter implements MvScene {
         target.set(cx + lerp(-1, 1, k) * sign, cy, 0);
         cam.position.set(target.x, target.y + 0.4, lerp(8.5, 6.5, inOutCubic(k)));
         fov = 38;
+        const vh = 2 * 7.5 * Math.tan(THREE.MathUtils.degToRad(fov / 2));
+        rect.set(cx, cy, vh * ctx.aspect, vh);
         break;
       }
       case 'wall-dutch': {
@@ -228,15 +279,17 @@ export class Shatter implements MvScene {
         break;
       }
       case 'swarm-d': {
-        // Inside the cloud, shards rushing past the lens.
+        // Inside the cloud, shards rushing past the lens; far enough back from the wall to read the held line.
         const a = random() * 6 + k * 1.2 * sign;
-        cam.position.set(Math.sin(a) * 4, 0.5, Math.cos(a) * 4 + 6);
-        target.set(Math.sin(a + 1.2) * 10, 0, -6);
+        cam.position.set(Math.sin(a) * 3, 0.5, Math.cos(a) * 2.5 + 14);
+        target.set(Math.sin(a + 1.2) * 3, 0, 0);
         fov = 72;
         break;
       }
       default: {
         const a = info.pos * 0.08 * sign;
+        // The words lying flat read the right way up from where the camera was as the shot began.
+        u.uHoldYaw.value = music.beatPos(shot.start) * 0.08 * sign;
         cam.position.set(Math.sin(a) * 8, 26, Math.cos(a) * 8);
         fov = 50;
       }
@@ -253,6 +306,6 @@ export class Shatter implements MvScene {
     this.dust.rotation.y = t * 0.02;
     ctx.fx.bloom = 0.5 + energy * 0.35 + kick * 0.35 * e;
     ctx.fx.ca = kick * 0.7 * e;
-    this.rig.update(cam, ctx.lyrics, t, ctx.aspect, energy);
+    this.layer.update(ctx.lyrics, t, energy, rect.z, rect.w);
   }
 }

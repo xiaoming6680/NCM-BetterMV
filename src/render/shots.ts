@@ -360,3 +360,33 @@ export class EchoPass extends Pass {
     this.copy.dispose();
   }
 }
+
+/**
+ * Keeps one frame for a flashback: when armed, copies the shot as drawn (before trails, glow and grade) aside, and
+ * passes the picture on untouched. The grade lays it back over later frames (Fx.memory).
+ */
+export class MemoryPass extends Pass {
+  armed = false;
+  readonly rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
+  private copy = new FullScreenQuad(new THREE.MeshBasicMaterial({ depthTest: false, depthWrite: false }));
+
+  constructor() {
+    super();
+    this.needsSwap = false;
+  }
+
+  override setSize(width: number, height: number): void { this.rt.setSize(width, height); }
+
+  override render(renderer: THREE.WebGLRenderer, _write: THREE.WebGLRenderTarget, read: THREE.WebGLRenderTarget): void {
+    if (!this.armed) return;
+    this.armed = false;
+    (this.copy.material as THREE.MeshBasicMaterial).map = read.texture;
+    renderer.setRenderTarget(this.rt);
+    this.copy.render(renderer);
+  }
+
+  override dispose(): void {
+    this.rt.dispose();
+    this.copy.dispose();
+  }
+}

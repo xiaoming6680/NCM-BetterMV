@@ -1,13 +1,14 @@
 // Ink (the 墨 style, for 国风 / 古风 songs): the cover painted in ink on warm rice paper — its darks in three tones
 // (焦墨, 浓墨, 淡墨) with feathered, bleeding edges, a wash of the cover's own colour where the ink is wet, the paper's
 // fibres showing through. The ink spreads in from nothing at the start of a shot; the view travels slowly across the
-// painting like an unrolled scroll; a red seal carries the song's first character; the lyrics stand in vertical
-// columns of dark serif type. Variants: scroll (a slow pan along the painting), bloom (the ink spreads out from the
+// painting like an unrolled scroll; a red seal carries the song's first character; the lyrics are written into the
+// painting in vertical columns (a LyricLayer read by the ink shader: they travel with the scroll, bleed like the
+// rest of the ink, and the painting clears a little round them, as round an inscription). Variants: scroll (a slow pan along the painting), bloom (the ink spreads out from the
 // middle), mist (a close, drifting detail with fog rising through it).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, inOutCubic, lerp, rng, smooth } from './types.ts';
-import { LyricRig } from './lyricRig.ts';
+import { LyricLayer } from './lyricSpace.ts';
 import { textTexture } from '../render/text.ts';
 
 const vertexShader = /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
@@ -16,7 +17,15 @@ const fragmentShader = /* glsl */ `
   uniform vec2 uRes, uPan, uSpread;
   uniform float uTime, uZoom, uReveal, uMist, uBreath;
   uniform vec3 uPaper, uInk;
+  uniform sampler2D uLyric;
+  uniform vec4 uLyricRect; // where the words are written on the painting: centre and size in cover uv
+  uniform float uLyricOn;
   varying vec2 vUv;
+  vec4 lyricAt(vec2 cuv) {
+    vec2 q = (cuv - uLyricRect.xy) / uLyricRect.zw + 0.5;
+    if (uLyricOn < 0.5 || q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0) return vec4(0.0);
+    return texture2D(uLyric, q);
+  }
   float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
   float noise(vec2 p) {
     vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);
@@ -41,12 +50,18 @@ const fragmentShader = /* glsl */ `
     float front = length(q - uSpread) * 1.3 + (fbm(q * 6.0 + 7.3) - 0.5) * 0.35;
     float wet = smoothstep(uReveal, uReveal - 0.12, front);
     tone *= wet;
+    // The words: dark type with a pale glow, read through the same wandering offset so they bleed like the ink.
+    vec4 lw = lyricAt(cuv + w * 0.005);
+    float lwl = dot(lw.rgb, vec3(0.2126, 0.7152, 0.0722));
+    float glyph = clamp(lw.a - lwl, 0.0, 1.0);
+    tone *= 1.0 - clamp(lwl, 0.0, 1.0) * 0.85;
     // Rice paper: warm, with fibres and a little mottling.
     float fibre = smoothstep(0.62, 0.9, noise(vec2(q.x * 900.0, q.y * 40.0))) * 0.05;
     vec3 paper = uPaper * (0.93 + 0.07 * fbm(q * 5.0) - fibre);
     // A breath of the cover's own colour where the ink is still wet (淡彩).
     vec3 wash = mix(vec3(1.0), clamp(c * 1.5, 0.0, 1.0), 0.45);
     vec3 col = mix(paper * mix(vec3(1.0), wash, clamp(tone * 1.6, 0.0, 1.0) * 0.6), uInk, tone * (0.92 + uBreath * 0.05));
+    col = mix(col, uInk, glyph * (0.86 + 0.12 * grain));
     // Mist rising through the painting.
     float fog = fbm(vec2(q.x * 2.2 + uTime * 0.03, q.y * 3.0 - uTime * 0.05)) * uMist;
     col = mix(col, uPaper, clamp(fog * (0.6 - q.y), 0.0, 0.85));
@@ -58,7 +73,7 @@ export class Ink implements MvScene {
   readonly camera = new THREE.PerspectiveCamera(40, 16 / 9, 0.1, 100);
   private quad: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   private seal: THREE.Group;
-  private rig: LyricRig;
+  private layer: LyricLayer;
   private res = new THREE.Vector2(1920, 1080);
 
   constructor(private init: SceneInit, title = '') {
@@ -73,6 +88,7 @@ export class Ink implements MvScene {
         uCover: { value: init.cover }, uRes: { value: this.res }, uPan: { value: new THREE.Vector2() }, uSpread: { value: new THREE.Vector2() },
         uTime: { value: 0 }, uZoom: { value: 1 }, uReveal: { value: 2 }, uMist: { value: 0 }, uBreath: { value: 0 },
         uPaper: { value: paper }, uInk: { value: ink },
+        uLyric: { value: null }, uLyricRect: { value: new THREE.Vector4(0.5, 0.5, 1, 1) }, uLyricOn: { value: 0 },
       },
     }));
     this.quad.frustumCulled = false;
@@ -80,9 +96,14 @@ export class Ink implements MvScene {
     this.scene.add(this.quad);
     this.seal = this.makeSeal(title);
     this.scene.add(this.seal);
-    this.rig = new LyricRig(palette, 'poem');
-    this.rig.onLight = true;
-    this.scene.add(this.rig.group);
+    this.layer = new LyricLayer(palette, 'poem');
+    this.layer.rig.onLight = true;
+    this.quad.material.uniforms.uLyric.value = this.layer.target.texture;
+    this.scene.add(this.layer.token);
+    this.scene.onBeforeRender = renderer => {
+      this.layer.render(renderer);
+      this.quad.material.uniforms.uLyricOn.value = this.layer.on ? 1 : 0;
+    };
     this.resize(init.aspect);
   }
 
@@ -106,6 +127,14 @@ export class Ink implements MvScene {
 
   setViewport(width: number, height: number): void { this.res.set(width, height); }
 
+  /** The view over the painting at e (0..1 through the shot): sets the pan, returns the zoom. */
+  private view(variant: string, e: number, sx: number, pan: THREE.Vector2): number {
+    if (variant === 'bloom') { pan.set(0, 0); return lerp(1.15, 1.35, e); }
+    if (variant === 'mist') { pan.set(sx * lerp(-0.12, 0.12, e), lerp(0.1, 0.02, e)); return lerp(2.4, 2.8, e); }
+    pan.set(sx * lerp(-0.2, 0.2, e), 0.02); // scroll
+    return 1.7;
+  }
+
   update(ctx: FrameCtx): void {
     const { t, music, shot } = ctx;
     const u = this.quad.material.uniforms;
@@ -118,15 +147,11 @@ export class Ink implements MvScene {
     const sx = random() < 0.5 ? -1 : 1;
     // The ink spreads in over the first two seconds of a shot.
     u.uReveal.value = lerp(0.05, 2.2, smooth(since / 2.2));
+    u.uZoom.value = this.view(shot.variant, e, sx, u.uPan.value);
     switch (shot.variant) {
-      case 'bloom':
-        u.uZoom.value = lerp(1.15, 1.35, e); u.uPan.value.set(0, 0); u.uSpread.value.set(0, 0); u.uMist.value = 0.2;
-        break;
-      case 'mist':
-        u.uZoom.value = lerp(2.4, 2.8, e); u.uPan.value.set(sx * lerp(-0.12, 0.12, e), lerp(0.1, 0.02, e)); u.uSpread.value.set(sx * 0.3, -0.2); u.uMist.value = 1.1;
-        break;
-      default: // scroll
-        u.uZoom.value = 1.7; u.uPan.value.set(sx * lerp(-0.2, 0.2, e), 0.02); u.uSpread.value.set(-sx * 0.35, 0.05); u.uMist.value = 0.45;
+      case 'bloom': u.uSpread.value.set(0, 0); u.uMist.value = 0.2; break;
+      case 'mist': u.uSpread.value.set(sx * 0.3, -0.2); u.uMist.value = 1.1; break;
+      default: u.uSpread.value.set(-sx * 0.35, 0.05); u.uMist.value = 0.45; // scroll
     }
     const cam = this.camera;
     cam.position.set(0, 0, 10);
@@ -140,7 +165,20 @@ export class Ink implements MvScene {
     ctx.fx.bloom = 0.04;
     ctx.fx.vignette = 0.25;
     ctx.fx.grain = 0.035;
-    this.rig.align = sx > 0 ? 'right' : 'left';
-    this.rig.update(cam, ctx.lyrics, t, ctx.aspect, shot.section.energy);
+    // Each line is written on the painting where the view was as it began, in a column to one side, and the scroll
+    // carries it on from there. The words are as big as the view is halfway through the shot; the layer covers all
+    // the painting the shot travels over.
+    const long = Math.max(this.res.x, this.res.y), at = new THREE.Vector2(), end = new THREE.Vector2();
+    const zoom = this.view(shot.variant, 0.5, sx, at), w = this.res.x / long / zoom, h = this.res.y / long / zoom;
+    const z0 = this.view(shot.variant, 0, sx, at), x0 = at.x, y0 = at.y, z1 = this.view(shot.variant, 1, sx, end);
+    const rw = Math.abs(end.x - x0) + this.res.x / long / Math.min(z0, z1), rh = Math.abs(end.y - y0) + this.res.y / long / Math.min(z0, z1);
+    const cx = 0.5 + (x0 + end.x) / 2, cy = 0.5 + (y0 + end.y) / 2;
+    (u.uLyricRect.value as THREE.Vector4).set(cx, cy, rw, rh);
+    this.layer.rig.place = (root, st) => {
+      const zl = this.view(shot.variant, inOutCubic(clamp01((Math.max(st.line.start, shot.start) - shot.start) / len)), sx, at);
+      root.position.set(0.5 + at.x - cx + sx * 0.3 * (this.res.x / long / zl), 0.5 + at.y - cy + 0.04 * h, -10);
+    };
+    // (Set a little larger than the view's own type: brush-written, it should hold its own against the painting.)
+    this.layer.update(ctx.lyrics, t, shot.section.energy, w * 1.35, h * 1.35, rw, rh);
   }
 }

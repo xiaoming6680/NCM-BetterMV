@@ -4,12 +4,13 @@
 // screens slip out of register on snares, the ruling steps coarser or finer on each downbeat, and the view drifts and
 // zooms slowly over the cover. Pulse: glowing dots on ink, metered per shot so they cover about a third of the frame
 // whatever the cover (a shot over a light part of it prints as a negative, its darks glowing), or a bright or
-// one-colour cover would white the frame out under the words. Ballad: ink on paper, the lyrics set dark. While a line is
-// sung the dots thin out behind it (a band across the middle, or the column the poem stands in), so the words read.
+// one-colour cover would white the frame out under the words. Ballad: ink on paper, the lyrics set dark.
+// The words are printed too, as a finer screen of their own (a LyricLayer laid on the cover, so the slow move carries
+// them with the picture): light dots on ink, ink dots on paper; the cover's dots thin out round them.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { clamp01, inOutCubic, lerp, rng } from './types.ts';
-import { LyricRig } from './lyricRig.ts';
+import { LyricLayer } from './lyricSpace.ts';
 import { lastIndex } from '../director/music.ts';
 
 const vertexShader = /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
@@ -18,18 +19,20 @@ const fragmentShader = /* glsl */ `
   uniform vec2 uRes, uPan, uMisreg, uLevels;
   uniform float uZoom, uCell, uKick, uNeon, uAngle, uNegative, uGain;
   uniform vec3 uPaper, uInk, uSig, uAcc;
-  uniform vec2 uScrim; // amount, where: 0 a band across the middle, 1 the left column, -1 the right one
+  uniform sampler2D uLyric;
+  uniform vec4 uLyricRect; // where the words lie on the cover: centre and size in cover uv
+  uniform float uLyricOn;
   varying vec2 vUv;
-  float scrimAt(vec2 px) {
-    vec2 uv = px / uRes;
-    if (uScrim.y == 0.0) return uScrim.x * exp(-pow((uv.y - 0.5) / 0.15, 2.0));
-    return uScrim.x * smoothstep(0.62, 0.15, uScrim.y > 0.0 ? uv.x : 1.0 - uv.x);
-  }
   vec2 rot(vec2 p, float a) { float c = cos(a), s = sin(a); return vec2(c * p.x - s * p.y, s * p.x + c * p.y); }
   // Screen pixel → cover uv: the cover fills the frame (cropped), zoomed and panned.
   vec2 coverUv(vec2 px) {
     vec2 q = (px - 0.5 * uRes) / max(uRes.x, uRes.y);
     return 0.5 + q / uZoom + uPan;
+  }
+  vec4 lyricAt(vec2 cuv) {
+    vec2 q = (cuv - uLyricRect.xy) / uLyricRect.zw + 0.5;
+    if (uLyricOn < 0.5 || q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0) return vec4(0.0);
+    return texture2D(uLyric, q);
   }
   // Coverage of one screen at this pixel: rotate into the screen, find the cell's centre, read the cover there.
   float screenAt(vec2 px, float angle, int which) {
@@ -50,25 +53,39 @@ const fragmentShader = /* glsl */ `
     else v = acc;
     v *= uGain;
     // On ink the dots stay apart so the dark shows between them; on paper they may close up in the shadows.
-    float radius = sqrt(clamp(v, 0.0, 1.0)) * (uNeon > 0.5 ? 0.56 : 0.72) * uCell * (1.0 + uKick * 0.28) * (1.0 - 0.6 * scrimAt(rot(centre, -angle)));
+    float radius = sqrt(clamp(v, 0.0, 1.0)) * (uNeon > 0.5 ? 0.56 : 0.72) * uCell * (1.0 + uKick * 0.28) * (1.0 - 0.92 * lyricAt(coverUv(rot(centre, -angle))).a);
     float d = length(rot(px, angle) - centre);
     return smoothstep(radius + 0.9, radius - 0.9, d);
   }
+  // The words' own screen: finer, square to the frame; dot size from how much type is there, the dot in its colour.
+  float wordsAt(vec2 px, out vec3 tint) {
+    float cell = max(3.0, uCell * 0.36);
+    vec2 centre = (floor(px / cell) + 0.5) * cell;
+    vec4 w = lyricAt(coverUv(centre));
+    float lum = dot(w.rgb, vec3(0.2126, 0.7152, 0.0722));
+    float v = uNeon > 0.5 ? lum : max(0.0, w.a - lum);
+    tint = w.rgb / max(w.a, 1e-3);
+    float radius = sqrt(clamp(v, 0.0, 1.0)) * 0.64 * cell * (1.0 + uKick * 0.15);
+    return smoothstep(radius + 0.8, radius - 0.8, length(px - centre));
+  }
   void main() {
     vec2 px = vUv * uRes;
+    vec3 tint;
+    float w = wordsAt(px, tint);
     float k = screenAt(px, uAngle + 0.7854, 0);
     float s = screenAt(px + uMisreg, uAngle + 0.2618, 1);
     float a = screenAt(px - uMisreg, uAngle + 1.309, 2);
     vec3 col;
     if (uNeon > 0.5) {
       // Light on ink: the screens add up like glowing phosphor.
-      col = uInk + uPaper * k * 0.5 + uSig * s * 1.1 + uAcc * a * 0.85;
+      col = uInk + uPaper * k * 0.5 + uSig * s * 1.1 + uAcc * a * 0.85 + tint * w;
     } else {
       // Ink on paper: each screen multiplies over the paper, overprinting where they meet.
       col = uPaper;
       col = mix(col, col * uAcc, a * 0.9);
       col = mix(col, col * uSig, s * 0.9);
       col = mix(col, uInk, k * 0.92);
+      col = mix(col, uInk, w * 0.95);
     }
     gl_FragColor = vec4(col, 1.0);
   }`;
@@ -77,7 +94,7 @@ export class Halftone implements MvScene {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(40, 16 / 9, 0.1, 100);
   private quad: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
-  private rig: LyricRig;
+  private layer: LyricLayer;
   private snares: Float64Array;
   private res = new THREE.Vector2(1920, 1080);
   private readonly neon: boolean;
@@ -94,16 +111,21 @@ export class Halftone implements MvScene {
         uZoom: { value: 1 }, uCell: { value: 12 }, uKick: { value: 0 }, uNeon: { value: this.neon ? 1 : 0 }, uAngle: { value: 0 },
         uNegative: { value: 0 }, uGain: { value: 1 }, uLevels: { value: new THREE.Vector2(0, 1) },
         uPaper: { value: palette.paper.clone() }, uInk: { value: palette.ink.clone() }, uSig: { value: palette.signal.clone() }, uAcc: { value: palette.accent.clone() },
-        uScrim: { value: new THREE.Vector2() },
+        uLyric: { value: null }, uLyricRect: { value: new THREE.Vector4(0.5, 0.5, 1, 1) }, uLyricOn: { value: 0 },
       },
     }));
     this.quad.frustumCulled = false;
     this.quad.renderOrder = -10;
     this.scene.add(this.quad);
     this.snares = Float64Array.from(init.music.a.hits.snare.filter(h => h[1] > 0.4), h => h[0]);
-    this.rig = new LyricRig(palette, this.neon ? 'hook' : 'poem');
-    this.rig.onLight = !this.neon;
-    this.scene.add(this.rig.group);
+    this.layer = new LyricLayer(palette, this.neon ? 'hook' : 'poem');
+    this.layer.rig.onLight = !this.neon;
+    this.quad.material.uniforms.uLyric.value = this.layer.target.texture;
+    this.scene.add(this.layer.token);
+    this.scene.onBeforeRender = renderer => {
+      this.layer.render(renderer);
+      this.quad.material.uniforms.uLyricOn.value = this.layer.on ? 1 : 0;
+    };
     this.resize(init.aspect);
   }
 
@@ -200,10 +222,20 @@ export class Halftone implements MvScene {
     ctx.fx.bloom = this.neon ? 0.55 + kick * 0.3 : 0.05;
     ctx.fx.vignette = this.neon ? 0.45 : 0.15;
     ctx.fx.grain = this.neon ? 0.04 : 0.02;
-    this.rig.align = sx > 0 ? 'left' : 'right';
-    this.rig.update(this.camera, ctx.lyrics, t, ctx.aspect, shot.section.energy);
-    // Thin the dots behind the words: fully once a line has been up a moment, easing off as it leaves.
-    const lit = ctx.lyrics.visible(t).reduce((m, s) => Math.max(m, clamp01((s.age + 0.2) / 0.35) * (1 - s.exit)), 0);
-    u.uScrim.value.set(lit, this.neon ? 0 : sx > 0 ? 1 : -1);
+    // Each line lies on the cover where the view was as it began (a ballad's column to one side), and the move carries
+    // it on from there. The words are as big as the view is halfway through the shot; the layer covers all the cover
+    // the shot travels over.
+    const long = Math.max(this.res.x, this.res.y), at = new THREE.Vector2(), end = new THREE.Vector2();
+    const zoom = this.move(shot.variant, 0.5, sx, at), w = this.res.x / long / zoom, h = this.res.y / long / zoom;
+    const z0 = this.move(shot.variant, 0, sx, at), x0 = at.x, y0 = at.y, z1 = this.move(shot.variant, 1, sx, end);
+    const rw = Math.abs(end.x - x0) + this.res.x / long / Math.min(z0, z1), rh = Math.abs(end.y - y0) + this.res.y / long / Math.min(z0, z1);
+    const cx = 0.5 + (x0 + end.x) / 2, cy = 0.5 + (y0 + end.y) / 2;
+    (u.uLyricRect.value as THREE.Vector4).set(cx, cy, rw, rh);
+    const len = Math.max(0.5, shot.end - shot.start);
+    this.layer.rig.place = (root, st) => {
+      const zl = this.move(shot.variant, inOutCubic(clamp01((Math.max(st.line.start, shot.start) - shot.start) / len)), sx, at);
+      root.position.set(0.5 + at.x - cx + (this.neon ? 0 : -sx * 0.3 * (this.res.x / long / zl)), 0.5 + at.y - cy, -10);
+    };
+    this.layer.update(ctx.lyrics, t, shot.section.energy, w, h, rw, rh);
   }
 }

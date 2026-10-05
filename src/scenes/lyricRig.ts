@@ -3,9 +3,11 @@
 //   hook    — big centred display type that slams in; the sung word glows in the signal colour
 //   caption — small type low in the frame
 //   poem    — serif in a narrow column to one side, each word fading up slowly; for ballads
+// By default a line rides the lens. In world mode (`place`) each line is a card left in the scene where the plate
+// puts it, laid out in `frame` (world units), so the camera moves past it (src/scenes/lyricSpace.ts has the rest).
 import * as THREE from 'three';
 import { textMesh, hasCjk, VERTICAL_STEP, type Face } from '../render/text.ts';
-import { norm, type LyricTrack, type LineState } from '../director/lyrics.ts';
+import { norm, type LyricTrack, type LineState, type WordState } from '../director/lyrics.ts';
 import { tokenize } from '../lyrics/parse.ts';
 import type { Palette } from '../render/palette.ts';
 import { clamp01, outBack, outExpo, rng } from './types.ts';
@@ -22,7 +24,9 @@ interface Glyph {
 
 interface Built {
   index: number;
-  aspect: number;
+  /** What it was laid out for: the frame's height and width (lens: the view at DISTANCE). */
+  vh: number;
+  vw: number;
   root: THREE.Group;
   words: Glyph[];
   trans: Glyph[];
@@ -43,6 +47,8 @@ const scrimFragment = /* glsl */ `
   }`;
 
 const DISTANCE = 10;
+/** The lens' view height at DISTANCE for a 50° lens: the unit the words' moves are written in. */
+const REF_VH = 2 * DISTANCE * Math.tan(THREE.MathUtils.degToRad(25));
 const outCubic = (x: number) => 1 - Math.pow(1 - clamp01(x), 3);
 
 /**
@@ -50,13 +56,38 @@ const outCubic = (x: number) => 1 - Math.pow(1 - clamp01(x), 3);
  * appeared, a strike, dark, a weaker flicker, dark, then on — overshooting, and settling. All over in an eighth of
  * a second, so it reads as light coming on, not as the word being late. `n` staggers the flicker's strength.
  */
-function neon(age: number, n: number): number {
+export function neon(age: number, n: number): number {
   if (age < 0) return 0;
   if (age < 0.03) return 0.95;
   if (age < 0.055) return 0.12;
   if (age < 0.085) return 0.55 + 0.25 * ((n * 0.618) % 1);
   if (age < 0.11) return 0.08;
   return 1 + 0.45 * Math.exp(-(age - 0.11) / 0.14);
+}
+
+/**
+ * How a word looks now, as every lyric carrier draws it: sets `color`, returns how far it has come in (0..1), its
+ * opacity and how much it still glows from being sung; null while it is not shown. Hook words strike like a neon
+ * tube and burn in the signal colour while sung; poem words fade up slowly and only warm a little.
+ */
+export function paintWord(ws: WordState, i: number, style: RigStyle, palette: Palette, energy: number, exit: number, color: THREE.Color, onLight = false): { k: number; opacity: number; glow: number } | null {
+  const lead = style === 'poem' ? 0.12 : 0.04;
+  if (!(ws.age > -lead && exit < 1)) return null;
+  const appear = clamp01((ws.age + lead) / (style === 'hook' ? 0.16 : style === 'poem' ? 0.6 : 0.2));
+  const k = style === 'poem' ? outCubic(appear) : outExpo(appear);
+  const singing = ws.progress > 0 && ws.progress < 1;
+  const glow = singing ? 1 : Math.exp(-Math.max(0, ws.age - (ws.word.end - ws.word.start)) / 0.25);
+  const { paper, signal } = palette;
+  if (style === 'poem') {
+    if (onLight) color.setRGB(1, 1, 1);
+    else color.copy(paper).multiplyScalar(0.93).lerp(signal, glow * 0.28);
+    return { k, opacity: k * (1 - exit), glow };
+  }
+  color.copy(paper).multiplyScalar(0.92).lerp(signal, glow * (style === 'hook' ? 1 : 0.85));
+  // Display type comes on like a neon tube.
+  const lit = style === 'hook' ? neon(ws.age + lead, i) : 1;
+  if (style === 'hook') color.multiplyScalar((1 + glow * (0.25 + energy * 0.25)) * Math.max(0.35, lit));
+  return { k, opacity: k * (1 - exit) * Math.min(1, lit), glow };
 }
 
 interface Look {
@@ -84,6 +115,29 @@ export class LyricRig {
   onLight = false;
   /** Lay lines out for this field of view instead of the camera's (for scenes that punch the lens on the beat). */
   layoutFov: number | null = null;
+  /** Lay lines out in this frame (world units: as tall and wide as the view would be) instead of the lens' view. */
+  frame: { vh: number; vw: number } | null = null;
+  /**
+   * World mode: each line's card stays in the scene, posed by this (the card's root starts at the origin, unturned,
+   * at scale 1; the card is centred on it). Returns a fade for the line (1 when omitted).
+   */
+  place: ((root: THREE.Object3D, state: LineState, t: number) => number | void) | null = null;
+  /** World mode: the scene's surfaces may hide the words. */
+  depthTest = false;
+  /**
+   * World mode: moves a glyph after it has been placed (in its card's frame); `key` is the same for the same word of
+   * the same line every frame (line × 1000 + word; translation characters from 500); `age` is seconds since the word
+   * began (translation characters: since the line began).
+   */
+  warp: ((mesh: THREE.Object3D, key: number, age: number) => void) | null = null;
+  /** World mode: the words can go out of focus (set before the first line is built); `blur` is a mip bias, 0 sharp. */
+  focusable = false;
+  readonly blur = { value: 0 };
+  private soften = (shader: { uniforms: Record<string, THREE.IUniform>; fragmentShader: string }) => {
+    shader.uniforms.uBlur = this.blur;
+    shader.fragmentShader = 'uniform float uBlur;\n' + shader.fragmentShader.replace('#include <map_fragment>',
+      '#ifdef USE_MAP\n  diffuseColor *= texture2D( map, vMapUv, uBlur );\n#endif');
+  };
   private built = new Map<number, Built>();
   private hooks: Set<string> | null = null;
 
@@ -93,6 +147,7 @@ export class LyricRig {
   }
 
   private visible(camera: THREE.PerspectiveCamera, aspect: number) {
+    if (this.frame) return this.frame;
     const vh = 2 * DISTANCE * Math.tan(THREE.MathUtils.degToRad(this.layoutFov ?? camera.fov) / 2);
     return { vh, vw: vh * aspect };
   }
@@ -131,7 +186,7 @@ export class LyricRig {
     const left = this.align !== 'right';
     const words: Glyph[] = [];
     const trans: Glyph[] = [];
-    const place = (g: Glyph) => { g.mesh.material.depthTest = false; g.mesh.renderOrder = 20; root.add(g.mesh); };
+    const place = (g: Glyph) => { this.dress(g.mesh); root.add(g.mesh); };
     if (cjk) {
       // Long lines shrink so they never need more than two columns (a Latin letter, turned, takes about half a cell).
       const cells = line.words.reduce((n, w) => n + Array.from(w.text).length * (hasCjk(w.text) ? 1 : 0.5), 0);
@@ -193,8 +248,7 @@ export class LyricRig {
         });
       }
     }
-    this.group.add(root);
-    return { index: state.index, aspect: vw / vh, root, words, trans };
+    return this.finish({ index: state.index, vh, vw, root, words, trans });
   }
 
   private build(state: LineState, camera: THREE.PerspectiveCamera, aspect: number): Built {
@@ -208,7 +262,7 @@ export class LyricRig {
     const align: Align = 'center';
     const anchorX = 0; // hook and caption lines are centred
     let h = vh * look.size[cjk ? 0 : 1];
-    const place = (g: Glyph) => { g.mesh.material.depthTest = false; g.mesh.renderOrder = 20; root.add(g.mesh); };
+    const place = (g: Glyph) => { this.dress(g.mesh); root.add(g.mesh); };
 
     let words: Glyph[] = [];
     let lastRow: Built['lastRow'];
@@ -261,15 +315,41 @@ export class LyricRig {
       const y0 = Math.min(...all.map(g => g.y)) - h * 0.6, y1 = Math.max(...all.map(g => g.y)) + h * 0.6;
       const w = x1 - x0 + h * 2.4, hh = y1 - y0 + h * 1.6;
       scrim = new THREE.Mesh(new THREE.PlaneGeometry(w, hh), new THREE.ShaderMaterial({
-        vertexShader: scrimVertex, fragmentShader: scrimFragment, transparent: true, depthTest: false, depthWrite: false,
+        vertexShader: scrimVertex, fragmentShader: scrimFragment, transparent: true, depthTest: this.depthTest, depthWrite: false,
         uniforms: { uAlpha: { value: 0 }, uColor: { value: this.palette.ink.clone().multiplyScalar(0.5) } },
       }));
       scrim.position.set((x0 + x1) / 2, (y0 + y1) / 2, -0.01);
       scrim.renderOrder = 19;
       root.add(scrim);
     }
-    this.group.add(root);
-    return { index: state.index, aspect, root, words, trans, lastRow, scrim };
+    return this.finish({ index: state.index, vh, vw, root, words, trans, lastRow, scrim });
+  }
+
+  private dress(m: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>): void {
+    m.material.depthTest = this.depthTest;
+    if (this.focusable) m.material.onBeforeCompile = this.soften;
+    m.renderOrder = 20;
+  }
+
+  /** Adds a built line; in world mode first centres the card on its root (the plate poses the card's middle). */
+  private finish(b: Built): Built {
+    if (this.place) {
+      const box = new THREE.Box3(), one = new THREE.Box3();
+      for (const g of [...b.words, ...b.trans]) {
+        if (!g) continue;
+        g.mesh.position.set(g.x, g.y, 0);
+        g.mesh.updateMatrix();
+        g.mesh.geometry.computeBoundingBox();
+        box.union(one.copy(g.mesh.geometry.boundingBox!).applyMatrix4(g.mesh.matrix));
+      }
+      if (!box.isEmpty()) {
+        const c = box.getCenter(new THREE.Vector3());
+        for (const g of [...b.words, ...b.trans]) if (g) { g.x -= c.x; g.y -= c.y; }
+        b.scrim?.position.set(b.scrim.position.x - c.x, b.scrim.position.y - c.y, b.scrim.position.z);
+      }
+    }
+    this.group.add(b.root);
+    return b;
   }
 
   private drop(b: Built): void {
@@ -279,31 +359,42 @@ export class LyricRig {
   }
 
   update(camera: THREE.PerspectiveCamera, lyrics: LyricTrack, t: number, aspect: number, energy = 0.5): void {
-    // Ride in front of the camera.
-    this.group.position.copy(camera.position);
-    this.group.quaternion.copy(camera.quaternion);
+    // Ride in front of the camera (world mode: stay where the scene puts each line).
+    if (this.place) { this.group.position.set(0, 0, 0); this.group.quaternion.identity(); }
+    else { this.group.position.copy(camera.position); this.group.quaternion.copy(camera.quaternion); }
     this.group.updateMatrixWorld();
 
     // The leaving line and the entering one can both be on screen: they cross-fade.
     const states = lyrics.visible(t);
     const keep = new Set(states.map(s => s.index));
-    for (const b of Array.from(this.built.values())) if (!keep.has(b.index) || Math.abs(b.aspect - aspect) > 0.02) this.drop(b);
+    const { vh, vw } = this.visible(camera, aspect);
+    for (const b of Array.from(this.built.values())) if (!keep.has(b.index) || Math.abs(b.vh - vh) > vh * 0.01 || Math.abs(b.vw - vw) > vw * 0.01) this.drop(b);
     this.hooks ??= lyrics.hooks();
-    for (const state of states) this.updateLine(state, camera, aspect, energy);
+    for (const state of states) this.updateLine(state, camera, aspect, energy, t);
   }
 
-  private updateLine(state: LineState, camera: THREE.PerspectiveCamera, aspect: number, energy: number): void {
+  private updateLine(state: LineState, camera: THREE.PerspectiveCamera, aspect: number, energy: number, t: number): void {
     const b = this.built.get(state.index) ?? this.built.set(state.index, this.build(state, camera, aspect)).get(state.index)!;
-    b.root.position.set(0, 0, -DISTANCE);
+    let fade = 1;
+    if (this.place) {
+      b.root.position.set(0, 0, 0);
+      b.root.quaternion.identity();
+      b.root.scale.setScalar(1);
+      fade = this.place(b.root, state, t) ?? 1;
+      b.root.visible = fade > 0.002;
+      if (!b.root.visible) return;
+    } else b.root.position.set(0, 0, -DISTANCE);
+    // The words' small moves are written for the lens; in a frame they scale with it.
+    const unit = this.frame ? b.vh / REF_VH : 1;
 
-    const { signal, paper } = this.palette;
+    const { paper } = this.palette;
     const style = this.style;
     const exit = state.exit;
     // In a hook line (one that repeats), the last word gets its moment: it swells when it is sung.
     const hookLine = style === 'hook' && !!this.hooks && this.hooks.has(norm(state.line.text));
     // How far a leaving line moves up: about the height of the block it occupies.
     const ys = b.words.filter(Boolean).map(w => w.y);
-    const rise = ys.length ? Math.max(...ys) - Math.min(...ys) + (b.words.find(Boolean)?.mesh.userData.width ? 1.2 : 1) * 1.1 : 1;
+    const rise = ys.length ? Math.max(...ys) - Math.min(...ys) + (b.words.find(Boolean)?.mesh.userData.width ? 1.2 : 1) * 1.1 * unit : unit;
     const lastWord = state.words.length - 1;
     // The last word of a hook line swells as it is sung. It grows rightwards while its row slides left by half as
     // much, so the row stays centred and the word never runs over the one before it; a long word swells less.
@@ -315,46 +406,39 @@ export class LyricRig {
       lastSwell = most * outBack(clamp01(lastState.age / 0.28));
       push = (w * lastSwell) / 2;
     }
+    const c = new THREE.Color();
     state.words.forEach((ws, i) => {
       const g = b.words[i];
       if (!g) return;
-      const lead = style === 'poem' ? 0.12 : 0.04;
-      const appear = clamp01((ws.age + lead) / (style === 'hook' ? 0.16 : style === 'poem' ? 0.6 : 0.2));
-      g.mesh.visible = ws.age > -lead && exit < 1;
-      if (!g.mesh.visible) return;
-      const k = style === 'poem' ? outCubic(appear) : outExpo(appear);
+      const look = paintWord(ws, i, style, this.palette, energy, exit, c, this.onLight);
+      g.mesh.visible = !!look;
+      if (!look) return;
+      const k = look.k;
       const swell = i === lastWord ? lastSwell : 0;
       const s = (style === 'hook' ? 1 + (1 - k) * 0.4 : style === 'poem' ? 1 + (1 - k) * 0.05 : 1) * (1 + swell);
       const base = g.mesh.userData.baseScale ?? (g.mesh.userData.baseScale = g.mesh.scale.x);
       g.mesh.scale.setScalar(s * base);
-      const singing = ws.progress > 0 && ws.progress < 1;
-      const glow = singing ? 1 : Math.exp(-Math.max(0, ws.age - (ws.word.end - ws.word.start)) / 0.25);
-      const c = g.mesh.material.color;
+      g.mesh.material.color.copy(c);
+      g.mesh.material.opacity = look.opacity * fade;
       // A leaving line rises out of the way of the entering one.
       const away = outExpo(exit) * rise;
       if (style === 'poem') {
         // Quiet: settles in from a touch above and warms slightly while sung; leaves by fading upwards.
-        g.mesh.position.set(g.x, g.y + (1 - k) * 0.1 + away, 0);
-        if (this.onLight) c.setRGB(1, 1, 1);
-        else c.copy(paper).multiplyScalar(0.93).lerp(signal, glow * 0.28);
-        g.mesh.material.opacity = k * (1 - exit);
+        g.mesh.position.set(g.x, g.y + (1 - k) * 0.1 * unit + away, 0);
+        this.warp?.(g.mesh, state.index * 1000 + i, ws.age);
         return;
       }
       const lift = style === 'hook' ? 0 : (1 - k) * 0.25;
       const slide = b.lastRow?.words.has(i) ? push : 0;
-      g.mesh.position.set(g.x - slide + exit * g.spin * 2, g.y - lift + away, (1 - k) * (style === 'hook' ? 1.2 : 0) + exit * 1.5);
+      g.mesh.position.set(g.x - slide + exit * g.spin * 2 * unit, g.y - lift * unit + away, ((1 - k) * (style === 'hook' ? 1.2 : 0) + exit * 1.5) * unit);
       g.mesh.rotation.z = exit * g.spin;
-      c.copy(paper).multiplyScalar(0.92).lerp(signal, glow * (style === 'hook' ? 1 : 0.85));
-      // Display type comes on like a neon tube.
-      const lit = style === 'hook' ? neon(ws.age + lead, i) : 1;
-      if (style === 'hook') c.multiplyScalar((1 + glow * (0.25 + energy * 0.25)) * Math.max(0.35, lit));
-      g.mesh.material.opacity = k * (1 - exit) * Math.min(1, lit);
+      this.warp?.(g.mesh, state.index * 1000 + i, ws.age);
     });
     // The bed comes up with the first word and goes with the line.
     if (b.scrim) {
       const first = state.words[0];
       const up = first ? clamp01((first.age + 0.1) / 0.25) : 1;
-      b.scrim.material.uniforms.uAlpha.value = (this.palette.light ? 0.72 : 0.38) * up * (1 - exit);
+      b.scrim.material.uniforms.uAlpha.value = (this.palette.light ? 0.72 : 0.38) * up * (1 - exit) * fade;
     }
     const n = b.trans.length;
     const fadeLen = style === 'poem' ? 3 : 1.5;
@@ -363,10 +447,11 @@ export class LyricRig {
       const k = clamp01((state.translationProgress - at + 1 / Math.max(1, n)) * n * (style === 'poem' ? 0.8 : fadeLen));
       g.mesh.visible = k > 0 && exit < 1;
       if (!g.mesh.visible) return;
-      g.mesh.position.set(g.x, g.y - (1 - outExpo(k)) * 0.15 + outExpo(exit) * rise, style === 'poem' ? 0 : exit * 1.5);
+      g.mesh.position.set(g.x, g.y - (1 - outExpo(k)) * 0.15 * unit + outExpo(exit) * rise, style === 'poem' ? 0 : exit * 1.5 * unit);
       if (style === 'poem' && this.onLight) g.mesh.material.color.setRGB(1, 1, 1);
       else g.mesh.material.color.copy(paper).multiplyScalar(style === 'poem' ? 0.72 : 0.8);
-      g.mesh.material.opacity = outExpo(k) * (1 - exit) * 0.9;
+      g.mesh.material.opacity = outExpo(k) * (1 - exit) * 0.9 * fade;
+      if (this.warp) { g.mesh.scale.setScalar(1); this.warp(g.mesh, state.index * 1000 + 500 + i, state.age); }
     });
   }
 }

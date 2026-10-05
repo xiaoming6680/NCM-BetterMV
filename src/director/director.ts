@@ -101,8 +101,37 @@ export function planShots(music: Music, style: Style, songSeed: number, song: So
       shots.push({ scene: plate.scene, start: cuts[i], end: cuts[i + 1], section, sectionIndex, variant, seed: (songSeed * 131 + shots.length * 7919) >>> 0 });
     }
   });
+  joinRuns(shots, barLen);
   if (!off.has('crystal')) placeCrystal(shots, music, style, songSeed);
   return off.has('cards') ? shots : placeOpening(shots, music, songSeed);
+}
+
+/**
+ * The speeding-up cuts at the end of a build keep the plate and change only the camera, and each shot used to start
+ * its camera move afresh: the same move replayed on every beat, which the user saw as a twitch (“快速循环一个动作，看起来
+ * 就和抽搐了一样”; the outro of a two-bar build cut eight times onto the one camera its plate has). Now consecutive
+ * shots that would look the same (same plate and camera, same kind of section, one of them under a bar) are one shot,
+ * and a run of shorter shots on one plate shares one clock for its moves (Shot.run).
+ */
+function joinRuns(shots: Shot[], barLen: (t: number) => number): void {
+  const short = (s: Shot) => s.end - s.start < barLen(s.start) * 0.9;
+  // (Whether a shot was cut under a bar, kept through the merging: joined pieces can add up to a bar.)
+  const hurried = shots.map(short);
+  for (let i = shots.length - 1; i > 0; i--) {
+    const a = shots[i - 1], b = shots[i];
+    if (a.scene === b.scene && a.variant === b.variant && a.section.label === b.section.label && (hurried[i - 1] || hurried[i])) {
+      a.end = b.end;
+      hurried[i - 1] = true;
+      shots.splice(i, 1);
+      hurried.splice(i, 1);
+    }
+  }
+  for (let i = 0; i < shots.length;) {
+    let j = i + 1;
+    while (j < shots.length && shots[j].scene === shots[i].scene && shots[j].section === shots[i].section && short(shots[j])) j++;
+    if (j - i >= 2) for (let k = i; k < j; k++) shots[k].run = { start: shots[i].start, end: shots[j - 1].end };
+    i = j;
+  }
 }
 
 /**
@@ -171,9 +200,9 @@ function placeCrystal(shots: Shot[], music: Music, style: Style, songSeed: numbe
 interface Cut { kind: TransitionKind | 0; pre: number; post: number; center: [number, number]; angle: number; amount: number; whip: [number, number] }
 
 /**
- * Stutters (pdoom's “repeat”, the technique): where the singer chops a word and repeats it three times or more, each
- * short (≤ 0.45 s), or sings the same short line twice or more back to back, the picture loops with the voice —
- * from the second time on it goes back to the moment of the first. [start, end, loop length], seconds.
+ * Stutters: where the singer chops a word and repeats it three times or more, each short (≤ 0.45 s), or sings the
+ * same short line twice or more back to back. From the second time on each repeat flashes back to the moment of the
+ * first (see Director.flashback). [start, end, repeat length], seconds.
  */
 function findStutters(lines: LyricLine[]): Array<[number, number, number]> {
   const out: Array<[number, number, number]> = [];
@@ -248,6 +277,8 @@ export class Director {
 
   private snares: Float64Array;
   private stutters: Array<[number, number, number]>;
+  /** The stutter whose first moment the engine holds for its flashbacks (−1: none). */
+  private remembered = -1;
 
   shotAt(t: number): Shot {
     return this.shots[Math.max(0, lastIndex(this.starts, t))];
@@ -319,14 +350,32 @@ export class Director {
     return out;
   }
 
-  /** Song time as the picture shows it: inside a stutter the picture loops back with the voice (see findStutters). */
-  pictureTime(t: number): number {
-    for (const [s, e, u] of this.stutters) if (t >= s + u && t < e) return s + ((t - s) % u);
-    return t;
+  /**
+   * Flashbacks where the voice stutters (findStutters). The frame at the first time is kept; on each repeat it comes
+   * back over the picture — still, in the ink → signal duotone, only where it is lighter — holds a moment and fades
+   * into the present, which runs on underneath. (Drawn a touch bigger, its words doubled the ones on screen.) (It used to loop the whole picture back with the voice; the
+   * user: on loud songs that looked like a twitch, “也许可以做个闪回的效果”.) No white flash with it. Chops shorter
+   * than a quarter second flash back every other time or less, never more than about four times a second.
+   */
+  private flashback(t: number, fx: Fx): void {
+    if (this.remembered >= 0 && t < this.stutters[this.remembered][0]) this.remembered = -1;
+    const soft = this.style.look === 'ballad';
+    for (let i = 0; i < this.stutters.length; i++) {
+      const [s, e, u] = this.stutters[i];
+      if (t < s || t >= e + 0.8) continue;
+      if (this.remembered !== i) { fx.remember = true; this.remembered = i; }
+      const period = u * Math.max(1, Math.ceil(0.24 / u));
+      const n = Math.min(Math.floor((t - s) / period), Math.floor((e - s - 1e-3) / period));
+      if (n < 1) return;
+      const age = t - s - n * period, line = u > 0.8;
+      const hold = line ? 0.25 : period * 0.35, tau = line ? 0.3 : period * 0.25;
+      const a = age < hold ? 1 : Math.exp(-(age - hold) / tau);
+      fx.memory = Math.max(fx.memory, (soft ? 0.55 : 0.9) * a);
+      return;
+    }
   }
 
-  frame(songT: number, dt: number, aspect: number): Frame {
-    const t = this.pictureTime(songT);
+  frame(t: number, dt: number, aspect: number): Frame {
     const i = Math.max(0, lastIndex(this.starts, t));
     const shot = this.shots[i];
     const prev = this.shots[i - 1];
@@ -346,7 +395,8 @@ export class Director {
       // (The user: “有些时候的闪光效果太重了” — a lift of light, not a white-out.)
       if (tr.flash && jump > 0.3) fx.flash = 0.32 * Math.exp(-since / 0.07) * jump;
       if (tr.dropPunch && shot.section.label === 'drop') fx.zoom = Math.exp(-since / 0.35) * 0.9;
-    } else if (tr.glitch && prev && shot.section.energy > 0.55 && since < 0.12 && !cut.kind) {
+    } else if (tr.glitch && prev && shot.section.energy > 0.55 && since < 0.12 && !cut.kind && !(shot.run && shot.run.start < shot.start)) {
+      // (Not on the cuts inside a run: a glitch on every beat is a twitch of its own.)
       fx.glitch = Math.exp(-since / 0.045) * (0.5 + shot.section.energy * 0.5);
     }
     // A cut on the same plate: the camera whips into the new setup.
@@ -356,7 +406,10 @@ export class Director {
       fx.smearY = cut.whip[1] * w;
     }
 
-    const ctx: FrameCtx = { t, dt, music: this.music, lyrics: this.lyrics, palette: this.palette, shot, shotT: since, aspect, fx };
+    // Scenes see a shot inside a run as the whole run (Shot.run): its moves carry on across the cuts.
+    const timed = (s: Shot): Shot => (s.run ? { ...s, start: s.run.start, end: s.run.end } : s);
+    const own = timed(shot);
+    const ctx: FrameCtx = { t, dt, music: this.music, lyrics: this.lyrics, palette: this.palette, shot: own, shotT: t - own.start, aspect, fx };
     scene.update(ctx);
 
     // Both shots keep moving under a transition; only the one on screen (the shot at t) sets the post effects and
@@ -371,11 +424,13 @@ export class Director {
     });
     if (cut.kind && prev && since < cut.post) {
       const from = this.scenes[prev.scene]!;
-      from.update({ ...ctx, shot: prev, shotT: t - prev.start, fx: defaultFx() });
+      const before = timed(prev);
+      from.update({ ...ctx, shot: before, shotT: t - before.start, fx: defaultFx() });
       transition = { from, hide: 'from', ...join(cut, shot) };
     } else if (nextCut && nextCut.kind && following && following.start - t < nextCut.pre) {
       drawn = this.scenes[following.scene]!;
-      drawn.update({ ...ctx, t: following.start, shot: following, shotT: 0, fx: defaultFx() });
+      const after = timed(following);
+      drawn.update({ ...ctx, t: following.start, shot: after, shotT: following.start - after.start, fx: defaultFx() });
       transition = { from: scene, hide: 'to', ...join(nextCut, following) };
     }
 
@@ -394,6 +449,7 @@ export class Director {
     // without most of the glow it stays a picture instead of washing out (the user: “过曝+歌词看不清”).
     if (this.palette.light && COVER_PLATES.has(shot.scene)) { fx.exposure *= 0.72; fx.bloom *= 0.12; fx.flash *= 0.5; fx.vignette = Math.max(fx.vignette, 0.55); }
     if (!light) this.grade(t, shot, fx, beat);
+    this.flashback(t, fx);
     this.overlay.update(t, shot, fx, light);
     return { scene: drawn, fx, shot, transition };
   }
@@ -426,12 +482,13 @@ export class Director {
         if (mirrorShot && this.lyrics.visible(t).length === 0) fx.mirror = random() < 0.5 ? 3 : 1;
         // Resolve out of big pixels on the drop's first beat.
         if (intoSec < beat) fx.pixel = Math.max(fx.pixel, 48 * Math.pow(1 - intoSec / beat, 2));
-        // A half negative on the first strong snare of each four-bar phrase, in the second half (once, not a strobe).
+        // A quarter negative on the first strong snare of each four-bar phrase, in the second half (once, not a strobe;
+        // half a negative turned the whole frame flat grey for a few frames).
         if (intoSec > (sec.end - sec.start) / 2) {
           const i = lastIndex(this.snares, t), age = i >= 0 ? t - this.snares[i] : 99;
           const phrase = (x: number) => Math.floor(m.at(x).bar / 4);
           const first = i >= 0 && (i === 0 || phrase(this.snares[i - 1]) !== phrase(this.snares[i]));
-          if (first && age < 0.08) fx.invert = Math.max(fx.invert, 0.5 * (1 - age / 0.08));
+          if (first && age < 0.08) fx.invert = Math.max(fx.invert, 0.25 * (1 - age / 0.08));
         }
         break;
       }

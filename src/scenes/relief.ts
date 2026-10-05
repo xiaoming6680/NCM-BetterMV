@@ -1,11 +1,11 @@
 // Relief: the album cover rebuilt as a field of columns (colour = pixel, height = brightness), tiled forever.
 // The camera flies over it at a speed set in beats, so the flight follows every tempo change; kicks send
 // ripples through the field, each bar a scan line sweeps away from the camera, and the sung words stand
-// in the air ahead so the camera flies through them just after they are sung.
+// in the air ahead so the camera flies through them just after they are sung (beside the line, facing the camera,
+// when it tracks alongside; lying on the cover when it rises over it). The translation stands under the words.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { clamp01, inOutCubic, lerp, outExpo, rng, smooth } from './types.ts';
-import { LyricRig } from './lyricRig.ts';
 import { textMesh, hasCjk } from '../render/text.ts';
 import type { LineState } from '../director/lyrics.ts';
 
@@ -15,7 +15,6 @@ const W = N * CELL;
 const SPEED = 2.4; // world units per beat
 const RIPPLES = 8;
 const RIDE = 2.0; // a line's banner rides this far ahead (seconds of flight) until the camera catches up
-const CLIMB = 2.5; // fastest the camera climbs over (or settles after) the columns, units per second
 
 const vertexShader = /* glsl */ `
   attribute vec2 aCell;
@@ -77,7 +76,7 @@ const fragmentShader = /* glsl */ `
     // Compress the cover's brightest areas so only the signal accents reach the bloom threshold.
     col /= 1.0 + max(col.r, max(col.g, col.b)) * 0.35;
     float band = exp(-pow((vWorld.z - uScanZ) / 0.55, 2.0)) * uScan;
-    col += uSignal * (band * (0.6 + vTop * 1.6) + vTop * uKick * uGlow * smoothstep(0.55, 0.95, vLum) * 1.8);
+    col += uSignal * (band * (0.6 + vTop * 1.6) + vTop * uKick * uGlow * smoothstep(0.55, 0.95, vLum) * 1.0);
     float d = length(vWorld - uCam);
     col = mix(col, uFog, 1.0 - exp(-pow(d * uFogDensity, 2.0)));
     gl_FragColor = vec4(col, 1.0);
@@ -86,6 +85,7 @@ const fragmentShader = /* glsl */ `
 interface Banner {
   root: THREE.Group;
   words: Array<{ mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; x: number; y: number }>;
+  trans: Array<{ mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; x: number; y: number }>;
 }
 
 export class Relief implements MvScene {
@@ -93,10 +93,7 @@ export class Relief implements MvScene {
   readonly camera = new THREE.PerspectiveCamera(55, 16 / 9, 0.1, 400);
   private material: THREE.ShaderMaterial;
   private ripples = Array.from({ length: RIPPLES }, () => new THREE.Vector4());
-  private caption: LyricRig;
   private banners = new Map<number, Banner>();
-  private captionFull: LyricRig;
-  private lums: Float32Array;
 
   constructor(private init: SceneInit) {
     const { palette } = init;
@@ -121,7 +118,6 @@ export class Relief implements MvScene {
     geometry.setAttribute('aColor', new THREE.InstancedBufferAttribute(colors, 3));
     geometry.setAttribute('aLum', new THREE.InstancedBufferAttribute(lums, 1));
     geometry.instanceCount = N * N;
-    this.lums = lums;
     this.material = new THREE.ShaderMaterial({
       vertexShader, fragmentShader,
       uniforms: {
@@ -134,9 +130,6 @@ export class Relief implements MvScene {
     const mesh = new THREE.Mesh(geometry, this.material);
     mesh.frustumCulled = false;
     this.scene.add(mesh);
-    this.caption = new LyricRig(palette, 'caption', { main: false, translation: true });
-    this.captionFull = new LyricRig(palette, 'caption', { main: true, translation: true });
-    this.scene.add(this.caption.group, this.captionFull.group);
     this.resize(init.aspect);
   }
 
@@ -151,62 +144,7 @@ export class Relief implements MvScene {
     return out.set(Math.sin((b / 32) * Math.PI * 2) * 3.2 + Math.sin((b / 13) * Math.PI * 2) * 0.8, 0, -b * SPEED);
   }
 
-  /**
-   * The lowest the camera may fly at (x, z): clear of every column around it, by the vertex shader's own height
-   * formula (at full kick, so the limit doesn't jump on the beat). Nearby columns count fully, farther ones less,
-   * so the limit changes smoothly as the camera moves.
-   */
-  private floorAt(x: number, z: number): number {
-    const u = this.material.uniforms;
-    const height = u.uHeight.value as number, flat = u.uFlat.value as number, island = u.uIsland.value as number;
-    const reach = 2.2, n = Math.ceil(reach / CELL);
-    const ci = Math.floor(x / CELL), cj = Math.floor(z / CELL);
-    let floor = -Infinity;
-    for (let dj = -n; dj <= n; dj++) for (let di = -n; di <= n; di++) {
-      const cx = (ci + di + 0.5) * CELL, cz = (cj + dj + 0.5) * CELL;
-      const dist = Math.max(0, Math.hypot(cx - x, cz - z) - CELL * 0.64);
-      if (dist > reach) continue;
-      const i = ((ci + di) % N + N) % N, j = ((cj + dj) % N + N) % N;
-      const lum = this.lums[j * N + i];
-      // (Ripples are left out: the shader flattens them round the camera.)
-      let h = lerp(0.12 + Math.pow(lum, 1.5) * height, 0.05 + lum * 0.12, flat);
-      h *= 1 + 0.3 * lum * (1 - flat);
-      const b = -cz / SPEED;
-      const pathX = Math.sin((b / 32) * Math.PI * 2) * 3.2 + Math.sin((b / 13) * Math.PI * 2) * 0.8;
-      const valley = smooth((Math.abs(cx - pathX) - 1.3) / 3.5);
-      h *= lerp(lerp(0.2, 1, valley), 1, Math.max(island, flat));
-      floor = Math.max(floor, h + 0.8 - Math.max(0, dist - 0.35));
-    }
-    return floor;
-  }
-
-  /**
-   * How high the camera must be lifted at t to clear the columns, as a pilot would fly it: the shot's own path is
-   * looked at a second and a half either way (at fixed steps of song time, so nothing shimmers as t moves), and the
-   * lift is the lowest curve that clears all of it while climbing or settling no faster than CLIMB units a second —
-   * so the camera starts up before a tall stretch and eases down after it (averaged over a few frames so it turns
-   * softly) instead of hopping over each column as it passes.
-   */
-  private lift(t: number, shot: Shot, air: number): number {
-    const G = 0.1, reach = 1.5, needs = new Map<number, number>();
-    const need = (j: number) => {
-      let v = needs.get(j);
-      if (v === undefined) {
-        const q = this.pose(Math.min(shot.end, Math.max(shot.start, j * G)), shot).pos;
-        v = Math.max(0, this.floorAt(q.x, q.z) + air - q.y);
-        needs.set(j, v);
-      }
-      return v;
-    };
-    const envelope = (at: number) => {
-      let best = 0;
-      for (let j = Math.ceil((at - reach) / G); j * G <= at + reach; j++) best = Math.max(best, need(j) - CLIMB * Math.abs(j * G - at));
-      return best;
-    };
-    return (envelope(t - 0.12) + 2 * envelope(t) + envelope(t + 0.12)) / 4;
-  }
-
-  /** The shot's framing at time t, before the lift, the beat's punch and the shake. */
+  /** The shot's framing at time t, before the beat's punch and the shake. */
   private pose(t: number, shot: Shot) {
     const p = this.flyer(t);
     const ahead = this.flyer(t + 0.6);
@@ -292,7 +230,6 @@ export class Relief implements MvScene {
     const next = music.a.sections[shot.sectionIndex + 1];
     const build = next && next.energy > shot.section.energy + 0.08 && shot.section.label !== 'intro'
       ? smooth((t - shot.section.start) / Math.max(1, shot.section.end - shot.section.start)) : 0;
-    // The field's height for this shot first: the camera's clearance is worked out against it.
     u.uHeight.value = 1.6 + energy * 2.2;
     const framing = this.pose(t, shot);
     const { p, pos, look, flat, island, origin, bank, k } = framing;
@@ -306,17 +243,11 @@ export class Relief implements MvScene {
     pos.x += (Math.sin(t * 37.1) + Math.sin(t * 23.3)) * shake * 0.5;
     pos.y += (Math.sin(t * 31.7) + Math.sin(t * 19.9)) * shake * 0.5;
 
-    // Keep the camera clear of the field: whatever the shot, it climbs over the columns ahead in one smooth move
-    // instead of passing through them. (Shots off the line sit over a wall: more air under them, so its tops don't
-    // fill the frame.)
+    // (The camera flies its own path: it used to be lifted over tall columns, which the user found unnatural and had
+    // taken out. The valley along the flight line and the calm round the camera still keep most columns clear.)
     u.uFlat.value = flat;
     u.uIsland.value = island;
     this.updateRipples(t, energy, build);
-    if (shot.variant !== 'rise') {
-      const lift = this.lift(t, shot, bank ? 0.15 : 1.4);
-      pos.y += lift;
-      if (bank) look.y += lift;
-    }
 
     cam.fov = fov;
     cam.updateProjectionMatrix();
@@ -344,13 +275,7 @@ export class Relief implements MvScene {
     // Through the closing outro the picture dims to a quarter (the closing credits stand over it).
     ctx.fx.fade = 0.75 * smooth(music.endingProgress(t));
 
-    // Banners stand across the flight line facing along it, so only shots flying down the line can read them;
-    // the others set the line as a caption.
-    const banners = shot.variant === 'fly' || shot.variant === 'dive' || shot.variant === 'low';
-    this.updateBanners(ctx, banners);
-    this.caption.group.visible = banners;
-    this.captionFull.group.visible = !banners;
-    (banners ? this.caption : this.captionFull).update(cam, ctx.lyrics, t, ctx.aspect, energy);
+    this.updateBanners(ctx, framing);
   }
 
   /** Ripples from the latest kicks, centred on the path ahead of where the camera was. */
@@ -395,54 +320,97 @@ export class Relief implements MvScene {
         x += widths[i] + gap;
       }
     });
+    // The translation, a smaller row under the words.
+    const trans: Banner['trans'] = [];
+    const text = state.line.translation;
+    if (text) {
+      const th = 0.36, y = ((rows.length - 1) * lineH) / 2 - (rows.length - 1) * lineH - h * 0.62 - th * 0.9;
+      const parts = hasCjk(text) ? Array.from(text) : text.split(/(\s+)/);
+      const meshes = parts.map(p => (p.trim() ? textMesh(p, 'bold', th, { px: 112 }) : null));
+      const widths = meshes.map(m => (m ? (m.userData.width as number) : th * 0.35));
+      let x = -widths.reduce((a, b) => a + b, 0) / 2;
+      meshes.forEach((mesh, i) => {
+        if (mesh) {
+          mesh.material.depthWrite = false;
+          mesh.material.depthTest = false;
+          mesh.renderOrder = 5;
+          root.add(mesh);
+          trans.push({ mesh, x, y });
+        }
+        x += widths[i];
+      });
+    }
     this.scene.add(root);
-    return { root, words };
+    return { root, words, trans };
   }
 
   /**
    * Each line stands across the flight line as a banner of words, revealed word by word as sung. It rides
    * RIDE seconds ahead of the camera, then holds still for the last stretch so the camera flies through it
-   * just after the line ends.
+   * just after the line ends. Tracking alongside, the banner turns to face the camera's side of the line, so it
+   * goes by like a sign at the roadside; rising over the cover, the line lies on it, big, read from above.
    */
-  private updateBanners(ctx: FrameCtx, enabled: boolean): void {
-    const { t, lyrics, palette } = ctx;
+  private updateBanners(ctx: FrameCtx, framing: ReturnType<Relief['pose']>): void {
+    const { t, lyrics, palette, shot } = ctx;
     const live = new Set<number>();
-    if (enabled) {
-      const lines = lyrics.lines;
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        const pass = line.end + 0.3;
-        if (t < line.start - 0.6 || t > pass + 0.1) continue;
-        live.add(i);
-        const state = lyrics.state(i, t);
-        const b = this.banners.get(i) ?? this.banners.set(i, this.buildBanner(state)).get(i)!;
-        const tb = Math.min(t + RIDE, pass);
+    const variant = shot.variant;
+    const random = rng(shot.seed);
+    const side = random() < 0.5 ? -1 : 1;
+    const lines = lyrics.lines;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const pass = line.end + 0.3;
+      if (t < line.start - 0.6 || t > pass + 0.1) continue;
+      live.add(i);
+      const state = lyrics.state(i, t);
+      const b = this.banners.get(i) ?? this.banners.set(i, this.buildBanner(state)).get(i)!;
+      const rise = outExpo((t - (line.start - 0.6)) / 0.5);
+      let lift = (1 - rise) * 3;
+      if (variant === 'rise') {
+        // Lying on the cover the camera rises over, its top towards the far edge.
+        b.root.position.set(framing.origin.x, 0.6, framing.origin.y + 1.5);
+        b.root.rotation.set(-Math.PI / 2, 0, 0);
+        b.root.scale.setScalar(3.2 * Math.min(1, ctx.aspect / 1.2));
+        lift = 0;
+      } else {
+        const tb = Math.min(t + (variant === 'side' ? RIDE * 0.6 : RIDE), pass);
         const at = this.flyer(tb);
         const dir = this.flyer(tb + 0.2).sub(this.flyer(tb - 0.2));
-        const rise = outExpo((t - (line.start - 0.6)) / 0.5);
-        b.root.position.set(at.x, 3.9 - (1 - rise) * 3, at.z);
-        b.root.rotation.set(0, Math.atan2(dir.x, dir.z) + Math.PI, 0);
+        const yaw = Math.atan2(dir.x, dir.z) + Math.PI;
+        // (Alongside, lower: the camera looks down at the line from above the wall, and a banner at 3.9 left the frame.)
+        b.root.position.set(at.x, variant === 'side' ? 2.5 : 3.9, at.z);
+        // Alongside: turned to face the camera's side of the line.
+        b.root.rotation.set(0, variant === 'side' ? yaw + side * Math.PI / 2 : yaw, 0);
         b.root.scale.setScalar(Math.min(1, ctx.aspect / 1.5));
-        const dist = this.camera.position.distanceTo(b.root.position);
-        const near = clamp01((dist - 0.6) / 2.6);
-        state.words.forEach((ws, wi) => {
-          const g = b.words[wi];
-          if (!g) return;
-          const shown = ws.age > -0.05;
-          g.mesh.visible = shown;
-          if (!shown) return;
-          const k = outExpo((ws.age + 0.05) / 0.18);
-          g.mesh.position.set(g.x, g.y + (1 - k) * 0.4, (1 - k) * 0.6);
-          const glow = ws.progress > 0 && ws.progress < 1 ? 1 : Math.exp(-Math.max(0, ws.age - (ws.word.end - ws.word.start)) / 0.3);
-          g.mesh.material.color.copy(palette.paper).multiplyScalar(0.9).lerp(palette.signal, glow).multiplyScalar(1 + glow * 0.35);
-          g.mesh.material.opacity = k * near * rise;
-        });
       }
+      b.root.position.y -= lift;
+      const dist = this.camera.position.distanceTo(b.root.position);
+      const near = variant === 'rise' ? 1 : clamp01((dist - 0.6) / 2.6);
+      state.words.forEach((ws, wi) => {
+        const g = b.words[wi];
+        if (!g) return;
+        const shown = ws.age > -0.05;
+        g.mesh.visible = shown;
+        if (!shown) return;
+        const k = outExpo((ws.age + 0.05) / 0.18);
+        g.mesh.position.set(g.x, g.y + (1 - k) * 0.4, (1 - k) * 0.6);
+        const glow = ws.progress > 0 && ws.progress < 1 ? 1 : Math.exp(-Math.max(0, ws.age - (ws.word.end - ws.word.start)) / 0.3);
+        g.mesh.material.color.copy(palette.paper).multiplyScalar(0.9).lerp(palette.signal, glow).multiplyScalar(1 + glow * 0.35);
+        g.mesh.material.opacity = k * near * rise;
+      });
+      const n = b.trans.length;
+      b.trans.forEach((g, ci) => {
+        const k = outExpo(clamp01((state.translationProgress - (ci + 1) / n + 1 / n) * n * 1.5));
+        g.mesh.visible = k > 0;
+        g.mesh.position.set(g.x, g.y - (1 - k) * 0.2, 0);
+        g.mesh.material.color.copy(palette.paper).multiplyScalar(0.8);
+        g.mesh.material.opacity = k * near * rise * 0.9;
+      });
     }
     for (const [i, b] of this.banners) {
       if (live.has(i)) continue;
       this.scene.remove(b.root);
-      for (const g of b.words) if (g) { g.mesh.geometry.dispose(); g.mesh.material.dispose(); }
+      for (const g of [...b.words, ...b.trans]) if (g) { g.mesh.geometry.dispose(); g.mesh.material.dispose(); }
       this.banners.delete(i);
     }
   }

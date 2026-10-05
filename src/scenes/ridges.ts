@@ -3,9 +3,11 @@
 // behind another, each hiding the ones behind it. The level lifts the whole range; every kick sends a wave from the
 // front row to the back that lifts and lights the ridges it passes in the signal colour; the lines shimmer a little
 // all the time. Cameras: the classic three-quarter view from above, low over the front ridge, a slow drift across.
+// The words stand in the range, halfway back: each line rises from behind the ridges in front of it like the sun
+// from behind hills, and the nearer ridges keep hiding its foot (ballad lines stand to one side).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, inOutCubic, lerp, rng } from './types.ts';
+import { clamp01, inOutCubic, lerp, outExpo, rng } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
 import { LyricRig } from './lyricRig.ts';
 import { lastIndex } from '../director/music.ts';
@@ -29,6 +31,7 @@ export class Ridges implements MvScene {
   private pixelRatio = 1;
   private ys = new Float32Array(COLS);
   private tint = new THREE.Color();
+  private low = false;
 
   constructor(private init: SceneInit, private look: 'pulse' | 'ballad' = 'pulse') {
     const { palette } = init;
@@ -67,6 +70,14 @@ export class Ridges implements MvScene {
     this.scene.add(this.fill, this.lines.mesh);
     this.kicks = Float64Array.from(init.music.a.hits.kick.filter(h => h[1] > 0.35), h => h[0]);
     this.rig = new LyricRig(palette, look === 'ballad' ? 'poem' : 'hook');
+    this.rig.frame = { vh: 6.5, vw: 8.4 };
+    this.rig.depthTest = true;
+    this.rig.place = (root, st) => {
+      const up = outExpo(clamp01((st.age + 0.5) / 1.1)), x = look === 'ballad' ? (st.index % 2 ? 1 : -1) * 2.2 : 0;
+      // Low over the front ridge only that ridge is in front of the words, so they rise from right behind it, smaller.
+      if (this.low) { root.position.set(x * 0.3, 0.95 - (1 - up) * 0.7, -0.4); root.scale.setScalar(0.42); }
+      else root.position.set(x, 0.75 - (1 - up) * 1.6, -DEPTH * 0.5);
+    };
     this.scene.add(this.rig.group);
     this.resize(init.aspect);
   }
@@ -123,6 +134,7 @@ export class Ridges implements MvScene {
 
     const cam = this.camera;
     const side = random() < 0.5 ? -1 : 1;
+    this.low = shot.variant === 'low';
     if (shot.variant === 'low') {
       cam.position.set(side * lerp(0.6, -0.6, inOutCubic(k)), 0.55, 2.2);
       cam.lookAt(0, 0.35, -DEPTH * 0.6);
@@ -137,7 +149,6 @@ export class Ridges implements MvScene {
 
     ctx.fx.bloom = soft ? 0.35 : 0.45 + waveA * 0.25;
     ctx.fx.vignette = 0.55;
-    this.rig.align = side > 0 ? 'left' : 'right';
     this.rig.update(cam, ctx.lyrics, t, ctx.aspect, energy);
   }
 }

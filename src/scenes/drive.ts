@@ -10,11 +10,12 @@
 //    so the camera flies into the next world on the phrase's downbeat.
 //  · Long speed streaks just outside the tube, barrel distortion, the song's crystal (with the cover inside it)
 //    glowing at the far end, and at the start of the section a white shockwave blown out towards the camera.
+//  · The words are signs hung in the tube that the camera flies through (LyricGates).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, inOutCubic, lerp, outExpo, rng, smooth } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
-import { LyricRig } from './lyricRig.ts';
+import { LyricGates, poseInTube } from './lyricSpace.ts';
 import { lastIndex } from '../director/music.ts';
 import { Crystal } from '../sigil/crystal.ts';
 
@@ -30,6 +31,7 @@ const PHRASE = 4; // bars per shape
 const BLEND = 3.2; // units of tube over which one world's outline turns into the next
 const RINGS = 8; // shock rings in flight at once…
 const RING_LIFE = 1.3; // …each until it is past the far end of the tube (seconds)
+const GATE = 6; // a sign strikes on this far ahead
 
 type RGB = [number, number, number];
 interface Basis { c: THREE.Vector3; r: THREE.Vector3; u: THREE.Vector3; t: THREE.Vector3 }
@@ -105,7 +107,7 @@ export class Drive implements MvScene {
   private lines = new LineBatch(22000);
   private bg: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   private crystal: Crystal;
-  private rig: LyricRig;
+  private gates: LyricGates;
   private kicks: Float64Array;
   private snares: Float64Array;
   private snareTurn: Float32Array;
@@ -178,11 +180,8 @@ export class Drive implements MvScene {
     this.crystal = new Crystal(init.crystal, palette, init.cover);
     this.crystal.group.renderOrder = -5;
     this.scene.add(this.bg, this.crystal.group, this.lines.mesh);
-    this.rig = new LyricRig(palette, 'hook');
-    // Lay the words out for the resting lens, so a kick's zoom punch moves them with the tube instead of resizing
-    // the next line; and shrink them by what the barrel magnifies the middle.
-    this.rig.layoutFov = FOV;
-    this.scene.add(this.rig.group);
+    this.gates = new LyricGates(palette, { style: 'hook', em: 1.15, maxW: R * 2.1, trans: { em: 0.34, vertical: false } });
+    this.scene.add(this.gates.group);
     this.resize(init.aspect);
   }
 
@@ -190,8 +189,6 @@ export class Drive implements MvScene {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
     this.bg.material.uniforms.uAspect.value = aspect;
-    const lens = 1 + BARREL * (0.25 * aspect * aspect + 0.25);
-    this.rig.group.scale.set(1 / lens, 1 / lens, 1);
   }
 
   /** Drawing-buffer size and pixel ratio, so hairlines keep their pixel width. */
@@ -487,7 +484,28 @@ export class Drive implements MvScene {
     ctx.fx.ca = kick * 0.4 + 0.6 * Math.exp(-u / 0.15);
     ctx.fx.barrel = BARREL + 0.08 * kick;
     ctx.fx.vignette = 0.4;
-    this.rig.align = sign > 0 ? 'left' : 'right';
-    this.rig.update(cam, ctx.lyrics, t, ctx.aspect, energy);
+
+    // The words: each chunk a sign hung under the top of the tube, alternately a little left and right. It strikes on
+    // GATE units ahead as its first word is sung and rides there, readable, until the next chunk strikes (at most
+    // 0.8 s past its last word); then it holds, the camera flies at it, and it fades out before it reaches the lens.
+    // A sign turns a little with the twist of the frames round it. The translation is a row low in the tube, riding
+    // ahead until the line leaves (a column on the wall ran across the signs).
+    const lyrics = ctx.lyrics, sOf = (tt: number) => this.travel(tt, section.start, perBeat);
+    this.gates.update(lyrics, t, energy, (c, tt, root) => {
+      const hold = Math.max(c.end, Math.min(c.next - 0.04, c.end + 0.8));
+      const s = sOf(Math.min(tt, hold)) + GATE, d = s - sCam;
+      if (d < 0.3) return 0;
+      const b = this.basis(s, this.bB);
+      poseInTube(root, b.c, b.r, b.u, b.t, (c.ordinal % 2 ? 0.3 : -0.3), R * 0.42, 0.35 * K * (d / S));
+      return smooth((d - 0.6) / 2.4) * Math.exp(-d / 40) * (1 - smooth((tt - hold) / 0.22));
+    }, (st, tt, root) => {
+      const s = sOf(Math.min(tt, lyrics.leaveAt(st.index))) + GATE * 0.8, d = s - sCam;
+      if (d < 0.3) return 0;
+      const b = this.basis(s, this.bB), side = st.index % 2 ? 1 : -1, [w, h] = root.userData.size as [number, number];
+      if (root.userData.vertical) poseInTube(root, b.c, b.r, b.u, b.t, side * R * 0.68, 0.1, 0.35 * K * (d / S), side * 0.6);
+      else poseInTube(root, b.c, b.r, b.u, b.t, 0, -R * 0.55, 0.35 * K * (d / S));
+      root.scale.setScalar(Math.min(1, (root.userData.vertical ? 3.4 : 3.8) / Math.max(w, h)));
+      return smooth((d - 0.8) / 2.4);
+    });
   }
 }

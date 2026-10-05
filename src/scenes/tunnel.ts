@@ -5,11 +5,14 @@
 // accent, far signal. When the section rises into a louder one the tunnel whips over its last beat (twist and
 // roll) and its far end opens onto the cover, which rushes at the camera — the next shot is the cover itself.
 // Pulse: triangles, fast, kick surges. Ballad: circles, slow and soft, no shock rings.
+// The words are in the tunnel: pulse, a sign for every few words that the camera flies through (LyricGates); ballad,
+// each line a hanging scroll to one side of the path that the camera glides past (the rig's world mode).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, lerp, rng, smooth } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
 import { LyricRig } from './lyricRig.ts';
+import { LyricGates, poseInTube } from './lyricSpace.ts';
 import { lastIndex } from '../director/music.ts';
 
 const R = 2.3; // frame circumradius
@@ -18,6 +21,8 @@ const NF = 110; // frames drawn ahead of the camera
 const FOV = 64;
 const RINGS = 8; // shock rings in flight at once…
 const RING_LIFE = 1.2; // …each until it has faded past the fog (seconds)
+const GATE = 3.6; // pulse: a sign strikes on this far ahead…
+const SCROLL = 6.5; // …ballad: a line's scroll hangs this far ahead of where the camera was when it began
 
 type RGB = [number, number, number];
 const hash = (i: number, k: number) => { const x = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return x - Math.floor(x); };
@@ -38,7 +43,7 @@ const bgFragment = /* glsl */ `
     gl_FragColor = vec4(c, 1.0);
   }`;
 
-interface Basis { c: THREE.Vector3; r: THREE.Vector3; u: THREE.Vector3 }
+interface Basis { c: THREE.Vector3; r: THREE.Vector3; u: THREE.Vector3; t: THREE.Vector3 }
 
 export class Tunnel implements MvScene {
   readonly scene = new THREE.Scene();
@@ -47,6 +52,7 @@ export class Tunnel implements MvScene {
   private bg: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   private exit: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   private rig: LyricRig;
+  private gates: LyricGates;
   private kicks: Float64Array;
   private near: RGB; private mid: RGB; private far: RGB;
   private readonly soft: boolean;
@@ -91,8 +97,10 @@ export class Tunnel implements MvScene {
     this.exit.visible = false;
     this.scene.add(this.exit);
 
-    this.rig = new LyricRig(palette, this.soft ? 'poem' : 'hook');
-    this.scene.add(this.rig.group);
+    this.rig = new LyricRig(palette, 'poem');
+    this.rig.frame = { vh: 5.6, vw: 9 };
+    this.gates = new LyricGates(palette, { style: 'hook', em: 0.7, maxW: 3.3, trans: { em: 0.24, vertical: false }, linger: 5 });
+    this.scene.add(this.soft ? this.rig.group : this.gates.group);
     this.resize(init.aspect);
   }
 
@@ -113,7 +121,7 @@ export class Tunnel implements MvScene {
     const t = center(s + 0.05, this.tmp).sub(c).normalize().clone();
     const r = new THREE.Vector3().crossVectors(t, this.upW).normalize();
     const u = new THREE.Vector3().crossVectors(r, t).normalize();
-    return { c, r, u };
+    return { c, r, u, t };
   }
 
   /**
@@ -282,7 +290,37 @@ export class Tunnel implements MvScene {
 
     ctx.fx.bloom = (this.soft ? 0.4 : 0.55) + energy * 0.2 + kick * 0.3;
     ctx.fx.ca = kick * 0.4 + whip * 0.6;
-    this.rig.align = sign > 0 ? 'left' : 'right';
-    this.rig.update(cam, ctx.lyrics, t, ctx.aspect, energy);
+    // The words. Pulse: each chunk a sign low in the triangle (where it is wide), alternately left and right, that
+    // strikes on GATE units ahead as it is sung, rides there while sung, then holds while the tunnel lunges at it and
+    // fades as it reaches the lens; it turns with the twist of the frames round it. The translation is a row along the
+    // floor of the triangle (a column on the wall ran across the signs). Ballad: each line a scroll
+    // hanging beside the path, alternately left and right, angled towards it, left where it was hung.
+    const lyrics = ctx.lyrics, drive = Math.min(1, energy + build * 0.5);
+    if (this.soft) {
+      this.rig.place = (root, st) => {
+        const s = this.travel(st.line.start - 0.5, drive) + SCROLL, d = s - sCam, side = st.index % 2 ? 1 : -1, b = this.basis(s);
+        poseInTube(root, b.c, b.r, b.u, b.t, side * 0.85, 0.1, 0, side * 0.35);
+        return smooth((d - 0.6) / 1.6);
+      };
+      this.rig.onLight = false;
+      this.rig.update(cam, lyrics, t, ctx.aspect, energy);
+    } else {
+      this.gates.update(lyrics, t, energy, (c, tt, root) => {
+        const s = this.travel(Math.min(tt, c.end), drive) + GATE, d = s - sCam;
+        if (d < 0.25) return 0;
+        const b = this.basis(s);
+        poseInTube(root, b.c, b.r, b.u, b.t, c.ordinal % 2 ? 0.28 : -0.28, -R * 0.12, 0.25 * K * (d / S));
+        // Once the next sign strikes, this one (nearer, so bigger) gives way rather than lie across it.
+        return smooth((d - 0.3) / 1.2) * Math.exp(-d / 14) * (1 - smooth((tt - c.next + 0.08) / 0.25));
+      }, (st, tt, root) => {
+        const s = this.travel(Math.min(tt, lyrics.leaveAt(st.index)), drive) + GATE * 0.9, d = s - sCam;
+        if (d < 0.25) return 0;
+        const b = this.basis(s), side = st.index % 2 ? 1 : -1, [w, h] = root.userData.size as [number, number];
+        if (root.userData.vertical) poseInTube(root, b.c, b.r, b.u, b.t, side * 1.05, -0.35, 0.25 * K * (d / S), side * 0.5);
+        else poseInTube(root, b.c, b.r, b.u, b.t, 0, -R * 0.42, 0.25 * K * (d / S));
+        root.scale.setScalar(Math.min(1, (root.userData.vertical ? 2.2 : 3.2) / Math.max(w, h)));
+        return smooth((d - 0.5) / 1.6);
+      });
+    }
   }
 }

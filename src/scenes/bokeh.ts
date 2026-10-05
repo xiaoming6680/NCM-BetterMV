@@ -1,6 +1,8 @@
 // Bokeh: the cover as a field of glowing discs rendered with depth of field. Out of focus it is a haze of
 // coloured light; when the focus pulls onto the image plane (and the discs gather into it) the picture
 // resolves. Made for choruses of slow songs: the moment the image comes into focus is the chorus landing.
+// The words hang among the lights, just in front of the picture and to one side, and are in and out of focus with
+// it: soft in the haze, coming sharp as the focus pulls onto the picture.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, inOutCubic, lerp, rng, smooth } from './types.ts';
@@ -10,6 +12,7 @@ import { rgbToLab } from '../render/palette.ts';
 const G = 120;
 const SIZE = 10;
 const DOT = (SIZE / G) * 1.2;
+const TEXT_Z = 1.5; // the words' depth (the picture's plane is z = 0, its lights spread a few units either side)
 
 const vertexShader = /* glsl */ `
   attribute vec3 aColor;
@@ -107,6 +110,8 @@ export class Bokeh implements MvScene {
     points.frustumCulled = false;
     this.scene.add(points);
     this.rig = new LyricRig(palette, 'poem');
+    this.rig.frame = { vh: 7, vw: 11 };
+    this.rig.focusable = true;
     this.scene.add(this.rig.group);
     this.resize(init.aspect);
   }
@@ -182,7 +187,16 @@ export class Bokeh implements MvScene {
     u.uGain.value = 0.8 + rms * 0.35 + swell;
 
     ctx.fx.bloom = this.init.palette.light ? 0.12 : 0.5 + rms * 0.3;
-    this.rig.align = side > 0 ? 'left' : 'right';
+    // Each line a card just in front of the picture, to one side (alternating), turned a little towards the middle;
+    // as far out of focus as a light at its depth would be.
+    const aspect = ctx.aspect;
+    this.rig.place = (root, st) => {
+      const s = st.index % 2 ? 1 : -1;
+      root.position.set(s * Math.min(3.4, 2.5 * aspect), 0.3, TEXT_Z);
+      root.rotation.set(0, -s * 0.18, 0);
+    };
+    const d = cam.position.distanceTo(new THREE.Vector3(Math.min(3.4, 2.5 * aspect) * side, 0.3, TEXT_Z));
+    this.rig.blur.value = Math.min(1.7, Math.log2(1 + Math.abs(d - u.uFocus.value) * 0.6));
     this.rig.onLight = this.init.palette.light;
     this.rig.update(cam, ctx.lyrics, t, ctx.aspect, rms);
   }

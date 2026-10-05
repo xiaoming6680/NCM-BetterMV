@@ -19,6 +19,11 @@ export interface Shot {
   seed: number;
   section: Section;
   sectionIndex: number;
+  /**
+   * A run of shots under a bar long on one plate (the speeding-up cuts at the end of a build): the scene times its
+   * moves over the whole run, so cutting to another camera carries on the move instead of starting it again.
+   */
+  run?: { start: number; end: number };
 }
 
 export interface FrameCtx {

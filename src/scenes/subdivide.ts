@@ -8,7 +8,7 @@ import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, lerp, rng, smooth } from './types.ts';
 import { crystalPoly } from '../sigil/crystal.ts';
 import { textMesh } from '../render/text.ts';
-import { LyricRig } from './lyricRig.ts';
+import { LyricOrbit } from './lyricSpace.ts';
 
 type V = [number, number, number];
 const MAX_TRIS = 70000;
@@ -57,7 +57,7 @@ export class SubdivideScene implements MvScene {
   private levels: Level[] = [];
   private mesh: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
   private labels: Array<THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>> = [];
-  private rig: LyricRig;
+  private orbit: LyricOrbit;
   private readonly soft: boolean;
 
   constructor(private init: SceneInit, look: 'pulse' | 'ballad' = 'pulse') {
@@ -118,8 +118,10 @@ export class SubdivideScene implements MvScene {
       this.scene.add(m);
       return m;
     });
-    this.rig = new LyricRig(palette, this.soft ? 'poem' : 'hook');
-    this.scene.add(this.rig.group);
+    // The words are written round the ball's waist, each on the side facing the camera as it is sung, and the ball's
+    // turning carries them round.
+    this.orbit = new LyricOrbit(palette, { style: this.soft ? 'poem' : 'hook', em: 0.17, radius: 1.32, mode: 'band', trans: { em: 0.085, radius: 1.32 } });
+    this.scene.add(this.orbit.group);
     this.resize(init.aspect);
   }
 
@@ -186,7 +188,13 @@ export class SubdivideScene implements MvScene {
     });
     ctx.fx.bloom = 0.45 + 0.25 * u.uGlow.value;
     ctx.fx.vignette = 0.5;
-    this.rig.align = side > 0 ? 'left' : 'right';
-    this.rig.update(cam, ctx.lyrics, t, ctx.aspect, shot.section.energy);
+    // The band turns with the ball; the camera's angle round it at a time, in the band's frame then.
+    this.orbit.group.rotation.copy(this.mesh.rotation);
+    const eye = new THREE.Vector3(), turn = new THREE.Matrix4();
+    this.orbit.update(ctx.lyrics, t, shot.section.energy, tt => {
+      turn.makeRotationFromEuler(new THREE.Euler(0.35, tt * 0.3 * side, 0)).invert();
+      eye.set(Math.sin(0.4 * side), 0.5 / 3.5, Math.cos(0.4 * side)).applyMatrix4(turn);
+      return Math.atan2(eye.x, eye.z);
+    });
   }
 }

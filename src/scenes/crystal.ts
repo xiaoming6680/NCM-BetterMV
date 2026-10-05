@@ -5,11 +5,13 @@
 //    the drop's push tunnel takes over with the crystal whole again at its far end.
 //  · gather — the song's last bars: its shards spiral in out of the dark and lock together, flash once on a downbeat,
 //    and the crystal turns on as the music ends (the closing credits stand beside it).
+// The words stand round the crystal on a band: each word is set on the side the camera faced as it was sung, and
+// the camera's circling carries the sung words round past it.
 import * as THREE from 'three';
-import type { FrameCtx, MvScene, SceneInit } from './types.ts';
+import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { clamp01, inOutCubic, lerp, outExpo, rng, smooth } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
-import { LyricRig } from './lyricRig.ts';
+import { LyricOrbit } from './lyricSpace.ts';
 import { Crystal } from '../sigil/crystal.ts';
 
 const bgVertex = /* glsl */ `varying vec2 vP; void main() { vP = position.xy; gl_Position = vec4(position.xy, 0.9999, 1.0); }`;
@@ -27,7 +29,8 @@ export class CrystalScene implements MvScene {
   private crystal: Crystal;
   private lines = new LineBatch(6000);
   private bg: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
-  private rig: LyricRig;
+  private orbit: LyricOrbit;
+  private eyeAt = new THREE.Vector3();
   private resolution = new THREE.Vector2(1920, 1080);
   private pixelRatio = 1;
   private a = new THREE.Vector3();
@@ -43,8 +46,9 @@ export class CrystalScene implements MvScene {
     }));
     this.bg.frustumCulled = false;
     this.bg.renderOrder = -10;
-    this.rig = new LyricRig(palette, 'hook');
-    this.scene.add(this.bg, this.crystal.group, this.lines.mesh, this.rig.group);
+    this.orbit = new LyricOrbit(palette, { style: 'hook', em: 0.26, radius: 1.85, mode: 'band', trans: { em: 0.12, radius: 1.85 } });
+    this.orbit.group.rotation.set(0.18, 0, 0.06);
+    this.scene.add(this.bg, this.crystal.group, this.lines.mesh, this.orbit.group);
     this.resize(init.aspect);
   }
 
@@ -78,6 +82,22 @@ export class CrystalScene implements MvScene {
     }
   }
 
+  /** The camera's place at t in this shot; returns its field of view. */
+  private eye(t: number, shot: Shot, out: THREE.Vector3): number {
+    const len = Math.max(0.2, shot.end - shot.start), k = clamp01((t - shot.start) / len);
+    const side = rng(shot.seed)() < 0.5 ? -1 : 1;
+    if (shot.variant === 'gather') {
+      const d = lerp(5.2, 3.9, outExpo(k));
+      out.set(Math.sin(0.3 * side) * d, 0.35, Math.cos(0.3 * side) * d);
+      return 40;
+    }
+    // Bullet time: circling slowly, then faster and closer through the bar; a push on the last beat.
+    const ang = (0.2 + 2.4 * k * k) * side;
+    const d = lerp(4.6, 3.1, inOutCubic(k)) - 0.5 * smooth((k - 0.8) / 0.2);
+    out.set(Math.sin(ang) * d, 0.6 - 0.9 * k, Math.cos(ang) * d);
+    return 44 + 10 * smooth((k - 0.75) / 0.25);
+  }
+
   update(ctx: FrameCtx): void {
     const { t, music, shot } = ctx;
     const len = Math.max(0.2, shot.end - shot.start), k = clamp01(ctx.shotT / len);
@@ -100,16 +120,9 @@ export class CrystalScene implements MvScene {
       alpha = smooth(k / 0.15);
       ringsLit = smooth((k - 0.6) / 0.3);
       ringI = 0.25 + 0.35 * g;
-      const d = lerp(5.2, 3.9, outExpo(k));
-      cam.position.set(Math.sin(0.3 * side) * d, 0.35, Math.cos(0.3 * side) * d);
-      cam.fov = 40;
+      cam.fov = this.eye(t, shot, cam.position);
     } else {
-      // Bullet time: circling slowly, then faster and closer through the bar; a push on the last beat.
-      const e = k * k;
-      const ang = (0.2 + 2.4 * e) * side;
-      const d = lerp(4.6, 3.1, inOutCubic(k)) - 0.5 * smooth((k - 0.8) / 0.2);
-      cam.position.set(Math.sin(ang) * d, 0.6 - 0.9 * k, Math.cos(ang) * d);
-      cam.fov = 44 + 10 * smooth((k - 0.75) / 0.25);
+      cam.fov = this.eye(t, shot, cam.position);
       turn = shot.start * 0.3 + ctx.shotT * 0.35;
       // It starts to come apart on the last sixteenth.
       const sixteenth = 60 / Math.max(40, info.bpm) / 4;
@@ -141,7 +154,14 @@ export class CrystalScene implements MvScene {
     ctx.fx.bloom = 0.55 + 0.3 * flash;
     ctx.fx.ca = shot.variant === 'orbit' ? 0.2 + 0.8 * k * k : 0.15;
     ctx.fx.vignette = 0.55;
-    this.rig.align = side > 0 ? 'left' : 'right';
-    this.rig.update(cam, ctx.lyrics, t, ctx.aspect, shot.section.energy);
+    // The band's angle facing the camera at a time (in the band's own tilted frame).
+    const og = this.orbit.group;
+    og.updateMatrixWorld();
+    const inv = og.matrixWorld.clone().invert();
+    this.orbit.update(ctx.lyrics, t, shot.section.energy, tt => {
+      this.eye(Math.max(shot.start, tt), shot, this.eyeAt);
+      this.eyeAt.applyMatrix4(inv);
+      return Math.atan2(this.eyeAt.x, this.eyeAt.z);
+    });
   }
 }

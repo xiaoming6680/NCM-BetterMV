@@ -2,12 +2,11 @@
 // view on every beat), built from this song's cover. The cover's brightness raises a low-poly landscape — every
 // triangle flat, its colour the cover's there — and on every beat a new render view wipes down over the last, like a
 // redraw: shaded, wireframe, normals, depth with contours, barycentric, triangle id, X-ray, blueprint. All in the
-// palette's colours. Top left a debugger panel lists the views (the current one lit) over the counts; bottom right
-// the view's name. Cameras: low along a valley, round the highest peak, high above turning.
+// palette's colours. No captions over it, only the lyrics (an earlier debugger panel listing the views and counts
+// came off at the user's word). Cameras: low along a valley, round the highest peak, high above turning.
 import * as THREE from 'three';
-import type { FrameCtx, MvScene, SceneInit } from './types.ts';
+import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { clamp01, lerp, outExpo, rng, smooth } from './types.ts';
-import { textMesh } from '../render/text.ts';
 import { LyricRig } from './lyricRig.ts';
 
 const G = 160; // grid cells a side: 2·G² triangles
@@ -65,24 +64,17 @@ const fragmentShader = /* glsl */ `
     col += uSignal * exp(-pow((y - front) * uRes.y / 1.6, 2.0)) * step(0.001, uWipe) * step(uWipe, 0.999) * 1.5;
     float fog = clamp(length(vWorld - uCam) / 46.0, 0.0, 1.0);
     col = mix(col, uInk, fog * fog);
-    gl_FragColor = vec4(col * (1.0 + uFlash * 0.4), 1.0);
+    gl_FragColor = vec4(col * (1.0 + uFlash * 0.15), 1.0);
   }`;
-
-type Mesh = THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
 
 export class DebugScene implements MvScene {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.05, 200);
   private material: THREE.ShaderMaterial;
   private heights: Float32Array;
-  private panel = new THREE.Group();
-  private items: Mesh[] = [];
-  private names: Mesh[] = [];
-  private stats: Mesh;
   private rig: LyricRig;
-  private aspect = 16 / 9;
 
-  constructor(private init: SceneInit) {
+  constructor(init: SceneInit) {
     const { palette } = init;
     this.scene.background = palette.ink.clone();
     // Heights from the cover's brightness, blurred a little, lifted towards the middle so there is a peak to orbit.
@@ -157,24 +149,13 @@ export class DebugScene implements MvScene {
     land.frustumCulled = false;
     this.scene.add(land);
 
-    // The debugger panel: the views, then the counts; and the view's name, big, bottom right.
-    const mk = (s: string, face: 'bold' | 'light' | 'display', size: number) => {
-      const m = textMesh(s, face, size, { px: face === 'display' ? 160 : 72, halo: 'dark' });
-      m.material.toneMapped = false;
-      this.panel.add(m);
-      return m;
-    };
-    this.items = VIEWS.map(v => mk(v, 'bold', 0.05));
-    this.names = VIEWS.map(v => mk(v, 'display', 0.2));
-    this.stats = mk(`三角形 ${(T).toLocaleString('en').replace(/,/g, ' ')} · 顶点 ${(T * 3).toLocaleString('en').replace(/,/g, ' ')} · 绘制调用 1`, 'light', 0.036);
-    this.scene.add(this.panel);
     this.rig = new LyricRig(palette, 'hook');
+    this.rig.frame = { vh: 7, vw: 9 };
     this.scene.add(this.rig.group);
     this.resize(init.aspect);
   }
 
   resize(aspect: number): void {
-    this.aspect = aspect;
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
   }
@@ -188,6 +169,34 @@ export class DebugScene implements MvScene {
     const N = G + 1, fx = clamp01(x / SIZE + 0.5) * G, fz = clamp01(z / SIZE + 0.5) * G;
     const i = Math.min(G - 1, Math.floor(fx)), j = Math.min(G - 1, Math.floor(fz)), u = fx - i, v = fz - j, h = this.heights;
     return lerp(lerp(h[j * N + i], h[j * N + i + 1], u), lerp(h[(j + 1) * N + i], h[(j + 1) * N + i + 1], u), v);
+  }
+
+  /**
+   * Where a line stands. Down the valley: across it, riding ahead of the camera until just before the line ends, so
+   * the camera flies through it. Orbiting: upright over the peak, turned to where the camera was as the line began.
+   * From the top: lying flat over the land, read the way up the frame was as the line began.
+   */
+  private placeLine(root: THREE.Object3D, start: number, end: number, t: number, shot: Shot): void {
+    const len = Math.max(0.2, shot.end - shot.start);
+    const random = rng(shot.seed);
+    const side = random() < 0.5 ? -1 : 1;
+    random();
+    const at = Math.max(start, shot.start);
+    if (shot.variant === 'orbit') {
+      const a = at * 0.18 * side + random() * 6;
+      root.position.set(0, 5.2, 0);
+      root.rotation.set(0, Math.atan2(Math.cos(a), Math.sin(a)), 0);
+      root.scale.setScalar(2.4);
+    } else if (shot.variant === 'top') {
+      root.position.set(0, 8.5, 0);
+      root.rotation.set(-Math.PI / 2, at * 0.12 * side + Math.PI, 0, 'YXZ');
+      root.scale.setScalar(2.2);
+    } else {
+      const k = clamp01((Math.min(t, end - 0.5) - shot.start) / len);
+      const z = lerp(16, -12, k * (0.9 + 0.1 * k)) - 6;
+      const x = 0.08 * Math.sin((z / SIZE + 0.5) * 9) * SIZE;
+      root.position.set(x, Math.max(this.heightAt(x, z) + 1.4, 1.6) + 0.15, z);
+    }
   }
 
   update(ctx: FrameCtx): void {
@@ -237,32 +246,9 @@ export class DebugScene implements MvScene {
     cam.updateMatrixWorld();
     u.uCam.value.copy(cam.position);
 
-    // Panel in front of the camera, sized to the frame (distance 1: the visible height is 2·tan(fov/2)).
-    const vh = 2 * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2), vw = vh * this.aspect, s = vh / 2;
-    this.panel.position.copy(cam.position);
-    this.panel.quaternion.copy(cam.quaternion);
-    const { paper, signal } = this.init.palette;
-    const x0 = -vw / 2 + 0.075 * s, y0 = vh / 2 - 0.34 * s;
-    this.items.forEach((m, i) => {
-      m.position.set(x0, y0 - i * 0.075 * s, -1);
-      m.scale.setScalar(s);
-      m.material.color.copy(i === cur ? signal : paper).multiplyScalar(i === cur ? 1.3 : 0.55);
-      m.material.opacity = 0.95;
-    });
-    this.stats.position.set(x0, y0 - VIEWS.length * 0.075 * s - 0.03 * s, -1);
-    this.stats.scale.setScalar(s);
-    this.stats.material.color.copy(paper).multiplyScalar(0.7);
-    this.names.forEach((m, i) => {
-      m.visible = i === cur;
-      const w = (m.userData.width as number) * s;
-      m.position.set(vw / 2 - 0.09 * s - w, -vh / 2 + 0.34 * s, -1);
-      m.scale.setScalar(s);
-      m.material.color.copy(paper);
-      m.material.opacity = smooth(wipe * 1.4);
-    });
-
     ctx.fx.bloom = 0.35 + 0.15 * u.uFlash.value;
     ctx.fx.vignette = 0.45;
+    this.rig.place = (root, st, tt) => this.placeLine(root, st.line.start - 0.3, st.line.end, tt, shot);
     this.rig.update(cam, ctx.lyrics, t, ctx.aspect, shot.section.energy);
   }
 }
