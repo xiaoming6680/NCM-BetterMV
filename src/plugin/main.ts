@@ -3,11 +3,14 @@
 import { loadFonts } from '../render/text.ts';
 import { prepareSong, styleFor, Cancelled, type PreparedSong } from '../app/prepare.ts';
 import { MvPlayer } from '../app/player.ts';
-import { findClient, playingSong, seek, setVolume, skip, togglePlay, volume, type Client } from './client.ts';
+import {
+  findClient, isMaximized, liked, listTrack, minimizeWindow, playingIndex, playingSong, playItem, playList, playMode, seek, setPlayMode,
+  setVolume, skip, toggleLike, toggleMaximize, togglePlay, volume, type Client,
+} from './client.ts';
 import { ProgressClock } from './clock.ts';
 import { fetchLyric, fetchWiki, getAudio, loadCover } from './source.ts';
 import { alignSong, applyAlignment, cachedAlignment, checkPack, needsAlignment } from './aligner.ts';
-import { loadConfig, mvButton, Overlay, pixelRatio, settingsView, type BarSection, type Config } from './ui.ts';
+import { loadConfig, mvButton, Overlay, pixelRatio, settingsView, type BarSection, type Config, type QueueTrack } from './ui.ts';
 import type { SectionLabel } from '../types.ts';
 import type { SceneId } from '../scenes/types.ts';
 
@@ -51,6 +54,8 @@ function start(client: Client): void {
   const aligned = new WeakMap<PreparedSong, 'aligning' | 'aligned'>();
   let raf = 0;
   let last = 0;
+  /** NetEase's play list as the list panel shows it: its entries (to play one), their names, the playing one. */
+  const queue = { list: [] as readonly any[], tracks: [] as QueueTrack[], at: -2 };
 
   const overlay = new Overlay({
     onClose: () => close(),
@@ -63,6 +68,9 @@ function start(client: Client): void {
     onPrev: () => skip(client.store, -1),
     onNext: () => skip(client.store, 1),
     onVolume: v => setVolume(client.store, v),
+    onToggleLike: () => toggleLike(client.store),
+    onPlayMode: mode => setPlayMode(client.store, mode),
+    onPlayAt: i => { const item = queue.list[i]; if (item) playItem(client.store, item); },
     onSeek: s => {
       const to = Math.min(Math.max(0, s), duration() - 0.5);
       clock.seek(to);
@@ -72,7 +80,8 @@ function start(client: Client): void {
     onDragWindow: () => { try { void Promise.resolve(client.bridge.call('winhelper.dragWindow')).catch(() => {}); } catch { /* no such call */ } },
     // And what its resize grips call.
     onResizeWindow: edge => { try { void Promise.resolve(client.bridge.call('winhelper.sizeWindow', edge)).catch(() => {}); } catch { /* no such call */ } },
-    onToggleMaximize: () => client.store.dispatch({ type: client.store.getState()?.app?.isMaxWindow ? 'app/restoreWindow' : 'app/maximizeWindow' }),
+    onMinimize: () => minimizeWindow(client.store),
+    onToggleMaximize: () => toggleMaximize(client.store),
     // The same settings, in a panel on the MV page (tried out while watching).
     settings: () => settingsView(config, changed, sketch, true),
   });
@@ -85,11 +94,17 @@ function start(client: Client): void {
     plannedWith = planKey(c);
     player!.load(song, styleFor(song, c.style), new Set(c.off));
   };
-  /** The line under the progress bar: the song and the style it is shown in (and why, when chosen automatically). */
-  const describe = (song: PreparedSong) => {
-    const words = aligned.get(song);
-    overlay.info(`${song.name} — ${(song.artists ?? []).join(' / ')} · ${player!.style!.name}${config.style === 'auto' ? `（${song.choice.reason}）` : ''}` +
-      (words === 'aligning' ? ' · 歌词对齐中' : words === 'aligned' ? ' · 歌词已对齐' : ''));
+  /** The MV's style beside the volume (and why, when chosen automatically), and how the lyrics' word times stand. */
+  const describe = (song: PreparedSong) => overlay.mvInfo({
+    style: player!.style!.name, why: config.style === 'auto' ? song.choice.reason : null, lyrics: aligned.get(song) ?? null,
+  });
+  /** Hands NetEase's play list to the list panel, read again only when it (or the playing track) changed. */
+  const syncQueue = () => {
+    const list = playList(client.store), at = playingIndex(client.store, list);
+    if (list === queue.list && at === queue.at) return;
+    if (list !== queue.list) { queue.list = list; queue.tracks = list.map(listTrack); }
+    queue.at = at;
+    overlay.queue(queue.tracks, at);
   };
   let replan = 0;
   let button: HTMLButtonElement | null = config.button ? mvButton(() => open()) : null;
@@ -103,13 +118,14 @@ function start(client: Client): void {
     if (player.song && (clock.songId === player.song.id || !clock.playId)) player.frame(clock.now(), dt);
     overlay.progress(clock.time(), duration(), clock.playing);
     overlay.volume(volume(client.store));
+    overlay.playState(liked(client.store), playMode(client.store));
     player.hud.visible = !(overlay.awake && overlay.showControls);
     raf = requestAnimationFrame(loop);
   }
 
   async function prepareCurrent(): Promise<void> {
     const song = playingSong(client.store);
-    if (!song) { overlay.status('请先在网易云音乐中播放歌曲'); return; }
+    if (!song) { overlay.song(null); overlay.mvInfo(null); overlay.status('请先在网易云音乐中播放歌曲'); return; }
     // Already showing this song (reopened after closing): just take the loading note away.
     if (player?.song?.id === song.id) { overlay.status(null); return; }
     if (preparing?.id === song.id) return;
@@ -118,7 +134,8 @@ function start(client: Client): void {
     preparing = job;
     overlay.setBackdrop(song.cover || null);
     overlay.setStructure([], '#ffffff');
-    overlay.info(`${song.name} — ${song.artists.join(' / ')}`);
+    overlay.song({ name: song.name, artists: song.artists, cover: song.cover || null });
+    overlay.mvInfo(null);
     try {
       let prepared = ready.get(song.id);
       if (!prepared) {
@@ -172,7 +189,8 @@ function start(client: Client): void {
   }
 
   async function open(): Promise<void> {
-    overlay.resizable = !client.store.getState()?.app?.isMaxWindow;
+    overlay.maximized = isMaximized(client.store);
+    syncQueue();
     overlay.show();
     overlay.status('正在准备…');
     fonts ??= loadFonts(file => readPluginFile('fonts/' + file));
@@ -200,8 +218,9 @@ function start(client: Client): void {
     // tray — well before the PlayState event: the picture stops with it.
     const state = client.store.getState()?.playing?.playingState;
     if (typeof state === 'number') clock.onState('', '', state === 2 ? 1 : 0);
-    overlay.resizable = !client.store.getState()?.app?.isMaxWindow;
+    overlay.maximized = isMaximized(client.store);
     if (!overlay.visible) return;
+    syncQueue();
     const s = playingSong(client.store);
     if (s && s.id !== player?.song?.id && s.id !== preparing?.id) void prepareCurrent();
   });

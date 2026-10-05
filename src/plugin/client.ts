@@ -106,3 +106,64 @@ export function volume(store: Store): number | null {
 export function setVolume(store: Store, v: number): void {
   store.dispatch({ type: 'playing/setVolume', payload: { volume: Math.max(0, Math.min(1, v)) } });
 }
+
+/** NetEase's play modes (`playing.playingMode`): 心动模式 and 私人 FM are entered from their own pages. */
+export type PlayMode = 'playOrder' | 'playCycle' | 'playOneCycle' | 'playRandom' | 'playAi' | 'playFm';
+const PLAY_MODES: readonly string[] = ['playOrder', 'playCycle', 'playOneCycle', 'playRandom', 'playAi', 'playFm'];
+
+export function playMode(store: Store): PlayMode | null {
+  const m = store.getState()?.playing?.playingMode;
+  return PLAY_MODES.includes(m) ? m : null;
+}
+
+/** As its tray menu switches it. */
+export function setPlayMode(store: Store, mode: PlayMode): void {
+  store.dispatch({ type: 'playing/switchPlayingMode', payload: { playingMode: mode, triggerScene: 'sysTray' } });
+}
+
+/**
+ * Whether the playing song is in the user's liked songs (the map NetEase keeps of them); null when it can't be
+ * liked from here: not signed in, or a podcast.
+ */
+export function liked(store: Store): boolean | null {
+  const s = store.getState(), p = s?.playing, map = s?.['async:hostResource']?.likeTracksMap;
+  if (!s?.host?.uid || !p || p.resourceType === 'voice' || !map || typeof map !== 'object') return null;
+  return !!map[p.onlineResourceId || p.resourceTrackId];
+}
+
+/** Like the playing song, or take the like back (what its like shortcut does, without the tray notice). */
+export function toggleLike(store: Store): void {
+  store.dispatch({ type: 'async:hostResource/setLikeCurPlayingTrack', payload: {} });
+}
+
+/** NetEase's play list (`playingList.curPlayingList`): its own entries, kept as they are to hand back to `playItem`. */
+export function playList(store: Store): readonly any[] {
+  const list = store.getState()?.playingList?.curPlayingList;
+  return Array.isArray(list) ? list : [];
+}
+
+/** Where the playing track is in the play list (-1: not in it). */
+export function playingIndex(store: Store, list: readonly any[]): number {
+  const p = store.getState()?.playing;
+  const id = p?.curPlaying?.resourceId, track = p?.resourceTrackId;
+  if (id != null) { const i = list.findIndex(x => x && String(x.resourceId) === String(id)); if (i >= 0) return i; }
+  return track ? list.findIndex(x => x && String(x.track?.id ?? x.resourceId) === String(track)) : -1;
+}
+
+/** A play list entry's name, artists and length (seconds); a podcast's show stands in for its artists. */
+export function listTrack(item: any): { name: string; artists: string[]; duration: number } {
+  const t = item?.track ?? {};
+  const artists = (t.artists ?? t.ar ?? []).map((a: any) => a?.name).filter(Boolean);
+  if (!artists.length && (t.radio?.name || t.dj?.nickname)) artists.push(t.radio?.name || t.dj?.nickname);
+  return { name: String(t.name ?? item?.name ?? ''), artists, duration: Number(t.duration ?? t.dt ?? 0) / 1000 || 0 };
+}
+
+/** Play an entry of the play list, as a click in NetEase's own list does. */
+export function playItem(store: Store, item: unknown): void {
+  store.dispatch({ type: 'playing/playOneTrackInPlayingList', payload: { item, flag: 0, switchType: 'call', triggerScene: 'playingList' } });
+}
+
+/** NetEase's window, as its title bar's buttons do it. */
+export const isMaximized = (store: Store): boolean => !!store.getState()?.app?.isMaxWindow;
+export const minimizeWindow = (store: Store): void => store.dispatch({ type: 'app/minimizeWindow' });
+export const toggleMaximize = (store: Store): void => store.dispatch({ type: isMaximized(store) ? 'app/restoreWindow' : 'app/maximizeWindow' });
