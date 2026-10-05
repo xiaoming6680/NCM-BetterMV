@@ -27,6 +27,7 @@
 ## 窗口
 
 - 网易云的窗口没有系统标题栏，拖动是页面自己做的：标题栏上按下鼠标、移动超过 5 像素就调 `Bridge.call('winhelper.dragWindow')`，交给系统拖动；双击 dispatch `{type: 'app/maximizeWindow'}` 或 `'app/restoreWindow'`（看 `store.getState().app.isMaxWindow`）。MV 页盖住了标题栏，所以顶部 56 像素照做一遍。
+- 改窗口大小也是页面自己做的（3.1.37 的 `orpheus.ntpk` 里的 `ResizeHandler`）：只有四个角（8×8 像素）和右边缘（5 像素宽，上下各让开 8 像素），按下鼠标调 `Bridge.call('winhelper.sizeWindow', 'topleft' | 'topright' | 'bottomleft' | 'bottomright' | 'right')`，交给系统拖边框。MV 页盖住了它们，所以在同样的位置、同样的尺寸照做一遍，放在设置面板之上；窗口最大化时去掉。
 - MV 页的鼠标事件在自己的根节点上 `stopPropagation`，不让网易云和其他插件挂在 document/window 上的监听收到（例如 RefinedNowPlaying 在 document 上捕获 pointerup/mouseup/click）；进度条拖动用 pointer capture，不挂 window 监听。层级用最大 z-index，并在打开时移到 body 最后。
 - 当前歌曲：`store.getState().playing`：`resourceTrackId`、`resourceName`、`resourceArtists[].name`、`resourceCoverUrl`、`curTrack.album`、`curTrack.duration`（毫秒）、`trackFileType`（本地歌为 `local`，此时用 `onlineResourceId`）。
 

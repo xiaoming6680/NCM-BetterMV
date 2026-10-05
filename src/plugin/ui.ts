@@ -62,6 +62,9 @@ export function mvButton(onClick: () => void): HTMLButtonElement {
   return b;
 }
 
+/** Where NetEase's window can be resized from: its four corners and its right edge (it has no others). */
+export type WindowEdge = 'topleft' | 'topright' | 'bottomleft' | 'bottomright' | 'right';
+
 export interface OverlayHandlers {
   onClose: () => void;
   onTogglePlay: () => void;
@@ -73,6 +76,8 @@ export interface OverlayHandlers {
   onVolume: (v: number) => void;
   /** Hand the window to the system's move loop (the title bar's drag). */
   onDragWindow: () => void;
+  /** Hand the window to the system's sizing loop, from that corner or edge. */
+  onResizeWindow: (edge: WindowEdge) => void;
   onToggleMaximize: () => void;
   /** The settings panel's contents, built each time it opens (so it shows the settings as they are now). */
   settings: () => HTMLElement;
@@ -90,6 +95,7 @@ export class Overlay {
   private backdrop = document.createElement('div');
   private statusEl = document.createElement('div');
   private dragEl = document.createElement('div');
+  private grips: HTMLElement[] = [];
   private closeEl = document.createElement('button');
   private gearEl = document.createElement('button');
   private panel = document.createElement('div');
@@ -143,8 +149,9 @@ export class Overlay {
     this.gearEl.onclick = () => (this.panelOpen ? this.closePanel() : this.openPanel());
     this.buildBar();
     this.buildDrag();
+    this.buildGrips();
     this.buildPanel();
-    r.append(this.backdrop, this.stage, this.statusEl, this.dragEl, this.bar, this.gearEl, this.closeEl, this.panel);
+    r.append(this.backdrop, this.stage, this.statusEl, this.dragEl, this.bar, this.gearEl, this.closeEl, this.panel, ...this.grips);
     document.body.appendChild(r);
     r.addEventListener('mousemove', () => this.wake());
     // Leaving the window puts the controls away at once.
@@ -397,6 +404,34 @@ export class Overlay {
     d.addEventListener('mouseup', () => { down = null; });
     d.addEventListener('dblclick', () => { down = null; this.handlers.onToggleMaximize(); });
   }
+
+  /**
+   * NetEase's own resize grips, which the MV covers, at the same places and sizes: the corners (8 px) and the right
+   * edge (5 px). A press hands the window to the system's sizing loop. Over everything else, the settings panel too.
+   */
+  private buildGrips(): void {
+    const grips: Array<[WindowEdge, string]> = [
+      ['topleft', 'top:0;left:0;width:8px;height:8px;cursor:nwse-resize'],
+      ['topright', 'top:0;right:0;width:8px;height:8px;cursor:nesw-resize'],
+      ['bottomleft', 'bottom:0;left:0;width:8px;height:8px;cursor:nesw-resize'],
+      ['bottomright', 'bottom:0;right:0;width:8px;height:8px;cursor:nwse-resize'],
+      ['right', 'top:8px;bottom:8px;right:0;width:5px;cursor:ew-resize'],
+    ];
+    this.grips = grips.map(([edge, css]) => {
+      const g = document.createElement('div');
+      g.style.cssText = 'position:absolute;' + css;
+      g.addEventListener('mousedown', e => { if (e.button === 0) this.handlers.onResizeWindow(edge); });
+      return g;
+    });
+  }
+
+  /** A maximised window can't be resized: its grips go (and their cursors with them). */
+  set resizable(on: boolean) {
+    if (on === this.gripsOn) return;
+    this.gripsOn = on;
+    for (const g of this.grips) g.style.display = on ? '' : 'none';
+  }
+  private gripsOn = true;
 
   private showAt(k: number): void {
     this.fill.style.width = k * 100 + '%';

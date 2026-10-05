@@ -25,7 +25,7 @@ if (new URLSearchParams(location.search).has('mv')) {
   const config = loadConfig();
   const overlay = new Overlay({
     onClose: log('close'), onTogglePlay: log('play'), onPrev: log('prev'), onNext: log('next'), onSeek: log('seek'), onVolume: log('volume'),
-    onDragWindow: log('drag'), onToggleMaximize: log('maximize'),
+    onDragWindow: log('drag'), onResizeWindow: log('resize'), onToggleMaximize: log('maximize'),
     settings: () => settingsView(config, c => console.log('config', JSON.stringify(c)), sketch, true),
   });
   const picture = document.createElement('img');

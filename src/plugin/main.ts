@@ -70,6 +70,8 @@ function start(client: Client): void {
     },
     // What NetEase's own title bar calls (its window has no system frame).
     onDragWindow: () => { try { void Promise.resolve(client.bridge.call('winhelper.dragWindow')).catch(() => {}); } catch { /* no such call */ } },
+    // And what its resize grips call.
+    onResizeWindow: edge => { try { void Promise.resolve(client.bridge.call('winhelper.sizeWindow', edge)).catch(() => {}); } catch { /* no such call */ } },
     onToggleMaximize: () => client.store.dispatch({ type: client.store.getState()?.app?.isMaxWindow ? 'app/restoreWindow' : 'app/maximizeWindow' }),
     // The same settings, in a panel on the MV page (tried out while watching).
     settings: () => settingsView(config, changed, sketch, true),
@@ -170,6 +172,7 @@ function start(client: Client): void {
   }
 
   async function open(): Promise<void> {
+    overlay.resizable = !client.store.getState()?.app?.isMaxWindow;
     overlay.show();
     overlay.status('正在准备…');
     fonts ??= loadFonts(file => readPluginFile('fonts/' + file));
@@ -197,6 +200,7 @@ function start(client: Client): void {
     // tray — well before the PlayState event: the picture stops with it.
     const state = client.store.getState()?.playing?.playingState;
     if (typeof state === 'number') clock.onState('', '', state === 2 ? 1 : 0);
+    overlay.resizable = !client.store.getState()?.app?.isMaxWindow;
     if (!overlay.visible) return;
     const s = playingSong(client.store);
     if (s && s.id !== player?.song?.id && s.id !== preparing?.id) void prepareCurrent();
