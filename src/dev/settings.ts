@@ -3,6 +3,10 @@
 // `plugin` is stood in for (settings kept in localStorage); the scene sketches come from public/previews/.
 import { loadConfig, Overlay, settingsView, type QueueTrack } from '../plugin/ui.ts';
 import type { PlayMode } from '../plugin/client.ts';
+import { checkPack } from '../plugin/aligner.ts';
+
+// No aligner pack here (no BetterNCM): the lyrics row offers the download, as on a fresh install.
+void checkPack();
 
 const store = 'bettermv-settings-dev';
 const saved = (): Record<string, unknown> => { try { return JSON.parse(localStorage.getItem(store) || '{}'); } catch { return {}; } };
