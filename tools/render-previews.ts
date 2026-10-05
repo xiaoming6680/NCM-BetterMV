@@ -6,8 +6,8 @@
 import type { SceneId } from '../src/scenes/types.ts';
 import type { SectionLabel } from '../src/types.ts';
 
-// playwright-core is not a dependency here: borrowed from the Clarity_MV project unless BMV_PLAYWRIGHT says otherwise.
-const { chromium } = await import(process.env.BMV_PLAYWRIGHT ?? 'D:/!XM的项目/个人项目/Clarity_MV/app/node_modules/playwright-core/index.mjs');
+// playwright-core is not a dependency here: borrowed from the NCM-BetterDownload checkout unless BMV_PLAYWRIGHT says otherwise.
+const { chromium } = await import(process.env.BMV_PLAYWRIGHT ?? 'D:/!XM的项目/个人项目/NCM-BetterDownload/node_modules/playwright-core/index.mjs');
 
 const FF = process.env.BMV_FFMPEG ?? 'E:/ffmpeg-master-latest-win64-gpl-shared/bin/ffmpeg.exe';
 const SERVER = 'http://localhost:5191';
