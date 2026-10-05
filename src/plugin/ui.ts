@@ -6,6 +6,9 @@ import { SCENE_GROUPS, SCENES } from '../scenes/catalog.ts';
 import { SECTION_LABELS, type Section } from '../types.ts';
 import { installPack, removePack, watchPack } from './aligner.ts';
 
+/** The plugin's version (plugin/manifest.json, put in at build time). */
+export const VERSION = typeof __VERSION__ === 'string' ? __VERSION__ : '';
+
 export interface Config {
   style: 'auto' | StyleId;
   quality: 'high' | 'mid' | 'low';
@@ -581,8 +584,13 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   const view = el('div', `font:13px/1.6 ${FONT};color:inherit;` + (compact ? 'padding:0 0 28px' : 'padding:4px 2px 28px;max-width:660px'));
   view.dataset.bmvSettings = '';
 
-  // Header: what it is, and the keys.
-  if (!compact) view.append(el('div', 'font-size:20px;font-weight:800;letter-spacing:.02em', 'BetterMV'));
+  // Header: what it is (and which version), and the keys. The MV page's panel shows the version in its own head.
+  if (!compact) {
+    const name = el('div', 'display:flex;align-items:baseline;gap:8px');
+    name.append(el('span', 'font-size:20px;font-weight:800;letter-spacing:.02em', 'BetterMV'));
+    if (VERSION) name.append(el('span', 'font:12px Consolas,monospace;opacity:.55', `v${VERSION}`));
+    view.append(name);
+  }
   if (!compact) view.append(el('div', 'opacity:.7;margin-top:2px', '为正在播放的歌曲实时生成 3D MV：以封面构建场景，按歌曲结构剪辑镜头，按曲风自动选择风格。'));
   const keys = el('div', 'display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px;font-size:12px;opacity:.85');
   for (const [key, what] of [['Ctrl+Shift+M', '打开（或点击播放栏上方的 MV）'], ['Esc', '退出'], ['空格', '播放 / 暂停'], ['← →', '快退 / 快进'], ['↑ ↓', '音量']]) {

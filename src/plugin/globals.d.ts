@@ -10,6 +10,9 @@ interface BetterNCMPlugin {
 
 declare const plugin: BetterNCMPlugin;
 
+/** The version in plugin/manifest.json (Vite's `define`). */
+declare const __VERSION__: string | undefined;
+
 declare const betterncm: {
   fs: {
     readDir(path: string): Promise<string[]>;

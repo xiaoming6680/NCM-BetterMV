@@ -193,4 +193,6 @@ export default defineConfig({
   ],
   server: { port: 5190, strictPort: false },
   build: { target: 'chrome91' },
+  // The settings page shows the plugin's version (plugin/manifest.json).
+  define: { __VERSION__: JSON.stringify(JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, 'plugin/manifest.json'), 'utf8')).version) },
 });
