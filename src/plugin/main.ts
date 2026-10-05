@@ -6,6 +6,7 @@ import { MvPlayer } from '../app/player.ts';
 import { findClient, playingSong, seek, setVolume, skip, togglePlay, volume, type Client } from './client.ts';
 import { ProgressClock } from './clock.ts';
 import { fetchLyric, fetchWiki, getAudio, loadCover } from './source.ts';
+import { alignSong, applyAlignment, cachedAlignment, checkPack, needsAlignment } from './aligner.ts';
 import { loadConfig, mvButton, Overlay, pixelRatio, settingsView, type BarSection, type Config } from './ui.ts';
 import type { SectionLabel } from '../types.ts';
 import type { SceneId } from '../scenes/types.ts';
@@ -34,6 +35,7 @@ const sketch = (id: SceneId) => {
 };
 const changed = (c: Config) => listeners.forEach(fn => fn(c));
 plugin.onConfig(() => settingsView(config, changed, sketch));
+void checkPack();
 
 function start(client: Client): void {
   const clock = new ProgressClock();
@@ -45,6 +47,8 @@ function start(client: Client): void {
   let fonts: Promise<void> | null = null;
   let preparing: { id: number; cancelled: boolean } | null = null;
   const ready = new Map<number, PreparedSong>();
+  /** Songs whose word times are being found by the aligner pack, or were. */
+  const aligned = new WeakMap<PreparedSong, 'aligning' | 'aligned'>();
   let raf = 0;
   let last = 0;
 
@@ -80,7 +84,11 @@ function start(client: Client): void {
     player!.load(song, styleFor(song, c.style), new Set(c.off));
   };
   /** The line under the progress bar: the song and the style it is shown in (and why, when chosen automatically). */
-  const describe = (song: PreparedSong) => overlay.info(`${song.name} — ${(song.artists ?? []).join(' / ')} · ${player!.style!.name}${config.style === 'auto' ? `（${song.choice.reason}）` : ''}`);
+  const describe = (song: PreparedSong) => {
+    const words = aligned.get(song);
+    overlay.info(`${song.name} — ${(song.artists ?? []).join(' / ')} · ${player!.style!.name}${config.style === 'auto' ? `（${song.choice.reason}）` : ''}` +
+      (words === 'aligning' ? ' · 歌词对齐中' : words === 'aligned' ? ' · 歌词已对齐' : ''));
+  };
   let replan = 0;
   let button: HTMLButtonElement | null = config.button ? mvButton(() => open()) : null;
 
@@ -117,15 +125,32 @@ function start(client: Client): void {
           getAudio(client, song.id, () => job.cancelled), fetchLyric(song.id), fetchWiki(song.id), loadCover(song.cover),
         ]);
         if (job.cancelled) return;
+        let wordsFromPack = false;
         prepared = await prepareSong(
           { id: song.id, name: song.name, artists: song.artists, audio, lyric, wiki, cover },
           {
             pause: nextFrame,
             cancelled: () => job.cancelled,
             onProgress: (stage, p) => overlay.status(stage === 'decode' ? '正在解码…' : `正在分析 ${Math.round(p * 100)}%`),
+            // Word times found before (aligner pack) go in before the analysis reads the lyrics.
+            refineLines: async lines => {
+              const r = await cachedAlignment(song.id, lines);
+              wordsFromPack = !!r && applyAlignment(lines, r) > 0;
+            },
           },
         );
         ready.set(song.id, prepared);
+        if (wordsFromPack) aligned.set(prepared, 'aligned');
+        else if (needsAlignment(prepared.lines) && await checkPack()) {
+          // First time: the MV starts with the estimate; the found times replace it in place when the pack is done.
+          const target = prepared;
+          aligned.set(target, 'aligning');
+          void alignSong(song.id, target.lines, target.duration, audio).then(r => {
+            const n = r ? applyAlignment(target.lines, r) : 0;
+            if (n) aligned.set(target, 'aligned'); else aligned.delete(target);
+            if (player?.song === target) describe(target);
+          });
+        }
         while (ready.size > 3) ready.delete(ready.keys().next().value as number);
       }
       if (job.cancelled || !player) return;

@@ -52,6 +52,8 @@ export interface PrepareOptions {
   cancelled?: () => boolean;
   /** Use an analysis made elsewhere (dev: the hand-made Clarity analysis). */
   analysis?: (lines: LyricLine[]) => Promise<Analysis>;
+  /** Corrects the parsed lyrics in place before the analysis reads them (plugin: word times from the aligner pack). */
+  refineLines?: (lines: LyricLine[], duration: number) => Promise<void>;
 }
 
 export class Cancelled extends Error {}
@@ -98,6 +100,7 @@ export async function prepareSong(input: SongInput, opts: PrepareOptions): Promi
   const { samples, duration } = await decodeMono(input.audio.slice(0));
   check();
   const lines = input.lyric ? parseNeteaseLyric(input.lyric, duration) : [];
+  if (opts.refineLines && lines.length) await opts.refineLines(lines, duration);
   let analysis: Analysis;
   if (opts.analysis) analysis = await opts.analysis(lines);
   else {

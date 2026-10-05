@@ -4,6 +4,7 @@ import { STYLES, type StyleId } from '../style/style.ts';
 import type { SceneId } from '../scenes/types.ts';
 import { SCENE_GROUPS, SCENES } from '../scenes/catalog.ts';
 import { SECTION_LABELS, type Section } from '../types.ts';
+import { installPack, removePack, watchPack } from './aligner.ts';
 
 export interface Config {
   style: 'auto' | StyleId;
@@ -658,6 +659,30 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   section('界面');
   row('MV 按钮', toggle('button'), '显示在播放栏上方；关闭后可用 Ctrl+Shift+M 打开');
   row('控制栏', toggle('controls'), 'MV 页底部的播放控制，鼠标静止时自动隐藏');
+
+  // The optional aligner pack: its state follows the download while the page is open.
+  section('歌词');
+  const pack = el('div', 'display:flex;align-items:center;gap:10px;flex-wrap:wrap');
+  const packNote = el('div', 'font-size:12px;opacity:.6',
+    '适用于仅有逐句歌词的歌曲：按音频识别每个字的演唱时间，替代按音节的估算。首次播放时在本机后台分析，耗时数秒至半分钟，结果缓存后复用。全程本地运行，不上传数据。');
+  const mb = (n: number) => `${Math.round(n / 1048576)} MB`;
+  const stopWatching = watchPack(st => {
+    if (!view.isConnected && pack.childElementCount) { stopWatching(); return; }
+    pack.textContent = '';
+    const text = (t: string, accent = false) => pack.append(el('span', `font-size:12px;${accent ? `color:${ACCENT}` : 'opacity:.75'}`, t));
+    if (st.kind === 'checking') text('检查中…');
+    else if (st.kind === 'none') pack.append(ghost('下载对齐包（约 400 MB）', () => void installPack()));
+    else if (st.kind === 'installing') {
+      const pct = st.total ? st.done / st.total : 0;
+      const bar = el('div', `width:160px;height:6px;border-radius:3px;background:${TINT(0.2)};overflow:hidden`);
+      bar.append(el('div', `height:100%;width:${(pct * 100).toFixed(1)}%;background:${ACCENT}`));
+      pack.append(bar);
+      text(st.total ? `${st.note} · ${Math.round(pct * 100)}%（${mb(st.done)} / ${mb(st.total)}）` : st.note);
+    } else if (st.kind === 'ready') { text('已安装'); pack.append(ghost('删除', () => void removePack())); }
+    else if (st.kind === 'removing') text('删除中…');
+    else { text('安装失败：' + st.message, true); pack.append(ghost('重试', () => void installPack())); }
+  });
+  row('逐字对齐', pack, packNote);
 
   // Scenes: each one on or off; resting on one shows its sketch.
   const off = new Set(config.off);

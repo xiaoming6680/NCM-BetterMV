@@ -1,0 +1,16 @@
+BetterMV 歌词对齐包 / BetterMV aligner pack
+
+align.py, fa.py — part of BetterMV (https://github.com/xiaoming6680/NCM-BetterMV), GPL-3.0-or-later.
+
+Third-party components in this pack:
+
+- MMS-FA forced-alignment model (mms_fa.onnx): from "Scaling Speech Technology to 1,000+ Languages"
+  (Pratap et al., Meta AI, 2023), distributed through torchaudio.pipelines.MMS_FA. Licensed under
+  Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0),
+  https://creativecommons.org/licenses/by-nc/4.0/ . Changes: exported to ONNX, matrix multiplications
+  quantised to 8 bits. Non-commercial use only.
+- Python 3.12 embeddable distribution: Python Software Foundation License, https://docs.python.org/3/license.html
+- NumPy: BSD 3-Clause License (bundled OpenBLAS: BSD 3-Clause), see python/Lib/site-packages/numpy-*.dist-info
+- ONNX Runtime (onnxruntime-directml): MIT License, with Microsoft DirectML (DirectML.dll) redistributed under
+  its own license terms, see python/Lib/site-packages/onnxruntime_directml-*.dist-info and onnxruntime/ThirdPartyNotices.txt
+- pypinyin: MIT License, see python/Lib/site-packages/pypinyin-*.dist-info

@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from 'vite';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 
 // Dev harness only. Serves what the plugin will get inside NetEase: the client's cached audio of a song
 // (XOR 0xA3, read in place), its lyrics, details and cover from NetEase's public API, plus local test files.
@@ -145,10 +146,47 @@ function stills(): Plugin {
   };
 }
 
+/**
+ * POST /align/<key>: [u32 JSON length][job JSON][16-bit PCM] — runs the aligner pack's align.py (tools/aligner) the way
+ * the plugin does and answers with its output. Python and model from an unpacked pack in dev/aligner (or
+ * BMV_ALIGNER_PYTHON / BMV_ALIGNER_MODEL); the script itself is always the repo's. Results are kept in dev/align/.
+ */
+function align(): Plugin {
+  const dir = path.resolve(import.meta.dirname, 'dev/align');
+  const pack = path.resolve(import.meta.dirname, 'dev/aligner');
+  const python = process.env.BMV_ALIGNER_PYTHON || path.join(pack, 'python/python.exe');
+  const model = process.env.BMV_ALIGNER_MODEL || path.join(pack, 'models/mms_fa.onnx');
+  return {
+    name: 'align',
+    configureServer(server) {
+      server.middlewares.use('/align', (req, res, next) => {
+        const key = decodeURIComponent((req.url || '').split('?')[0]).replace(/^\/+/, '');
+        if (req.method !== 'POST' || !/^[\w-]+$/.test(key)) return next();
+        const chunks: Buffer[] = [];
+        req.on('data', c => chunks.push(c));
+        req.on('end', () => {
+          fs.mkdirSync(dir, { recursive: true });
+          const out = path.join(dir, `${key}.json`);
+          const reply = () => { res.setHeader('Content-Type', 'application/json'); res.end(fs.readFileSync(out)); };
+          if (fs.existsSync(out)) return reply();
+          const body = Buffer.concat(chunks), n = body.readUInt32LE(0);
+          const job = JSON.parse(body.subarray(4, 4 + n).toString('utf8'));
+          const pcm = path.join(dir, `${key}.pcm`), jobPath = path.join(dir, `${key}.job.json`);
+          fs.writeFileSync(pcm, body.subarray(4 + n));
+          fs.writeFileSync(jobPath, JSON.stringify({ ...job, audio: pcm, out, progress: path.join(dir, `${key}.progress.json`), model }));
+          const py = spawn(python, [path.resolve(import.meta.dirname, 'tools/aligner/align.py'), jobPath], { stdio: 'inherit' });
+          py.on('close', () => (fs.existsSync(out) ? reply() : (res.statusCode = 500, res.end('{"error":"align.py wrote nothing"}'))));
+        });
+      });
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     ncm(),
     stills(),
+    align(),
     localFiles('/media', process.env.BMV_MEDIA || 'E:/CloudMusic'),
     localFiles('/devdata', path.resolve(import.meta.dirname, 'dev')),
     localFiles('/reference', 'D:/!XM的项目/个人项目/Clarity_MV/data'),

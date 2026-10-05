@@ -90,7 +90,7 @@ const tidy = (text: string) => text
   .replace(/\s+/g, ' ')
   .trim();
 
-function syllables(word: string): number {
+export function syllables(word: string): number {
   if (/[㐀-鿿豈-﫿぀-ヿ가-힯]/.test(word)) return 1;
   const groups = word.toLowerCase().replace(/[^a-z]/g, '').replace(/e$/, '').match(/[aeiouy]+/g);
   return Math.max(1, groups ? groups.length : 1);

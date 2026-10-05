@@ -2,11 +2,13 @@
 // ?style=pulse|ballad|word|ink overrides the automatic choice · ?analysis=reference uses the hand-made Clarity analysis
 // ?t= start time · ?debug shows section / camera / tempo · ?plate=<scene>&variants=a,b puts every shot on one plate ·
 // ?off=drive,tunnel turns plates off as the settings page does · ?demo keeps the song's timing but shows an original
-// cover and made-up words (for the settings page's scene sketches, tools/render-previews.ts).
+// cover and made-up words (for the settings page's scene sketches, tools/render-previews.ts) · ?audio=/devdata/x.flac
+// takes the audio from that file instead (a song NetEase hasn't finished caching).
 // Keys: Space play/pause · ←/→ ±5 s · S back to the sample start · H hide the UI · D debug line · click the bar to seek.
 import { loadFonts } from '../render/text.ts';
 import { parseWiki } from '../meta/wiki.ts';
 import { prepareSong, styleFor } from '../app/prepare.ts';
+import { applyAlignment, jobKey, jobLines, needsAlignment, pcm16k } from '../plugin/aligner.ts';
 import { MvPlayer } from '../app/player.ts';
 import type { StyleId } from '../style/style.ts';
 import type { SceneId } from '../scenes/types.ts';
@@ -61,7 +63,7 @@ async function main() {
     fetch(`/ncm/detail/${songId}`).then(r => r.json()),
     fetch(`/ncm/wiki/${songId}`).then(r => r.json()).catch(() => null),
     fetch(`/ncm/lyric/${songId}`).then(r => r.json()),
-    fetch(`/ncm/audio/${songId}`).then(r => { if (!r.ok) throw new Error('这首歌不在网易云缓存里（先在网易云里完整播放一遍）'); return r.arrayBuffer(); }),
+    fetch(params.get('audio') ?? `/ncm/audio/${songId}`).then(r => { if (!r.ok) throw new Error('这首歌不在网易云缓存里（先在网易云里完整播放一遍）'); return r.arrayBuffer(); }),
     loadImage(demo ? '/tools/previews/demo-cover.jpg' : `/ncm/cover/${songId}`),
   ]);
   const audio = new Audio(URL.createObjectURL(new Blob([audioBuf])));
@@ -76,6 +78,16 @@ async function main() {
       pause: nextTick,
       onProgress: (stage, p) => { cover.textContent = stage === 'decode' ? '解码中…' : '分析中… ' + Math.round(p * 100) + '%'; },
       analysis: useReference ? async lines => fromReference(await fetch('/reference/audio.json').then(r => r.json()), lines) : undefined,
+      // ?align: word times from the aligner pack, through the dev server (the plugin's job, lines and rules).
+      refineLines: params.has('align') ? async (lines, duration) => {
+        if (!needsAlignment(lines)) return;
+        cover.textContent = '对齐歌词…';
+        const json = new TextEncoder().encode(JSON.stringify({ version: 1, id: songId, rate: 16000, channels: 1, lines: jobLines(lines, duration) }));
+        const pcm = await pcm16k(audioBuf);
+        const r = await fetch(`/align/${jobKey(songId, lines)}`, { method: 'POST', body: new Blob([new Uint32Array([json.length]), json, pcm]) }).then(r => r.json());
+        if (r.error) console.warn('对齐失败', r.error);
+        else console.log('对齐', applyAlignment(lines, r), '/', lines.length, '句', r.ms);
+      } : undefined,
     },
   );
   const style = styleFor(song, (params.get('style') as StyleId) || 'auto');
