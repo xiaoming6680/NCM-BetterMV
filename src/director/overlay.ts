@@ -109,7 +109,11 @@ export class MgOverlay {
   }
 
   /** `light`: the plate is on paper — the glowing hairlines would vanish there, so only the title card shows, in ink. */
+  /** Only the song's name and artists (oscilloscope music: nothing drawn over the scope's picture). */
+  quiet = false;
+
   update(t: number, shot: Shot, fx: Fx, light = false): void {
+    const busy = !this.quiet;
     const L = this.lines;
     L.clear();
     this.light = light;
@@ -129,7 +133,7 @@ export class MgOverlay {
     const big = sec.label === 'chorus' || sec.label === 'drop';
 
     // Bursts from the middle on downbeats of big sections (every beat in a drop).
-    if (big && shot.scene !== 'drive') {
+    if (busy && big && shot.scene !== 'drive') {
       const every = sec.label === 'drop' && !this.soft ? 1 : m.meter;
       const n = Math.floor(info.pos / every);
       for (let q = 0; q < 2; q++) {
@@ -147,7 +151,7 @@ export class MgOverlay {
     // Countdown through a build that rises into a louder section: a bar low in the frame fills towards the drop, a
     // tick per beat, the bars left at its end; its last bar flickers in eighths.
     const next = m.a.sections[shot.sectionIndex + 1];
-    if ((sec.label === 'build' || sec.label === 'pre') && next && next.energy > sec.energy + 0.08) {
+    if (busy && (sec.label === 'build' || sec.label === 'pre') && next && next.energy > sec.energy + 0.08) {
       const p = clamp01((t - sec.start) / Math.max(0.1, sec.end - sec.start));
       const beats = Math.min(64, Math.max(1, Math.round((sec.end - sec.start) / beat)));
       const lastBar = sec.end - t < beat * m.meter;
@@ -163,7 +167,7 @@ export class MgOverlay {
     } else this.countdown(0, 0, 0, 0);
 
     // Snare ticks at the edges in loud pulse sections.
-    if (!this.soft && sec.energy > 0.6) {
+    if (busy && !this.soft && sec.energy > 0.6) {
       const i = lastIndex(this.snares, t);
       const age = i >= 0 ? t - this.snares[i] : 99;
       if (age < 0.18) {
@@ -176,7 +180,7 @@ export class MgOverlay {
     }
 
     // Title card for each new section after the first.
-    this.titleCard(t, shot, beat, 1 - fx.fade, seg);
+    this.titleCard(t, shot, beat, busy ? 1 - fx.fade : 0, seg);
     this.creditsCard(t, seg);
     // Branching (pdoom's FOOM, the technique): through the bar before a drop, hairlines grow out of the middle along
     // the triangle's three directions and fork on every eighth note — 3, 6, 12 … 384 tips — filling the frame as
@@ -199,7 +203,7 @@ export class MgOverlay {
 
     // The crystal badge, 16 px across in radius, its centre 58 px from the right edge and 38 px from the top.
     const badge = this.badge;
-    if (badge && this.showBadge && shot.scene !== 'crystal' && vis > 0.01) {
+    if (busy && badge && this.showBadge && shot.scene !== 'crystal' && vis > 0.01) {
       const px = 2 / Math.max(1, this.resolution.y / this.pixelRatio);
       badge.group.position.set(this.aspect - 58 * px, 1 - 38 * px, 0);
       badge.group.scale.setScalar(16 * px);

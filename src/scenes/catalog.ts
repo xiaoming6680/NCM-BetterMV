@@ -12,7 +12,7 @@ export const SCENE_GROUPS: Array<{ name: string; scenes: SceneInfo[] }> = [
       { id: 'tunnel', name: '隧道', note: '发丝线框成的隧道，每拍穿过一道框，底鼓推出冲击环；铺垫里冲出去撞进封面' },
       { id: 'rings', name: '律动环', note: '同心环像表盘一样一拍走一格，外圈像音序器跟着小节亮，封面在中间随底鼓鼓起' },
       { id: 'ridges', name: '山脊', note: '封面的明暗画成一排排起伏的山脊线，底鼓从前往后推出一道光' },
-      { id: 'scope', name: '示波器', note: '这首歌此刻真实的波形，画在示波器的刻度格上' },
+      { id: 'scope', name: '示波器', note: '实时显示歌曲的波形；左右声道合成 X-Y 图形，示波器音乐可显现其中的图案' },
     ],
   },
   {

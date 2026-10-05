@@ -48,6 +48,22 @@ function disposeScene(root: THREE.Object3D, keep: THREE.Texture): void {
   for (const t of textures) if (t !== keep) t.dispose();
 }
 
+/**
+ * Oscilloscope music: the whole MV is the scope in XY mode drawing the song's pictures, its framing changing at the
+ * planned cuts but no more often than every 6 s (the speeding-up cuts of a build would only jolt the picture).
+ */
+function scopeOnly(shots: Shot[]): Shot[] {
+  const out: Shot[] = [];
+  for (const s of shots) {
+    const last = out[out.length - 1];
+    if (last && s.start - last.start < 6) { last.end = s.end; continue; }
+    out.push({ ...s, run: undefined });
+  }
+  const framings = ['xy', 'xy-near', 'xy', 'xy-angle'];
+  out.forEach((s, i) => { s.scene = 'scope'; s.variant = framings[i % framings.length]; });
+  return out;
+}
+
 export class MvPlayer {
   readonly engine: Engine;
   readonly hud: Hud;
@@ -78,11 +94,12 @@ export class MvPlayer {
     const lyrics = new LyricTrack(song.lines);
     const init: SceneInit = {
       cover: song.cover, coverPixels: song.coverPixels, coverSize: song.coverSize, palette: song.palette,
-      music, lyrics, aspect: this.engine.aspect, title: song.name, artists: song.artists, wave: song.wave, crystal: crystalSpec(song.analysis, song.id),
+      music, lyrics, aspect: this.engine.aspect, title: song.name, artists: song.artists, stereo: song.stereo, xyMusic: song.xyMusic, crystal: crystalSpec(song.analysis, song.id),
     };
     // Pure music (or a song whose lyrics NetEase doesn't have) gets no word plates.
-    const shots = planShots(music, style, song.id, { graphic: song.palette.graphic, lyrics: song.lines.length > 0 }, off);
+    let shots = planShots(music, style, song.id, { graphic: song.palette.graphic, lyrics: song.lines.length > 0 }, off);
     if (only) shots.forEach((sh, i) => { sh.scene = only.scene; sh.variant = only.variants[i % only.variants.length]; });
+    else if (song.xyMusic) shots = scopeOnly(shots);
     const look = style.look;
     const make: Record<SceneId, () => MvScene> = {
       relief: () => new Relief(init), shatter: () => new Shatter(init), diorama: () => new Diorama(init), bokeh: () => new Bokeh(init),
@@ -91,7 +108,7 @@ export class MvPlayer {
       typewall: () => new TypeWall(init), ink: () => new Ink(init, song.name), crystal: () => new CrystalScene(init), cards: () => new CardsScene(init), debug: () => new DebugScene(init), subdivide: () => new SubdivideScene(init, look), align: () => new AlignScene(init), scope: () => new ScopeScene(init),
     };
     for (const id of new Set(shots.map(s => s.scene))) this.scenes[id] = make[id]();
-    this.director = new Director(style, shots, this.scenes, music, lyrics, song.palette, init.crystal, song.cover);
+    this.director = new Director(style, shots, this.scenes, music, lyrics, song.palette, init.crystal, song.cover, !only && song.xyMusic);
     const badge = this.director.crystal;
     this.hud.crystalLabel = badge ? `${badge.label} · ${badge.triangles}△` : '';
     const last = song.lines[song.lines.length - 1];

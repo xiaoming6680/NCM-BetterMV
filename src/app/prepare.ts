@@ -7,6 +7,8 @@ import { chooseStyle, STYLES, type StyleChoice, type StyleId } from '../style/st
 import { paletteFromImage, type Palette } from '../render/palette.ts';
 import type { SongWiki } from '../meta/wiki.ts';
 import type { Analysis, LyricLine } from '../types.ts';
+import { xyMusic } from '../analysis/xy.ts';
+import type { Stereo } from '../scenes/types.ts';
 
 export interface SongInput {
   id: number;
@@ -32,8 +34,10 @@ export interface PreparedSong {
   cover: THREE.Texture;
   coverPixels: Uint8ClampedArray;
   coverSize: number;
-  /** The decoded audio, mono, 16-bit at WAVE_RATE (the oscilloscope plate draws it). */
-  wave: Int16Array;
+  /** The audio for the oscilloscope plate: both channels, 16-bit, scaled together to their peak. */
+  stereo: Stereo;
+  /** Oscilloscope music (src/analysis/xy.ts): the whole MV is the scope in XY mode. */
+  xyMusic: boolean;
   /** Milliseconds spent decoding + analysing. */
   ms: number;
 }
@@ -53,6 +57,8 @@ export interface PrepareOptions {
 export class Cancelled extends Error {}
 
 export const WAVE_RATE = 22050;
+/** Oscilloscope music keeps its channels at this rate (its pictures are drawn up to several kHz); other songs at WAVE_RATE. */
+const XY_RATE = 44100;
 
 async function decodeMono(buffer: ArrayBuffer, rate = 22050): Promise<{ samples: Float32Array; duration: number }> {
   const ctx = new OfflineAudioContext(1, 1, rate);
@@ -63,6 +69,26 @@ async function decodeMono(buffer: ArrayBuffer, rate = 22050): Promise<{ samples:
     for (let i = 0; i < out.length; i++) out[i] += ch[i] / audio.numberOfChannels;
   }
   return { samples: out, duration: audio.duration };
+}
+
+/** Both channels at `rate` (a mono file gives the same signal twice). */
+async function decodeStereo(buffer: ArrayBuffer, rate: number): Promise<{ left: Float32Array; right: Float32Array }> {
+  const audio = await new OfflineAudioContext(2, 1, rate).decodeAudioData(buffer);
+  const left = audio.getChannelData(0);
+  return { left, right: audio.numberOfChannels > 1 ? audio.getChannelData(1) : left };
+}
+
+/** 16-bit channels scaled together to their peak, every `step`-th pair of samples averaged in (step 1 or 2). */
+function toStereo(left: Float32Array, right: Float32Array, rate: number, step: number): Stereo {
+  let peak = 1e-6;
+  for (let i = 0; i < left.length; i++) peak = Math.max(peak, Math.abs(left[i]), Math.abs(right[i]));
+  const n = Math.floor(left.length / step), l = new Int16Array(n), r = new Int16Array(n), k = 32767 / peak / step;
+  for (let i = 0; i < n; i++) {
+    let a = 0, b = 0;
+    for (let j = 0; j < step; j++) { a += left[i * step + j]; b += right[i * step + j]; }
+    l[i] = Math.round(a * k); r[i] = Math.round(b * k);
+  }
+  return { rate: rate / step, left: l, right: r };
 }
 
 export async function prepareSong(input: SongInput, opts: PrepareOptions): Promise<PreparedSong> {
@@ -93,18 +119,18 @@ export async function prepareSong(input: SongInput, opts: PrepareOptions): Promi
   const c2 = cv.getContext('2d', { willReadFrequently: true })!;
   c2.drawImage(input.cover, 0, 0, coverSize, coverSize);
   const coverPixels = c2.getImageData(0, 0, coverSize, coverSize).data;
-  // The waveform kept for the oscilloscope: 16-bit, scaled to its own peak.
-  let peak = 1e-6;
-  for (let i = 0; i < samples.length; i++) peak = Math.max(peak, Math.abs(samples[i]));
-  const wave = new Int16Array(samples.length);
-  for (let i = 0; i < samples.length; i++) wave[i] = Math.round((samples[i] / peak) * 32767);
+  // The channels kept for the oscilloscope (decoded again in stereo; the analysis above keeps its mono path).
+  const both = await decodeStereo(input.audio.slice(0), XY_RATE);
+  check();
+  const xy = xyMusic(both.left, both.right, XY_RATE).xy;
+  const stereo = toStereo(both.left, both.right, XY_RATE, xy ? 1 : XY_RATE / WAVE_RATE);
   const cover = new THREE.Texture(input.cover);
   cover.colorSpace = THREE.SRGBColorSpace;
   cover.anisotropy = 8;
   cover.needsUpdate = true;
   return {
     id: input.id, name: input.name, artists: input.artists, duration, lines, analysis, wiki: input.wiki, choice,
-    palette, cover, coverPixels, coverSize, wave, ms: Math.round(performance.now() - t0),
+    palette, cover, coverPixels, coverSize, stereo, xyMusic: xy, ms: Math.round(performance.now() - t0),
   };
 }
 

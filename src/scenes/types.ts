@@ -54,8 +54,17 @@ export interface SceneInit {
   artists?: string[];
   /** The song's own crystal (src/sigil/crystal.ts). */
   crystal: CrystalSpec;
-  /** The audio, mono 16-bit at 22050 Hz (the oscilloscope). */
-  wave?: Int16Array;
+  /** The audio for the oscilloscope: both channels, 16-bit. */
+  stereo?: Stereo;
+  /** Oscilloscope music: the scope draws the channels' picture (XY), as a real one would. */
+  xyMusic?: boolean;
+}
+
+/** Both channels of the song, 16-bit, scaled together to their peak. */
+export interface Stereo {
+  rate: number;
+  left: Int16Array;
+  right: Int16Array;
 }
 
 export interface MvScene {

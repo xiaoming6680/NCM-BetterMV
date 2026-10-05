@@ -266,11 +266,18 @@ export class Director {
     readonly palette: Palette,
     crystal?: CrystalSpec,
     cover?: THREE.Texture,
+    /**
+     * Nothing over the plates' own picture: no flashes, punches, glitches or whips at the cuts, no blackout before a
+     * drop, no post-effect moments, only the song's name in the overlay (oscilloscope music, where the picture is the
+     * song's own and anything laid over it spoils it).
+     */
+    readonly pure = false,
   ) {
     this.starts = Float64Array.from(shots, s => s.start);
     this.cuts = this.planCuts();
     this.crystal = crystal && cover ? new Crystal(crystal, palette, cover) : null;
     this.overlay = new MgOverlay(palette, style, music, this.crystal);
+    this.overlay.quiet = pure;
     this.snares = Float64Array.from(music.a.hits.snare.filter(h => h[1] > 0.6), h => h[0]);
     this.stutters = findStutters(lyrics.lines);
   }
@@ -390,7 +397,9 @@ export class Director {
     const beforeDrop = tr.dropPunch && next && next.label === 'drop' && next.start - t < beat * 0.5 && shot.scene !== 'crystal';
     const cut = this.cuts[i];
 
-    if (prev && prev.section !== shot.section && shot.section.energy > prev.section.energy + 0.1) {
+    if (this.pure) {
+      // (Nothing at the cuts.)
+    } else if (prev && prev.section !== shot.section && shot.section.energy > prev.section.energy + 0.1) {
       const jump = Math.min(1, (shot.section.energy - prev.section.energy) * 2.2);
       // (The user: “有些时候的闪光效果太重了” — a lift of light, not a white-out.)
       if (tr.flash && jump > 0.3) fx.flash = 0.32 * Math.exp(-since / 0.07) * jump;
@@ -400,7 +409,7 @@ export class Director {
       fx.glitch = Math.exp(-since / 0.045) * (0.5 + shot.section.energy * 0.5);
     }
     // A cut on the same plate: the camera whips into the new setup.
-    if (cut.whip[0] || cut.whip[1]) {
+    if (!this.pure && (cut.whip[0] || cut.whip[1])) {
       const w = Math.pow(1 - clamp01(since / (beat * 0.35)), 2) * (this.style.look === 'ballad' ? 0.03 : 0.09);
       fx.smearX = cut.whip[0] * w;
       fx.smearY = cut.whip[1] * w;
@@ -441,15 +450,15 @@ export class Director {
       const into = depth(prev, shot, cut) * (1 - smooth(since / tr.dip));
       fx.fade = Math.max(fx.fade, outOf, into);
     }
-    if (beforeDrop) fx.fade = 1;
+    if (beforeDrop && !this.pure) fx.fade = 1;
     // A plate on paper: trails and the duotone would grey its darks, and the overlay's glowing lines would vanish.
     const bg = scene.scene.background;
     const light = bg instanceof THREE.Color && bg.r * 0.2126 + bg.g * 0.7152 + bg.b * 0.0722 > 0.45;
     // A light cover shown whole (tiles, shards, the aligned cover) is mostly near-white: held a step down and
     // without most of the glow it stays a picture instead of washing out (the user: “过曝+歌词看不清”).
     if (this.palette.light && COVER_PLATES.has(shot.scene)) { fx.exposure *= 0.72; fx.bloom *= 0.12; fx.flash *= 0.5; fx.vignette = Math.max(fx.vignette, 0.55); }
-    if (!light) this.grade(t, shot, fx, beat);
-    this.flashback(t, fx);
+    if (!light && !this.pure) this.grade(t, shot, fx, beat);
+    if (!this.pure) this.flashback(t, fx);
     this.overlay.update(t, shot, fx, light);
     return { scene: drawn, fx, shot, transition };
   }
