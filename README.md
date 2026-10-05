@@ -9,9 +9,9 @@
 播放歌曲后，点击播放栏上方的 MV（或按 Ctrl+Shift+M）。BetterMV 先分析整首歌曲，<br>
 再以封面构建 3D 场景、按节拍剪辑镜头，全部在本机实时生成。
 
-**开发中**：当前为预发布的开发版，仍有一些已知问题，欢迎试用和反馈。
+目前仍有一些已知问题，欢迎试用和反馈。
 
-[开发版下载](https://github.com/xiaoming6680/NCM-BetterMV/releases) · [更新记录](CHANGELOG.md) · [问题反馈](https://github.com/xiaoming6680/NCM-BetterMV/issues)
+[下载](https://github.com/xiaoming6680/NCM-BetterMV/releases/latest) · [更新记录](CHANGELOG.md) · [问题反馈](https://github.com/xiaoming6680/NCM-BetterMV/issues)
 
 </div>
 
@@ -46,12 +46,12 @@ MV 页底部为播放控制（喜欢、切歌、播放模式、进度、音量�
 - **场景**：可单独关闭不需要的场景，鼠标悬停时显示示意图。
 - **逐字对齐（可选）**：仅有逐句歌词的歌曲，逐字时间按音节估算。下载对齐包（约 400 MB）后，按音频识别每个字的演唱时间；首次播放时在本机后台分析（数秒至半分钟），结果缓存后复用。
 
-## 安装开发版
+## 安装
 
-BetterMV 是 BetterNCM 插件，目前尚在开发，暂未上架 BetterNCM 插件商店。如需试用，请下载预发布的开发版：
+BetterMV 是 BetterNCM 插件，暂未上架 BetterNCM 插件商店，请从 GitHub 下载安装：
 
 1. **安装 BetterNCM**：下载并运行 [BetterNCM 安装器](https://github.com/std-microblock/BetterNCM-Installer/releases)，点击“安装”。BetterNCM 是网易云音乐 PC 版的开源插件管理器，已安装可跳过此步。
-2. **添加 BetterMV**：从 [Releases](https://github.com/xiaoming6680/NCM-BetterMV/releases) 下载标记为 Pre-release 的开发版 `.plugin` 文件，放入 BetterNCM 的插件文件夹（默认 `C:\betterncm\plugins`）。
+2. **添加 BetterMV**：从 [Releases](https://github.com/xiaoming6680/NCM-BetterMV/releases/latest) 下载最新版本的 `.plugin` 文件，放入 BetterNCM 的插件文件夹（默认 `C:\betterncm\plugins`）。更新时先删除旧版本的 `.plugin` 文件。
 3. **重启网易云音乐**：播放歌曲，点击播放栏上方的 **MV**，或按 **Ctrl+Shift+M**。
 
 运行环境：Windows、网易云音乐 3.x、BetterNCM 1.3.4 或更高版本，显卡需支持 WebGL 2。目前仅在网易云音乐 3.1.37 + BetterNCM 1.3.4 上测试过。
