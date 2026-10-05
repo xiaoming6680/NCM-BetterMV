@@ -211,7 +211,8 @@ function start(client: Client): void {
     overlay.showControls = c.controls;
     if (c.button && !button) button = mvButton(() => open());
     if (!c.button && button) { button.remove(); button = null; }
-    if (player) { player.engine.renderer.setPixelRatio(pixelRatio(c.quality)); player.resize(); }
+    const pr = pixelRatio(c.quality);
+    if (player && pr !== player.engine.renderer.getPixelRatio()) { player.engine.setPixelRatio(pr); player.resize(); }
     // Replanned a moment after the last change (a few scenes clicked off in a row load once).
     clearTimeout(replan);
     replan = window.setTimeout(() => {

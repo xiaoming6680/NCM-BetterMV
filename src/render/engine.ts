@@ -216,6 +216,15 @@ export class Engine {
     r.setRenderTarget(prev);
   }
 
+  /**
+   * The quality setting, applied live. The post chain's buffers keep the ratio they were created with unless told
+   * (EffectComposer reads it once), so both change together; call resize() after.
+   */
+  setPixelRatio(pixelRatio: number): void {
+    this.renderer.setPixelRatio(pixelRatio);
+    this.composer.setPixelRatio(pixelRatio);
+  }
+
   resize(): void {
     const w = this.container.clientWidth || window.innerWidth, h = this.container.clientHeight || window.innerHeight;
     this.width = w; this.height = h;
