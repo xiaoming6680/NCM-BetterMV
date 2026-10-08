@@ -38,6 +38,8 @@ const PLAN: Record<SceneId, { style: string; variants: string; in: SectionLabel;
   crystal: { style: 'pulse', variants: 'orbit', in: 'build', at: 0.35 },
   subdivide: { style: 'pulse', variants: 'ball', in: 'verse', at: 0.55 },
   debug: { style: 'pulse', variants: 'orbit', in: 'chorus', at: 0.15 },
+  vinyl: { style: 'pulse', variants: 'tilt', in: 'verse', at: 0.35 },
+  clouds: { style: 'ballad', variants: 'over', in: 'chorus', at: 0.35 },
 };
 
 /** The looks: a plate drawn in each. */

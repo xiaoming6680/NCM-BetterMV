@@ -82,8 +82,8 @@ export const PULSE: Style = {
 
 function pulsePool(s: Section): Plate[] {
   switch (s.label) {
-    case 'intro': return [P('relief', 'rise'), P('rings', 'front', 'tilt'), P('ridges', 'front', 'drift'), P('particles', 'hold'), P('scope', 'wave', 'xy')];
-    case 'outro': return [P('relief', 'rise'), P('rings', 'tilt'), P('ridges', 'drift'), P('particles', 'hold', 'vortex'), P('scope', 'xy', 'wave')];
+    case 'intro': return [P('relief', 'rise'), P('rings', 'front', 'tilt'), P('ridges', 'front', 'drift'), P('particles', 'hold'), P('scope', 'wave', 'xy'), P('vinyl', 'top', 'tilt')];
+    case 'outro': return [P('relief', 'rise'), P('rings', 'tilt'), P('ridges', 'drift'), P('particles', 'hold', 'vortex'), P('scope', 'xy', 'wave'), P('clouds', 'over')];
     // Builds run down the tunnel and burst out through the cover into the chorus/drop.
     case 'build': case 'pre': return [P('tunnel', 'rush', 'roll', 'wall')];
     case 'chorus': return [
@@ -95,11 +95,12 @@ function pulsePool(s: Section): Plate[] {
       P('drive', 'push', 'roll'), P('shatter', 'swarm-a', 'swarm-d', 'swarm-b', 'swarm-c'), P('particles', 'burst', 'vortex'),
       P('kaleido', 'spiral', 'petal'), P('halftone', 'fine'), P('flip', 'burst'), P('debug', 'low', 'orbit', 'top'),
     ];
-    case 'break': return [P('poster', 'slab', 'stack'), P('ridges', 'front', 'low'), P('rings', 'front'), P('halftone', 'pan'), P('scope', 'wave', 'xy')];
-    case 'bridge': return [P('poster', 'split', 'stack'), P('ridges', 'drift', 'low'), P('kaleido', 'petal'), P('halftone', 'pan', 'out'), P('rings', 'tilt'), P('debug', 'top', 'orbit'), P('subdivide', 'ball')];
+    case 'break': return [P('poster', 'slab', 'stack'), P('clouds', 'over', 'skim'), P('ridges', 'front', 'low'), P('rings', 'front'), P('halftone', 'pan'), P('scope', 'wave', 'xy'), P('vinyl', 'groove', 'top')];
+    case 'bridge': return [P('poster', 'split', 'stack'), P('clouds', 'rise', 'skim'), P('ridges', 'drift', 'low'), P('kaleido', 'petal'), P('halftone', 'pan', 'out'), P('rings', 'tilt'), P('debug', 'top', 'orbit'), P('subdivide', 'ball')];
     default: return [
       P('relief', 'fly', 'crane', 'side', 'dive', 'low'), P('ridges', 'front', 'low', 'drift'), P('poster', 'stack', 'split', 'slab'),
       P('halftone', 'pan', 'in'), P('flip', 'wave'), P('rings', 'tilt', 'front'), P('particles', 'hold'), P('subdivide', 'ball'), P('align', 'swing'),
+      P('vinyl', 'tilt', 'groove', 'top'),
     ];
   }
 }
@@ -120,11 +121,11 @@ export const BALLAD: Style = {
 function balladPool(s: Section, song: SongTraits): Plate[] {
   const quiet = song.graphic ? P('diorama', 'drift', 'push', 'truck', 'tilt') : P('tunnel', 'rush', 'wall', 'roll');
   switch (s.label) {
-    case 'intro': return [P('bokeh', 'haze'), P('particles', 'hold'), P('scope', 'xy')];
+    case 'intro': return [P('bokeh', 'haze'), P('clouds', 'over'), P('particles', 'hold'), P('scope', 'xy')];
     case 'outro': return [song.graphic ? P('diorama', 'pullback') : P('tunnel', 'roll')];
-    case 'chorus': case 'drop': return [P('bokeh', 'focus', 'orbit', 'rise'), P('particles', 'rain', 'vortex'), P('kaleido', 'petal', 'spiral'), P('flip', 'wave'), P('poster', 'stack', 'split'), P('align', 'swing')];
-    case 'bridge': case 'break': return [P('poster', 'split', 'stack'), P('bokeh', 'rise'), P('ridges', 'drift'), P('halftone', 'pan'), P('rings', 'front'), P('subdivide', 'ball')];
-    default: return [quiet, P('poster', 'stack', 'split', 'slab'), P('halftone', 'in', 'pan'), P('rings', 'tilt', 'front'), P('ridges', 'front', 'drift'), P('flip', 'wave'), P('subdivide', 'ball')];
+    case 'chorus': case 'drop': return [P('bokeh', 'focus', 'orbit', 'rise'), P('clouds', 'rise', 'over', 'skim'), P('particles', 'rain', 'vortex'), P('kaleido', 'petal', 'spiral'), P('flip', 'wave'), P('poster', 'stack', 'split'), P('align', 'swing')];
+    case 'bridge': case 'break': return [P('poster', 'split', 'stack'), P('clouds', 'over', 'rise'), P('bokeh', 'rise'), P('ridges', 'drift'), P('halftone', 'pan'), P('rings', 'front'), P('subdivide', 'ball')];
+    default: return [quiet, P('vinyl', 'top', 'tilt'), P('poster', 'stack', 'split', 'slab'), P('halftone', 'in', 'pan'), P('rings', 'tilt', 'front'), P('ridges', 'front', 'drift'), P('flip', 'wave'), P('subdivide', 'ball')];
   }
 }
 
@@ -154,12 +155,12 @@ function wordPool(s: Section): Plate[] {
     case 'outro': return [P('halftone', 'out'), P('ridges', 'drift')];
     case 'build': case 'pre': return [P('typewall', 'solo'), P('tunnel', 'rush', 'roll')];
     case 'chorus': return [
-      P('typewall', 'stack', 'split'), P('poster', 'slab', 'stack', 'split'), P('halftone', 'fine', 'in'),
+      P('typewall', 'stack', 'split'), P('poster', 'slab', 'stack', 'split'), P('halftone', 'fine', 'in'), P('vinyl', 'groove', 'top', 'tilt'),
       P('shatter', 'wall', 'wall-close', 'wall-dutch'), P('flip', 'burst', 'wave'), P('debug', 'orbit', 'top'), P('align', 'swing'),
     ];
     case 'drop': return [P('drive', 'push', 'roll'), P('typewall', 'stack', 'solo'), P('halftone', 'fine'), P('shatter', 'swarm-a', 'swarm-b')];
     case 'break': case 'bridge': return [P('halftone', 'pan', 'out'), P('ridges', 'front', 'drift'), P('poster', 'split', 'slab'), P('scope', 'wave', 'xy')];
-    default: return [P('typewall', 'split', 'stack', 'solo'), P('halftone', 'pan', 'in', 'fine'), P('poster', 'stack', 'slab', 'split'), P('subdivide', 'ball')];
+    default: return [P('typewall', 'split', 'stack', 'solo'), P('vinyl', 'top', 'tilt', 'groove'), P('halftone', 'pan', 'in', 'fine'), P('poster', 'stack', 'slab', 'split'), P('subdivide', 'ball')];
   }
 }
 

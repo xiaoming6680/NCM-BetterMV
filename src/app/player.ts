@@ -26,6 +26,8 @@ import { DebugScene } from '../scenes/debug.ts';
 import { SubdivideScene } from '../scenes/subdivide.ts';
 import { AlignScene } from '../scenes/align.ts';
 import { ScopeScene } from '../scenes/scope.ts';
+import { Vinyl } from '../scenes/vinyl.ts';
+import { Clouds } from '../scenes/clouds.ts';
 import { crystalSpec } from '../sigil/crystal.ts';
 import type { MvScene, SceneId, SceneInit, Shot } from '../scenes/types.ts';
 import type { Style } from '../style/style.ts';
@@ -106,6 +108,7 @@ export class MvPlayer {
       tunnel: () => new Tunnel(init, look), drive: () => new Drive(init), kaleido: () => new Kaleido(init, look), flip: () => new Flip(init, look),
       rings: () => new Rings(init, look), poster: () => new Poster(init, look), ridges: () => new Ridges(init, look), halftone: () => new Halftone(init, look), particles: () => new Particles(init, look),
       typewall: () => new TypeWall(init), ink: () => new Ink(init, song.name), crystal: () => new CrystalScene(init), cards: () => new CardsScene(init), debug: () => new DebugScene(init), subdivide: () => new SubdivideScene(init, look), align: () => new AlignScene(init), scope: () => new ScopeScene(init),
+      vinyl: () => new Vinyl(init, look), clouds: () => new Clouds(init, look),
     };
     for (const id of new Set(shots.map(s => s.scene))) this.scenes[id] = make[id]();
     const sections = song.analysis.sections;
@@ -150,6 +153,7 @@ export class MvPlayer {
     (this.scenes.debug as DebugScene | undefined)?.setViewport(canvas.width, canvas.height);
     (this.scenes.align as AlignScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.scope as ScopeScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
+    (this.scenes.clouds as Clouds | undefined)?.setViewport(canvas.width, canvas.height, pr);
     this.director?.overlay.resize(this.engine.aspect);
     this.director?.overlay.setViewport(canvas.width, canvas.height, pr);
   }

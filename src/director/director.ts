@@ -272,7 +272,7 @@ export function planLooks(sections: Section[], style: Style, songSeed: number, o
  * (LyricLayer; the words can't be drawn apart), and the soft ones that fill the frame with haze (clouds, bokeh), which
  * characters turn into a wall of the same glyph.
  */
-const NO_CHARACTERS: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'halftone', 'shatter', 'ink', 'bokeh']);
+const NO_CHARACTERS: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'halftone', 'shatter', 'ink', 'clouds', 'bokeh']);
 
 /** Plates that show the cover itself large (its white is the picture's white). */
 const COVER_PLATES: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'shatter', 'align']);
@@ -287,6 +287,7 @@ const MOTION: Record<SceneId, TransitionKind[]> = {
   kaleido: [spin], rings: [spin], shatter: [spin, zoom], flip: [whip, spin],
   poster: [whip], typewall: [whip], halftone: [whip, zoom], ridges: [whip, zoom], diorama: [whip, zoom], ink: [TransitionKind.ink],
   crystal: [zoom, spin], cards: [zoom], debug: [whip, zoom], scope: [zoom, whip], subdivide: [spin, zoom], align: [whip, spin],
+  vinyl: [spin, zoom], clouds: [zoom],
 };
 const SOFT: TransitionKind[] = [zoom, TransitionKind.matte, TransitionKind.iris, spin];
 
