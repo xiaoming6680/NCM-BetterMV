@@ -8,6 +8,9 @@ import type { CrystalSpec } from '../sigil/crystal.ts';
 
 export type SceneId = 'relief' | 'shatter' | 'diorama' | 'bokeh' | 'tunnel' | 'drive' | 'kaleido' | 'flip' | 'rings' | 'poster' | 'ridges' | 'halftone' | 'particles' | 'typewall' | 'ink' | 'crystal' | 'cards' | 'debug' | 'subdivide' | 'align' | 'scope';
 
+/** A section redrawn in another medium (src/render/looks.ts): a riso print, Hi-bit pixels, characters on a tube. */
+export type LookId = 'riso' | 'hibit' | 'ascii';
+
 /** One camera setup inside a scene, between two downbeats. */
 export interface Shot {
   scene: SceneId;

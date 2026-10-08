@@ -1,6 +1,7 @@
 // Renderer + post chain: shots (one, or two joined by a transition, plus the motion-graphics overlay) → memory (a frame
 // kept for flashbacks) → echo trails → bloom → grade (mirror, pixelate, glitch, barrel, zoom blur, smear, chromatic
-// aberration, exposure, duotone, invert, flashback, vignette, scanlines, grain, fade, flash) → output.
+// aberration, exposure, duotone, invert, flashback, vignette, scanlines, grain, fade, flash) → output → look (a section
+// redrawn as a riso print, Hi-bit pixels, characters or on a tube; src/render/looks.ts).
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -8,6 +9,8 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { setAnisotropy } from './text.ts';
 import { EchoPass, MemoryPass, ShotPass, type Transition } from './shots.ts';
+import { LookPass } from './looks.ts';
+import type { Palette } from './palette.ts';
 
 export interface Fx {
   bloom: number;
@@ -46,12 +49,19 @@ export interface Fx {
   remember: boolean;
   /** The kept frame laid over the picture in the palette's duotone (where lighter), 0..1. */
   memory: number;
+  /** Looks (src/render/looks.ts), 0..1: a riso print, Hi-bit pixels, characters (the words drawn apart), a tube. */
+  riso: number;
+  /** The riso print of a plate lit like a picture (sky, clouds): positive, its darks inked (else its lights are). */
+  risoPositive: number;
+  hibit: number;
+  ascii: number;
+  crt: number;
 }
 
 export const defaultFx = (): Fx => ({
   bloom: 0.35, ca: 0, flash: 0, fade: 0, grain: 0.04, vignette: 0.5, glitch: 0, zoom: 0, barrel: 0,
   echo: 0, duotone: 0, invert: 0, mirror: 0, smearX: 0, smearY: 0, pixel: 0, scan: 0, exposure: 1,
-  remember: false, memory: 0,
+  remember: false, memory: 0, riso: 0, risoPositive: 0, hibit: 0, ascii: 0, crt: 0,
 });
 
 const GradeShader = {
@@ -156,6 +166,7 @@ export class Engine {
   private memory: MemoryPass;
   private bloom: UnrealBloomPass;
   private grade: ShaderPass;
+  private look: LookPass;
   width = 1;
   height = 1;
 
@@ -183,6 +194,9 @@ export class Engine {
     this.composer.addPass(this.bloom);
     this.composer.addPass(this.grade);
     this.composer.addPass(new OutputPass());
+    this.look = new LookPass();
+    this.look.enabled = false;
+    this.composer.addPass(this.look);
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
@@ -194,6 +208,9 @@ export class Engine {
     (this.grade.uniforms.uInk.value as THREE.Color).copy(ink);
     (this.grade.uniforms.uSignal.value as THREE.Color).copy(signal);
   }
+
+  /** Per song: the riso inks for its palette, the glyphs from its lyrics. */
+  setLooks(palette: Palette, lyricText: string): void { this.look.setSong(palette, lyricText); }
 
   /** The cover, for transitions that wipe through its shapes. */
   setCover(cover: THREE.Texture | null): void { this.shots.setCover(cover); }
@@ -212,7 +229,10 @@ export class Engine {
       r.setRenderTarget(this.warmTarget);
       r.render(scene, camera);
       for (const o of hidden) o.visible = false;
-    } else this.shots.warm(r, this.warmTarget);
+    } else {
+      this.shots.warm(r, this.warmTarget);
+      this.look.warm(r, this.warmTarget);
+    }
     r.setRenderTarget(prev);
   }
 
@@ -268,6 +288,10 @@ export class Engine {
     u.uExposure.value = fx.exposure;
     if (fx.remember) this.memory.armed = true;
     u.uMemory.value = fx.memory;
+    const looking = fx.riso + fx.hibit + fx.ascii + fx.crt > 0.001;
+    this.look.enabled = looking;
+    this.shots.split = looking && (fx.ascii > 0.001 || fx.riso > 0.001);
+    if (looking) this.look.set(fx, t, this.shots.split ? this.shots.words.texture : null);
     this.composer.render();
   }
 }

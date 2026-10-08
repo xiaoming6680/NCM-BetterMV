@@ -1,6 +1,8 @@
 // Renders the settings page's scene sketches, public/previews/<scene>.webp (480×270): each plate on its own over the
 // demo cover and made-up words (the harness's ?demo), in headless Edge against the frozen dev server (port 5191:
-// `bunx vite --config vite.frozen.config.ts`). The song is only the timing — Clarity, from the NetEase cache.
+// `bunx vite --config vite.frozen.config.ts`, or BMV_SERVER). The song is only the timing — Clarity, from the NetEase
+// cache, or BMV_PREVIEW_SONG (a section label it lacks falls back to its longest section). The looks' sketches,
+// public/previews/look-<id>.webp, are a plate in that look.
 //   bun tools/render-previews.ts [scene…]          the sketches
 //   bun tools/render-previews.ts --try [scene…]    four candidate moments per scene, dev/stills/try-<scene>-<n>.png
 import type { SceneId } from '../src/scenes/types.ts';
@@ -10,8 +12,8 @@ import type { SectionLabel } from '../src/types.ts';
 const { chromium } = await import(process.env.BMV_PLAYWRIGHT ?? 'D:/!XM的项目/个人项目/NCM-BetterDownload/node_modules/playwright-core/index.mjs');
 
 const FF = process.env.BMV_FFMPEG ?? 'E:/ffmpeg-master-latest-win64-gpl-shared/bin/ffmpeg.exe';
-const SERVER = 'http://localhost:5191';
-const SONG = 3359522924;
+const SERVER = process.env.BMV_SERVER ?? 'http://localhost:5191';
+const SONG = Number(process.env.BMV_PREVIEW_SONG ?? 3359522924);
 
 /** Each plate: the style it is drawn in, its camera, the section to show it in and how far into it (picked with --try). */
 const PLAN: Record<SceneId, { style: string; variants: string; in: SectionLabel; at: number }> = {
@@ -38,10 +40,18 @@ const PLAN: Record<SceneId, { style: string; variants: string; in: SectionLabel;
   debug: { style: 'pulse', variants: 'orbit', in: 'chorus', at: 0.15 },
 };
 
+/** The looks: a plate drawn in each. */
+const LOOK_PLAN: Record<string, { plate: SceneId; style: string; variants: string; in: SectionLabel; at: number }> = {
+  riso: { plate: 'ridges', style: 'pulse', variants: 'front', in: 'verse', at: 0.75 },
+  hibit: { plate: 'tunnel', style: 'pulse', variants: 'rush', in: 'verse', at: 0.4 },
+  ascii: { plate: 'relief', style: 'pulse', variants: 'crane', in: 'verse', at: 0.35 },
+};
+
 const args = process.argv.slice(2);
 const trying = args.includes('--try');
 const only = args.filter(a => !a.startsWith('--')) as SceneId[];
-const scenes = (only.length ? only : Object.keys(PLAN)) as SceneId[];
+// (look-riso etc. name a look's sketch.)
+const scenes = (only.length ? only : [...Object.keys(PLAN), ...Object.keys(LOOK_PLAN).map(k => `look-${k}`)]) as string[];
 
 const browser = await chromium.launch({
   channel: 'msedge', headless: true,
@@ -75,8 +85,9 @@ async function encode(f: { w: number; h: number; px: Buffer }, out: string, filt
 }
 
 for (const id of scenes) {
-  const p = PLAN[id];
-  await page.goto(`${SERVER}/?id=${SONG}&demo&style=${p.style}&plate=${id}&variants=${p.variants}`);
+  const look = id.startsWith('look-') ? id.slice(5) : null;
+  const p = look ? LOOK_PLAN[look] : { plate: id, ...PLAN[id as SceneId] };
+  await page.goto(`${SERVER}/?id=${SONG}&demo&style=${p.style}&plate=${p.plate}&variants=${p.variants}&look=${look ?? 'none'}`);
   await page.waitForFunction(() => (window as any).bmv?.player?.director, null, { timeout: 240000 });
   // (The HUD off takes the crystal badge with it: the sketch is the plate alone.)
   await page.evaluate(() => { const b = (window as any).bmv; b.audio.pause(); b.player.hud.visible = false; b.player.resize(); });

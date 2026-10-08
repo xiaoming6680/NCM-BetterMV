@@ -4,7 +4,8 @@
 import * as THREE from 'three';
 import type { Music } from './music.ts';
 import type { LyricTrack } from './lyrics.ts';
-import type { FrameCtx, MvScene, SceneId, Shot } from '../scenes/types.ts';
+import type { FrameCtx, LookId, MvScene, SceneId, Shot } from '../scenes/types.ts';
+export type { LookId } from '../scenes/types.ts';
 import { clamp01, rng, smooth } from '../scenes/types.ts';
 import type { Palette } from '../render/palette.ts';
 import { defaultFx, type Fx } from '../render/engine.ts';
@@ -45,7 +46,7 @@ const TAKE_TURNS = new Set(['verse', 'break', 'bridge']);
  * with none borrows the plates this song's other sections use, then any style's (each borrowing section opening on a
  * different one); only when every plate is off does it keep its own.
  */
-function allowed(pool: Plate[], off: ReadonlySet<SceneId>, sections: Section[], index: number, style: Style, song: SongTraits): Plate[] {
+function allowed(pool: Plate[], off: ReadonlySet<string>, sections: Section[], index: number, style: Style, song: SongTraits): Plate[] {
   const keep = (list: Plate[]) => list.filter(p => !off.has(p.scene));
   const left = keep(pool);
   if (left.length || !off.size) return left;
@@ -63,7 +64,7 @@ function allowed(pool: Plate[], off: ReadonlySet<SceneId>, sections: Section[], 
 }
 
 /** `off`: plates the user turned off in the settings (the crystal's and the opening's own shots included). */
-export function planShots(music: Music, style: Style, songSeed: number, song: SongTraits, off: ReadonlySet<SceneId> = new Set()): Shot[] {
+export function planShots(music: Music, style: Style, songSeed: number, song: SongTraits, off: ReadonlySet<string> = new Set()): Shot[] {
   const shots: Shot[] = [];
   const sections = music.a.sections;
   let prevScene = '', prevVariant = '';
@@ -228,6 +229,51 @@ function findStutters(lines: LyricLine[]): Array<[number, number, number]> {
   return out.sort((a, b) => a[0] - b[0]);
 }
 
+/**
+ * Which sections are redrawn in another medium (src/render/looks.ts), so the song doesn't stay in one world. The
+ * first verse and chorus keep the plates' own look (the song establishes itself); later verses and choruses, the
+ * bridges and breaks, sometimes the intro and a later build, change medium. Never the drops (the push tunnel is the
+ * climax), the ink style (its paper is its medium) or two sections in a row in the same look. Ballads only print
+ * (riso), and less often; no look more than twice in a song. `off`: looks the user turned off.
+ */
+export function planLooks(sections: Section[], style: Style, songSeed: number, off: ReadonlySet<string> = new Set()): Array<LookId | null> {
+  const out: Array<LookId | null> = sections.map(() => null);
+  if (style.id === 'ink') return out;
+  const random = rng((songSeed ^ 0x3c6ef372) >>> 0);
+  const ballad = style.look === 'ballad';
+  const seen = new Map<string, number>();
+  let prev: LookId | null = null;
+  const count = new Map<LookId, number>();
+  sections.forEach((s, i) => {
+    const nth = seen.get(s.label) ?? 0;
+    seen.set(s.label, nth + 1);
+    let options: LookId[] = [], chance = 0;
+    switch (s.label) {
+      case 'intro': options = ['hibit', 'ascii']; chance = i === 0 ? 0.45 : 0; break;
+      case 'verse': options = ['riso', 'hibit']; chance = nth >= 1 ? 0.85 : 0; break;
+      case 'chorus': options = ['hibit', 'riso']; chance = nth >= 1 ? 0.6 : 0; break;
+      case 'bridge': case 'break': options = ['ascii', 'riso']; chance = 0.85; break;
+      case 'build': case 'pre': options = ['ascii']; chance = nth >= 1 ? 0.5 : 0; break;
+      case 'outro': options = ['riso']; chance = 0.35; break;
+    }
+    if (ballad) { options = options.filter(o => o === 'riso'); chance *= 0.7; }
+    options = options.filter(o => !off.has(o) && o !== prev && (count.get(o) ?? 0) < 2);
+    const roll = random(), pick = random();
+    const look = options.length && roll < chance ? options[Math.floor(pick * options.length)] : null;
+    if (look) count.set(look, (count.get(look) ?? 0) + 1);
+    out[i] = look;
+    prev = look;
+  });
+  return out;
+}
+
+/**
+ * Plates that get the tube without the characters: the ones that print their words into their own surface
+ * (LyricLayer; the words can't be drawn apart), and the soft ones that fill the frame with haze (clouds, bokeh), which
+ * characters turn into a wall of the same glyph.
+ */
+const NO_CHARACTERS: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'halftone', 'shatter', 'ink', 'bokeh']);
+
 /** Plates that show the cover itself large (its white is the picture's white). */
 const COVER_PLATES: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'shatter', 'align']);
 
@@ -272,6 +318,8 @@ export class Director {
      * song's own and anything laid over it spoils it).
      */
     readonly pure = false,
+    /** Each section's look (planLooks). */
+    readonly looks: Array<LookId | null> = [],
   ) {
     this.starts = Float64Array.from(shots, s => s.start);
     this.cuts = this.planCuts();
@@ -459,8 +507,28 @@ export class Director {
     if (this.palette.light && COVER_PLATES.has(shot.scene)) { fx.exposure *= 0.72; fx.bloom *= 0.12; fx.flash *= 0.5; fx.vignette = Math.max(fx.vignette, 0.55); }
     if (!light && !this.pure) this.grade(t, shot, fx, beat);
     if (!this.pure) this.flashback(t, fx);
+    if (!this.pure && !light) this.applyLook(shot, fx);
     this.overlay.update(t, shot, fx, light);
     return { scene: drawn, fx, shot, transition };
+  }
+
+  /**
+   * The section's look on this shot. Not on the opening cards or the crystal (they are the song's own marks). Some
+   * plates are on the tube without the characters (NO_CHARACTERS).
+   * Trails, the duotone and the negative fight the media (a print has no glow), so they are left out under one.
+   */
+  private applyLook(shot: Shot, fx: Fx): void {
+    const look = this.looks[shot.sectionIndex];
+    if (!look || shot.scene === 'cards' || shot.scene === 'crystal') return;
+    if (look === 'riso') { fx.riso = 1; fx.bloom *= 0.5; }
+    else if (look === 'hibit') { fx.hibit = 1; }
+    else { fx.crt = 1; if (!NO_CHARACTERS.has(shot.scene)) fx.ascii = 1; }
+    fx.echo = Math.min(fx.echo, look === 'hibit' ? 0.5 : 0);
+    fx.duotone = 0;
+    fx.invert = 0;
+    fx.scan = 0;
+    fx.grain = look === 'riso' ? 0 : fx.grain;
+    fx.vignette = look === 'riso' ? 0 : fx.vignette;
   }
 
   /**

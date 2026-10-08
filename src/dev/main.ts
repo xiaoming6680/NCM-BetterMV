@@ -1,7 +1,8 @@
 // Dev harness: plays a song from the NetEase cache (?id=, default Clarity) with its lyrics and renders the MV.
 // ?style=pulse|ballad|word|ink overrides the automatic choice · ?analysis=reference uses the hand-made Clarity analysis
 // ?t= start time · ?debug shows section / camera / tempo · ?plate=<scene>&variants=a,b puts every shot on one plate ·
-// ?off=drive,tunnel turns plates off as the settings page does · ?demo keeps the song's timing but shows an original
+// ?off=drive,tunnel turns plates (or looks) off as the settings page does · ?look=riso|hibit|ascii puts every section
+// but the drops in that look, ?look=none none · ?demo keeps the song's timing but shows an original
 // cover and made-up words (for the settings page's scene sketches, tools/render-previews.ts) · ?audio=/devdata/x.flac
 // takes the audio from that file instead (a song NetEase hasn't finished caching).
 // Keys: Space play/pause · ←/→ ±5 s · S back to the sample start · H hide the UI · D debug line · click the bar to seek.
@@ -12,6 +13,7 @@ import { applyAlignment, jobKey, jobLines, needsAlignment, pcm16k } from '../plu
 import { MvPlayer } from '../app/player.ts';
 import type { StyleId } from '../style/style.ts';
 import type { SceneId } from '../scenes/types.ts';
+import type { LookId } from '../director/director.ts';
 import { fromReference } from './reference.ts';
 
 const CLARITY = 3359522924;
@@ -95,7 +97,7 @@ async function main() {
   // ?plate=ridges&variants=front,low: every shot on one plate (for reviewing a plate).
   const plate = params.get('plate') as SceneId | null;
   const off = new Set((params.get('off') || '').split(',').filter(Boolean) as SceneId[]);
-  player.load(song, style, off, plate ? { scene: plate, variants: (params.get('variants') || 'front').split(',') } : undefined);
+  player.load(song, style, off, plate ? { scene: plate, variants: (params.get('variants') || 'front').split(',') } : undefined, (params.get('look') as LookId | 'none' | null) ?? undefined);
   cover.textContent = '准备画面…';
   await player.warm(nextTick);
   window.addEventListener('resize', () => player.resize());

@@ -4,7 +4,7 @@ import { Engine, defaultFx } from '../render/engine.ts';
 import { disposeText } from '../render/text.ts';
 import { Music } from '../director/music.ts';
 import { LyricTrack } from '../director/lyrics.ts';
-import { Director, planShots } from '../director/director.ts';
+import { Director, planLooks, planShots, type LookId } from '../director/director.ts';
 import { Relief } from '../scenes/relief.ts';
 import { Shatter } from '../scenes/shatter.ts';
 import { Diorama } from '../scenes/diorama.ts';
@@ -80,10 +80,10 @@ export class MvPlayer {
   }
 
   /**
-   * `off`: plates the user turned off in the settings. `only` (development): every shot on this plate, cycling
-   * through the given camera setups.
+   * `off`: plates and looks the user turned off in the settings. `only` (development): every shot on this plate,
+   * cycling through the given camera setups; `forceLook` (development) puts every section but the drops in that look.
    */
-  load(song: PreparedSong, style: Style, off: ReadonlySet<SceneId> = new Set(), only?: { scene: SceneId; variants: string[] }): void {
+  load(song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId> = new Set(), only?: { scene: SceneId; variants: string[] }, forceLook?: LookId | 'none'): void {
     this.unload();
     this.song = song;
     this.style = style;
@@ -108,7 +108,10 @@ export class MvPlayer {
       typewall: () => new TypeWall(init), ink: () => new Ink(init, song.name), crystal: () => new CrystalScene(init), cards: () => new CardsScene(init), debug: () => new DebugScene(init), subdivide: () => new SubdivideScene(init, look), align: () => new AlignScene(init), scope: () => new ScopeScene(init),
     };
     for (const id of new Set(shots.map(s => s.scene))) this.scenes[id] = make[id]();
-    this.director = new Director(style, shots, this.scenes, music, lyrics, song.palette, init.crystal, song.cover, !only && song.xyMusic);
+    const sections = song.analysis.sections;
+    const looks = song.xyMusic || forceLook === 'none' ? [] : forceLook ? sections.map(s => (s.label === 'drop' ? null : forceLook)) : planLooks(sections, style, song.id, off);
+    this.engine.setLooks(song.palette, song.lines.map(l => l.text + (l.translation ?? '')).join(''));
+    this.director = new Director(style, shots, this.scenes, music, lyrics, song.palette, init.crystal, song.cover, !only && song.xyMusic, looks);
     const badge = this.director.crystal;
     this.hud.crystalLabel = badge ? `${badge.label} · ${badge.triangles}△` : '';
     const last = song.lines[song.lines.length - 1];

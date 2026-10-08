@@ -1,6 +1,6 @@
 // The plates as users know them: their names (the HUD, the settings page), a line on each, and the family the
 // settings page files it under. The lines name no other work (the user: the plugin is promoted on its own).
-import type { SceneId } from './types.ts';
+import type { LookId, SceneId } from './types.ts';
 
 export interface SceneInfo { id: SceneId; name: string; note: string }
 
@@ -51,3 +51,13 @@ export const SCENE_GROUPS: Array<{ name: string; scenes: SceneInfo[] }> = [
 export const SCENES: SceneInfo[] = SCENE_GROUPS.flatMap(g => g.scenes);
 
 export const SCENE_NAME = Object.fromEntries(SCENES.map(s => [s.id, s.name])) as Record<SceneId, string>;
+
+/**
+ * The looks a section may be redrawn in (src/render/looks.ts), for the settings page; their sketches are
+ * previews/look-<id>.webp. `styles`: the styles that use each (director.ts, planLooks).
+ */
+export const LOOKS: Array<{ id: LookId; name: string; note: string; styles: string[] }> = [
+  { id: 'riso', name: '孔版印刷', note: '段落改为 Riso 孔版印刷：画面分解为两三种专色油墨的网点，套色略有错位，印在米色纸上；歌词以实色油墨印出', styles: ['律动', '抒情', '字'] },
+  { id: 'hibit', name: '像素', note: '段落改为像素画面：大像素块，少量色阶加抖动，像素之间留有点阵屏的暗缝', styles: ['律动', '字'] },
+  { id: 'ascii', name: '字符', note: '段落改为曲面显像管上的字符画：画面由这首歌歌词（或译文）中的字组成，歌词清晰地显示在玻璃之外', styles: ['律动', '字'] },
+];

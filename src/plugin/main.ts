@@ -12,7 +12,6 @@ import { fetchLyric, fetchWiki, getAudio, loadCover } from './source.ts';
 import { alignSong, applyAlignment, cachedAlignment, checkPack, needsAlignment } from './aligner.ts';
 import { loadConfig, mvButton, Overlay, pixelRatio, settingsView, type BarSection, type Config, type QueueTrack } from './ui.ts';
 import type { SectionLabel } from '../types.ts';
-import type { SceneId } from '../scenes/types.ts';
 
 const KEY = '__betterMv';
 const SECTION: Record<SectionLabel, string> = { intro: '前奏', verse: '主歌', pre: '预副歌', chorus: '副歌', drop: '高潮', build: '铺垫', break: '间奏', bridge: '桥段', outro: '尾奏' };
@@ -26,9 +25,10 @@ async function readPluginFile(rel: string): Promise<ArrayBuffer> {
 // Settings exist before the client is found, so the settings page is registered at load time.
 const config: Config = loadConfig();
 const listeners: Array<(c: Config) => void> = [];
-// Each scene's sketch for the settings page (previews/<scene>.webp in the plugin folder), read once.
-const sketches = new Map<SceneId, Promise<string | null>>();
-const sketch = (id: SceneId) => {
+// Each scene's (and look's) sketch for the settings page (previews/<scene>.webp, previews/look-<id>.webp in the plugin
+// folder), read once.
+const sketches = new Map<string, Promise<string | null>>();
+const sketch = (id: string) => {
   let url = sketches.get(id);
   if (!url) {
     url = readPluginFile(`previews/${id}.webp`).then(b => URL.createObjectURL(new Blob([b], { type: 'image/webp' })), () => null);
@@ -89,10 +89,10 @@ function start(client: Client): void {
   const duration = () => player?.song?.duration || playingSong(client.store)?.duration || 0;
   // What the loaded MV was planned with: a settings change replans it only when the style or the scenes changed.
   let plannedWith = '';
-  const planKey = (c: Config) => `${c.style}|${c.off.join(',')}`;
+  const planKey = (c: Config) => `${c.style}|${c.off.join(',')}|${c.offLooks.join(',')}`;
   const plan = (song: PreparedSong, c: Config) => {
     plannedWith = planKey(c);
-    player!.load(song, styleFor(song, c.style), new Set(c.off));
+    player!.load(song, styleFor(song, c.style), new Set([...c.off, ...c.offLooks]));
   };
   /** The MV's style beside the volume (and why, when chosen automatically), and how the lyrics' word times stand. */
   const describe = (song: PreparedSong) => overlay.mvInfo({

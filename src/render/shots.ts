@@ -209,11 +209,37 @@ function withoutLyrics(scene: THREE.Scene, draw: () => void): void {
   for (const o of hidden) o.visible = true;
 }
 
+/**
+ * Only the lyric objects of a scene (and the groups holding them), over transparency: everything else that draws is
+ * hidden and the background dropped for the call.
+ */
+function onlyLyrics(scene: THREE.Scene, draw: () => void): void {
+  const keep = new Set<THREE.Object3D>();
+  scene.traverse(o => {
+    if (!o.userData.lyrics) return;
+    o.traverse(c => keep.add(c));
+    for (let p = o.parent; p; p = p.parent) keep.add(p);
+  });
+  const hidden: THREE.Object3D[] = [];
+  if (keep.size) scene.traverse(o => { if (!keep.has(o) && o.visible && o !== scene) { o.visible = false; hidden.push(o); } });
+  const bg = scene.background;
+  scene.background = null;
+  if (keep.size) draw();
+  scene.background = bg;
+  for (const o of hidden) o.visible = true;
+}
+
 export class ShotPass extends Pass {
   scene: THREE.Scene = new THREE.Scene();
   camera: THREE.Camera = new THREE.PerspectiveCamera();
   transition: Transition | null = null;
   overlay: { scene: THREE.Scene; camera: THREE.Camera } | null = null;
+  /**
+   * The words apart (the ascii look, src/render/looks.ts): the shot is drawn without its lyrics, and its lyrics and
+   * the overlay go into `words` (transparent), which the look lays over its result flat and clean.
+   */
+  split = false;
+  readonly words: THREE.WebGLRenderTarget;
   private rtA: THREE.WebGLRenderTarget;
   private rtB: THREE.WebGLRenderTarget;
   private quad: FullScreenQuad;
@@ -225,6 +251,7 @@ export class ShotPass extends Pass {
     const opts = { type: THREE.HalfFloatType, samples: 4 };
     this.rtA = new THREE.WebGLRenderTarget(1, 1, opts);
     this.rtB = new THREE.WebGLRenderTarget(1, 1, opts);
+    this.words = new THREE.WebGLRenderTarget(1, 1, opts);
     this.material = new THREE.ShaderMaterial({
       vertexShader, fragmentShader, depthTest: false, depthWrite: false,
       uniforms: {
@@ -247,21 +274,25 @@ export class ShotPass extends Pass {
   override setSize(width: number, height: number): void {
     this.rtA.setSize(width, height);
     this.rtB.setSize(width, height);
+    this.words.setSize(width, height);
     this.material.uniforms.uAspect.value = width / Math.max(1, height);
   }
 
   override render(renderer: THREE.WebGLRenderer, _write: THREE.WebGLRenderTarget, read: THREE.WebGLRenderTarget): void {
     const target = this.renderToScreen ? null : read;
-    const tr = this.transition;
+    const tr = this.transition, split = this.split;
+    const plain = (scene: THREE.Scene, draw: () => void) => (split ? withoutLyrics(scene, draw) : draw());
     if (!tr) {
-      renderer.setRenderTarget(target);
-      renderer.clear();
-      renderer.render(this.scene, this.camera);
+      plain(this.scene, () => {
+        renderer.setRenderTarget(target);
+        renderer.clear();
+        renderer.render(this.scene, this.camera);
+      });
     } else {
       const drawA = () => { renderer.setRenderTarget(this.rtA); renderer.clear(); renderer.render(tr.from.scene, tr.from.camera); };
       const drawB = () => { renderer.setRenderTarget(this.rtB); renderer.clear(); renderer.render(this.scene, this.camera); };
-      if (tr.hide === 'from') { withoutLyrics(tr.from.scene, drawA); drawB(); }
-      else { drawA(); withoutLyrics(this.scene, drawB); }
+      if (tr.hide === 'from') { withoutLyrics(tr.from.scene, drawA); plain(this.scene, drawB); }
+      else { plain(tr.from.scene, drawA); withoutLyrics(this.scene, drawB); }
       const u = this.material.uniforms;
       u.uP.value = tr.progress;
       u.uKind.value = tr.kind;
@@ -273,8 +304,21 @@ export class ShotPass extends Pass {
       renderer.setRenderTarget(target);
       this.quad.render(renderer);
     }
-    if (this.overlay) {
-      const auto = renderer.autoClear;
+    const auto = renderer.autoClear;
+    if (split) {
+      // The words of the shot whose words show (see Transition.hide), then the overlay, over transparency.
+      const shown = !tr || tr.hide === 'from' ? { scene: this.scene, camera: this.camera } : tr.from;
+      const color = renderer.getClearColor(new THREE.Color()), alpha = renderer.getClearAlpha();
+      renderer.setRenderTarget(this.words);
+      renderer.setClearColor(0x000000, 0);
+      renderer.clear();
+      renderer.autoClear = false;
+      onlyLyrics(shown.scene, () => renderer.render(shown.scene, shown.camera));
+      if (this.overlay) renderer.render(this.overlay.scene, this.overlay.camera);
+      renderer.autoClear = auto;
+      renderer.setClearColor(color, alpha);
+      renderer.setRenderTarget(target);
+    } else if (this.overlay) {
       renderer.autoClear = false;
       renderer.setRenderTarget(target);
       renderer.render(this.overlay.scene, this.overlay.camera);
@@ -285,6 +329,7 @@ export class ShotPass extends Pass {
   override dispose(): void {
     this.rtA.dispose();
     this.rtB.dispose();
+    this.words.dispose();
     this.material.dispose();
     this.quad.dispose();
   }

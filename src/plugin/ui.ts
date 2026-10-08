@@ -1,8 +1,8 @@
 // The plugin's surface inside NetEase: a small "MV" button, the full-window MV view with its controls, and the
 // settings page.
 import { STYLES, type StyleId } from '../style/style.ts';
-import type { SceneId } from '../scenes/types.ts';
-import { SCENE_GROUPS, SCENES } from '../scenes/catalog.ts';
+import type { LookId, SceneId } from '../scenes/types.ts';
+import { LOOKS, SCENE_GROUPS, SCENES } from '../scenes/catalog.ts';
 import { SECTION_LABELS, type Section } from '../types.ts';
 import { installPack, removePack, watchPack } from './aligner.ts';
 import type { PlayMode } from './client.ts';
@@ -20,6 +20,8 @@ export interface Config {
   controls: boolean;
   /** Plates the user turned off; the director leaves them out. */
   off: SceneId[];
+  /** Looks the user turned off (no section is redrawn in them). */
+  offLooks: LookId[];
 }
 
 export function loadConfig(): Config {
@@ -31,6 +33,7 @@ export function loadConfig(): Config {
     controls: plugin.getConfig<boolean>('controls', true) as unknown !== false,
     // Kept as "drive,tunnel" (a plain string survives any config store); unknown names are dropped.
     off: String(plugin.getConfig('offScenes', '')).split(',').filter((id): id is SceneId => SCENES.some(s => s.id === id)),
+    offLooks: String(plugin.getConfig('offLooks', '')).split(',').filter((id): id is LookId => LOOKS.some(s => s.id === id)),
   };
 }
 
@@ -842,7 +845,7 @@ function hideSketch(): void {
  * introduction, the sketches shown beside the panel. `preview` gives a scene's sketch (an image URL), or null when
  * there is none.
  */
-export function settingsView(config: Config, onChange: (c: Config) => void, preview: (id: SceneId) => Promise<string | null>, compact = false): HTMLElement {
+export function settingsView(config: Config, onChange: (c: Config) => void, preview: (id: string) => Promise<string | null>, compact = false): HTMLElement {
   const view = el('div', `font:13px/1.6 ${FONT};color:inherit;` + (compact ? 'padding:0 0 28px' : 'padding:4px 2px 28px;max-width:660px'));
   view.dataset.bmvSettings = '';
 
@@ -1011,17 +1014,17 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     plugin.setConfig('offScenes', config.off.join(','));
     onChange(config);
   };
-  const showSketch = (info: typeof SCENES[number], anchor: HTMLElement) => {
+  /** The card for a scene or a look: `image` is its sketch's name, `by` the styles that use it. */
+  const showSketch = (info: { name: string; note: string }, image: string, by: string[], isOff: boolean, anchor: HTMLElement) => {
     const s = sketchCard(), token = ++s.token;
     s.title.textContent = info.name;
-    if (off.has(info.id)) s.title.append(el('span', `font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;background:${ACCENT};color:#fff`, '已关闭'));
+    if (isOff) s.title.append(el('span', `font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;background:${ACCENT};color:#fff`, '已关闭'));
     s.note.textContent = info.note;
-    const by = using.get(info.id) ?? [];
     const chosen = config.style === 'auto' ? null : STYLES[config.style].name;
     s.foot.textContent = `用于：${by.join(' · ') || '—'}` + (chosen && !by.includes(chosen) ? `（当前风格“${chosen}”不使用）` : '');
     s.img.style.visibility = 'hidden';
     s.blank.textContent = '';
-    void preview(info.id).then(url => {
+    void preview(image).then(url => {
       if (s.token !== token) return;
       if (!url) { s.blank.textContent = '暂无示意图'; return; }
       s.img.onload = () => { if (s.token === token) s.img.style.visibility = 'visible'; };
@@ -1048,47 +1051,67 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     };
     s.timer = window.setTimeout(watch, 300);
   };
-  for (const group of SCENE_GROUPS) {
-    view.append(el('div', 'font-size:12px;opacity:.55;margin:14px 0 6px;letter-spacing:.06em', group.name));
+  /** A grid of on/off buttons; resting on one shows its card. */
+  const toggles = <T extends { name: string }>(items: T[], isOff: (it: T) => boolean, flip: (it: T, b: HTMLElement) => void, card: (it: T, b: HTMLElement) => void) => {
     const grid = el('div', `display:grid;grid-template-columns:repeat(auto-fill,minmax(${compact ? 100 : 108}px,1fr));gap:6px`);
-    for (const info of group.scenes) {
+    for (const info of items) {
       const b = el('button', `display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;border:1px solid ${TINT(0.22)};background:${TINT(0.05)};` +
         'color:inherit;font:inherit;text-align:left;cursor:pointer;transition:background .12s,border-color .12s');
       const box = el('span', 'flex:none;display:flex;align-items:center;justify-content:center;width:14px;height:14px;box-sizing:border-box;border-radius:4px;border:1.5px solid;transition:background .12s');
       const name = el('span', 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:opacity .12s', info.name);
       b.append(box, name);
       paints.push(() => {
-        const on = !off.has(info.id);
+        const on = !isOff(info);
         box.style.background = on ? ACCENT : 'transparent';
         box.style.borderColor = on ? ACCENT : TINT(0.6);
         box.innerHTML = on ? CHECK : '';
         name.style.opacity = on ? '1' : '.5';
         b.setAttribute('aria-pressed', String(on));
       });
-      b.onclick = () => {
-        if (!off.has(info.id) && off.size >= SCENES.length - 1) {
-          count.textContent = '至少保留一个场景';
-          count.style.color = ACCENT;
-          clearTimeout(warnTimer);
-          warnTimer = window.setTimeout(refresh, 1800);
-          return;
-        }
-        if (off.has(info.id)) off.delete(info.id); else off.add(info.id);
-        refresh();
-        save();
-        showSketch(info, b);
-      };
+      b.onclick = () => flip(info, b);
       const lit = (on: boolean) => { b.style.borderColor = TINT(on ? 0.5 : 0.22); b.style.background = TINT(on ? 0.12 : 0.05); };
-      b.onmouseenter = () => { lit(true); showSketch(info, b); };
+      b.onmouseenter = () => { lit(true); card(info, b); };
       b.onmouseleave = () => { lit(false); hideSketch(); };
-      b.onfocus = () => showSketch(info, b);
+      b.onfocus = () => card(info, b);
       b.onblur = () => hideSketch();
       grid.append(b);
     }
-    view.append(grid);
+    return grid;
+  };
+  const sceneCard = (info: typeof SCENES[number], b: HTMLElement) => showSketch(info, info.id, using.get(info.id) ?? [], off.has(info.id), b);
+  for (const group of SCENE_GROUPS) {
+    view.append(el('div', 'font-size:12px;opacity:.55;margin:14px 0 6px;letter-spacing:.06em', group.name));
+    view.append(toggles(group.scenes, info => off.has(info.id), (info, b) => {
+      if (!off.has(info.id) && off.size >= SCENES.length - 1) {
+        count.textContent = '至少保留一个场景';
+        count.style.color = ACCENT;
+        clearTimeout(warnTimer);
+        warnTimer = window.setTimeout(refresh, 1800);
+        return;
+      }
+      if (off.has(info.id)) off.delete(info.id); else off.add(info.id);
+      refresh();
+      save();
+      sceneCard(info, b);
+    }, sceneCard));
   }
+
+  // Looks: each one on or off, like the scenes.
+  const offLooks = new Set(config.offLooks);
+  section('画风');
+  view.append(el('div', 'font-size:12px;opacity:.6;margin:8px 0 8px', '部分段落会改用另一种画风呈现，使整首歌不止一种面貌。关闭的画风不再使用。'));
+  const lookCard = (info: typeof LOOKS[number], b: HTMLElement) => showSketch(info, `look-${info.id}`, info.styles, offLooks.has(info.id), b);
+  view.append(toggles(LOOKS, info => offLooks.has(info.id), (info, b) => {
+    if (offLooks.has(info.id)) offLooks.delete(info.id); else offLooks.add(info.id);
+    config.offLooks = LOOKS.map(l => l.id).filter(id => offLooks.has(id));
+    plugin.setConfig('offLooks', config.offLooks.join(','));
+    onChange(config);
+    refresh();
+    lookCard(info, b);
+  }, lookCard));
   refresh();
   // The sketches load in the background while the page is read.
   for (const s of SCENES) void preview(s.id);
+  for (const l of LOOKS) void preview(`look-${l.id}`);
   return view;
 }
