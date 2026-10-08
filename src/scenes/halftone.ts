@@ -58,7 +58,14 @@ const fragmentShader = /* glsl */ `
     return smoothstep(radius + 0.9, radius - 0.9, d);
   }
   // The words' own screen: finer, square to the frame; dot size from how much type is there, the dot in its colour.
+  // On paper the type is printed solid instead (screened type there broke into dots and could not be read).
   float wordsAt(vec2 px, out vec3 tint) {
+    if (uNeon < 0.5) {
+      vec4 w = lyricAt(coverUv(px));
+      float lum = dot(w.rgb, vec3(0.2126, 0.7152, 0.0722));
+      tint = w.rgb / max(w.a, 1e-3);
+      return clamp((w.a - lum) * 1.6, 0.0, 1.0);
+    }
     float cell = max(3.0, uCell * 0.36);
     vec2 centre = (floor(px / cell) + 0.5) * cell;
     vec4 w = lyricAt(coverUv(centre));
@@ -180,8 +187,10 @@ export class Halftone implements MvScene {
       cover += 1 - (1 - Math.min(1, lit * (1 - 0.6 * Math.max(sig, acc)) * area)) * (1 - sig * 0.9) * (1 - acc * 0.9);
     }
     cover /= samples.length;
-    const target = this.neon ? 0.34 : 0.45;
-    return { negative, gain: Math.min(1, Math.max(0.35, target / Math.max(1e-3, cover))), levels: [lo, hi] };
+    // On paper, about a quarter of the frame inked: more, and a dark cover printed as a grey wall of dots that hid
+    // the picture and the words (the user: “这个滤镜不好，看不清”).
+    const target = this.neon ? 0.34 : 0.26;
+    return { negative, gain: Math.min(1, Math.max(this.neon ? 0.35 : 0.15, target / Math.max(1e-3, cover))), levels: [lo, hi] };
   }
 
   /** Drawing-buffer size: the dot screen is ruled in device pixels. */
@@ -196,7 +205,8 @@ export class Halftone implements MvScene {
     const kick = this.neon ? music.pulse('kick', t, 0.12) : music.pulse('kick', t, 0.3) * 0.4;
     // Ruling: one of three per bar (a fixed number of cells down the frame, so it reads the same at any size).
     const rulings = [70, 52, 90];
-    const cells = rulings[(info.bar + Math.floor(random() * 3)) % 3] * (shot.variant === 'fine' ? 1.6 : 1);
+    // (On paper a finer screen: the coarse one read as a pattern rather than a picture, and shimmered when moving.)
+    const cells = rulings[(info.bar + Math.floor(random() * 3)) % 3] * (shot.variant === 'fine' ? 1.6 : 1) * (this.neon ? 1 : 1.45);
     u.uCell.value = this.res.y / cells;
     u.uKick.value = kick;
     // Snares knock the colour screens out of register; it settles back.
@@ -234,8 +244,10 @@ export class Halftone implements MvScene {
     const len = Math.max(0.5, shot.end - shot.start);
     this.layer.rig.place = (root, st) => {
       const zl = this.move(shot.variant, inOutCubic(clamp01((Math.max(st.line.start, shot.start) - shot.start) / len)), sx, at);
-      root.position.set(0.5 + at.x - cx + (this.neon ? 0 : -sx * 0.3 * (this.res.x / long / zl)), 0.5 + at.y - cy, -10);
+      root.position.set(0.5 + at.x - cx + (this.neon ? 0 : sx * 0.22 * (this.res.x / long / zl)), 0.5 + at.y - cy, -10);
     };
-    this.layer.update(ctx.lyrics, t, shot.section.energy, w, h, rw, rh);
+    // On paper the poem's thin serif over the dots read too small (its size follows the frame given): set twice as large.
+    const big = this.neon ? 1 : 2;
+    this.layer.update(ctx.lyrics, t, shot.section.energy, w * big, h * big, rw, rh);
   }
 }
