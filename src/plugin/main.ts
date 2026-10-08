@@ -57,11 +57,21 @@ function start(client: Client): void {
   /** NetEase's play list as the list panel shows it: its entries (to play one), their names, the playing one. */
   const queue = { list: [] as readonly any[], tracks: [] as QueueTrack[], at: -2 };
 
+  /**
+   * Whether NetEase is playing: its store's play state (2 = playing), the clock only when the store has none. The
+   * clock counts as playing only within 350 ms of a progress event (none yet just after a resume or a seek, or when a
+   * heavy frame holds them up), so the pause button asked it, sent a resume to a playing song and the first press did
+   * nothing (the user: “暂停键有时候第一次按下不起效果”).
+   */
+  const isPlaying = () => {
+    const state = client.store.getState()?.playing?.playingState;
+    return typeof state === 'number' ? state === 2 : clock.playing;
+  };
   const overlay = new Overlay({
     onClose: () => close(),
     // The picture stops (or jumps) on the click, not when NetEase's events catch up.
     onTogglePlay: () => {
-      const playing = clock.playing;
+      const playing = isPlaying();
       if (playing) clock.pause();
       togglePlay(client.store, playing);
     },
@@ -116,7 +126,7 @@ function start(client: Client): void {
     last = now;
     // Only draw the song the MV was made for; while NetEase switches songs the last frame stays.
     if (player.song && (clock.songId === player.song.id || !clock.playId)) player.frame(clock.now(), dt);
-    overlay.progress(clock.time(), duration(), clock.playing);
+    overlay.progress(clock.time(), duration(), isPlaying());
     overlay.volume(volume(client.store));
     overlay.playState(liked(client.store), playMode(client.store));
     player.hud.visible = !(overlay.awake && overlay.showControls);
