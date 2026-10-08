@@ -185,9 +185,49 @@ function fromLrc(doc: NeteaseLyric, trans: Map<number, string>, duration: number
   return lines;
 }
 
+/**
+ * How far NetEase's word-level lyric (yrc) runs late, judged against its own line-level lyric (lrc): 0 unless it is
+ * clearly and steadily late, then the shift that brings it back to the usual gap. Over 63 cached songs with both, yrc
+ * starts a line between 0.4 s before and 0.3 s after lrc (about +0.15 s in the middle) and neither is always the
+ * right one; a few run late on every line (《Cytus II Opening - The Whole Rest》: +0.42 to +0.99 s, the user heard
+ * every word late). Only those are moved: at least 8 lines, the median over 0.4 s, nine lines in ten late.
+ */
+export function yrcLag(lines: LyricLine[], doc: NeteaseLyric): number {
+  const stamps = lrcEntries(doc.lrc?.lyric).filter(([, text]) => text).map(([t]) => t);
+  if (lines.length < 8 || !stamps.length) return 0;
+  const d: number[] = [];
+  for (const l of lines) {
+    let best = Infinity;
+    for (const s of stamps) if (Math.abs(l.start - s) < Math.abs(best)) best = l.start - s;
+    if (Math.abs(best) < 2) d.push(best);
+  }
+  if (d.length < 8) return 0;
+  d.sort((a, b) => a - b);
+  const median = d[d.length >> 1];
+  const late = d.filter(x => x > 0).length / d.length;
+  return median > 0.4 && late >= 0.9 ? median - 0.15 : 0;
+}
+
+/** Moves every time in the lines `by` seconds (negative = earlier). */
+export function shiftLines(lines: LyricLine[], by: number): void {
+  for (const l of lines) {
+    l.start += by;
+    l.end += by;
+    for (const w of l.words) { w.start += by; w.end += by; }
+  }
+}
+
 export function parseNeteaseLyric(doc: NeteaseLyric, duration: number): LyricLine[] {
   if (!doc || doc.pureMusic || doc.nolyric || doc.uncollected) return [];
   const trans = translations(doc);
   const timed = fromYrc(doc, trans);
-  return timed.length ? timed : fromLrc(doc, trans, duration);
+  if (!timed.length) return fromLrc(doc, trans, duration);
+  // A yrc that runs late is brought back, and its translations matched again at the corrected times (they follow
+  // the lrc's stamps, so a late line had lost its translation).
+  const lag = yrcLag(timed, doc);
+  if (lag > 0) {
+    shiftLines(timed, -lag);
+    for (const l of timed) l.translation ??= nearest(trans, l.start);
+  }
+  return timed;
 }
