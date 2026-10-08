@@ -290,7 +290,7 @@ export class Engine {
     u.uMemory.value = fx.memory;
     const looking = fx.riso + fx.hibit + fx.ascii + fx.crt > 0.001;
     this.look.enabled = looking;
-    this.shots.split = looking && (fx.ascii > 0.001 || fx.riso > 0.001);
+    this.shots.split = looking && (fx.ascii > 0.001 || fx.riso > 0.001 || fx.hibit > 0.001);
     if (looking) this.look.set(fx, t, this.shots.split ? this.shots.words.texture : null);
     this.composer.render();
   }

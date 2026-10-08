@@ -4,13 +4,13 @@
 //   riso   a Riso print: the picture separated into two or three spot inks, each a halftone screen at its own angle,
 //          mis-registered a little, on cream paper. Dark plates print light-on-paper: their dark ground stays paper,
 //          what glows takes the ink (the brighter, the heavier), so a black frame becomes a printed page.
-//   hibit  a Hi-bit pixel picture: big blocks, a few colour levels per channel with ordered dither, dark gaps
-//          between the blocks like a dot-matrix screen.
+//   hibit  a Hi-bit pixel picture: blocks (each the average of its area), a few flat colour levels per channel,
+//          faint gaps between the blocks like a dot-matrix screen.
 //   ascii  the picture made of characters — the song's own (the lyrics' characters sorted by how much ink they take),
 //          or a Latin ramp for songs without them — each cell's glyph picked by its brightness, in its colour.
 //   crt    the picture on a curved tube: scanlines, an RGB grille, a black bezel with rounded corners.
-// With ascii or riso on, the lyrics and the motion-graphics layer are drawn apart (ShotPass.split) so the sung line
-// stays readable: over characters they lie flat and clean, off the glass (the engine's rule: subtitles stay outside
+// With ascii, riso or hibit on, the lyrics and the motion-graphics layer are drawn apart (ShotPass.split) so the sung line
+// stays readable: over characters and pixels they lie flat and clean, off the glass (the engine's rule: subtitles stay outside
 // the tube); on a print they are printed solid in the set's deepest ink, with the next ink a touch off register
 // (type on a Riso is solid, never screened).
 // Methods after the base engine's post.ts / ascii.ts (riso ink fit, bayer dither, CRT surface, measured glyph ramp).
@@ -162,17 +162,21 @@ const fragmentShader = /* glsl */ `
     vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
     return mix(mix(hash12(i), hash12(i + vec2(1, 0)), f.x), mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), f.x), f.y);
   }
-  float bayer4(vec2 p) {
-    ivec2 q = ivec2(mod(p, 4.0));
-    int i = q.x + q.y * 4;
-    float m[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
-    return (m[i] + 0.5) / 16.0;
-  }
   // The device-pixel size of the frame's height / 1080 (patterns keep their size at every resolution).
   float unit() { return uRes.y / 1080.0; }
 
   // ---- Hi-bit: the colour of the block a point falls in ----
-  vec2 block(vec2 uv) { float b = max(3.0, floor(8.0 * unit() + 0.5)); vec2 cells = uRes / b; return (floor(uv * cells) + 0.5) / cells; }
+  float blockPx() { return max(3.0, floor(5.0 * unit() + 0.5)); }
+  // The block's colour: the average over it (one sample per block aliased fine textures — dot screens, hairlines —
+  // into a checkerboard of speckle; the user: “像素有点太重了，看不清”).
+  vec3 blockColour(vec2 uv) {
+    float b = blockPx();
+    vec2 cell = floor(uv * uRes / b);
+    vec3 c = vec3(0.0);
+    for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++)
+      c += texture2D(tDiffuse, (cell * b + (vec2(float(i), float(j)) + 0.5) * b / 4.0) / uRes).rgb;
+    return c / 16.0;
+  }
 
   // ---- ASCII: the picture as glyphs ----
   vec3 ascii(vec2 uv) {
@@ -252,22 +256,21 @@ const fragmentShader = /* glsl */ `
       glass = d * 0.5 + 0.5;
     }
     vec2 uv = glass;
-    if (uHibit > 0.0) uv = block(uv);
-    vec3 col = texture2D(tDiffuse, uv).rgb;
+    vec3 col = uHibit > 0.0 ? blockColour(uv) : texture2D(tDiffuse, uv).rgb;
     if (uAscii > 0.0) col = mix(col, ascii(uv), uAscii);
     if (uRiso > 0.0) col = mix(col, riso(glass), uRiso);
     if (uHibit > 0.0) {
-      float b = max(3.0, floor(8.0 * unit() + 0.5));
-      vec2 cellId = floor(glass * uRes / b);
-      float L = 4.0;
-      // A light dither (a full one turns glow haze into speckle), and the near-blacks held black.
+      // Flat colour levels, no dither (dither turned glow haze into speckle), the near-blacks held black, and faint
+      // gaps between the blocks.
+      float b = blockPx();
+      float L = 6.0;
       vec3 cc = clamp(col, 0.0, 1.0);
       cc *= smoothstep(0.02, 0.08, max(max(cc.r, cc.g), cc.b));
-      vec3 q = floor(cc * L + 0.5 + (bayer4(cellId) - 0.5) * 0.65) / L;
+      vec3 q = floor(cc * L + 0.5) / L;
       col = mix(col, q, uHibit);
       vec2 fp = fract(glass * uRes / b);
       float gw = 1.0 / b;
-      col *= 1.0 - uHibit * 0.5 * max(step(1.0 - gw, fp.x), step(1.0 - gw, fp.y));
+      col *= 1.0 - uHibit * 0.28 * max(step(1.0 - gw, fp.x), step(1.0 - gw, fp.y));
     }
     if (uCrt > 0.0) {
       vec2 gpx = glass * uRes;
