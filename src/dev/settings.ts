@@ -52,7 +52,7 @@ if (params.has('mv')) {
     onPlayAt: i => playAt(i),
     onDragWindow: log('drag'), onResizeWindow: log('resize'), onMinimize: log('minimize'),
     onToggleMaximize: () => { state.max = !state.max; overlay.maximized = state.max; },
-    settings: () => settingsView(config, c => console.log('config', JSON.stringify(c)), sketch, true),
+    settings: () => settingsView(config, c => console.log('config', JSON.stringify(c)), sketch, true, { id: 1, name: '示例歌曲' }),
   });
   const playAt = (i: number) => {
     state.at = (i + tracks.length) % tracks.length;

@@ -73,6 +73,8 @@ export class MvPlayer {
   private director: Director | null = null;
   private music: Music | null = null;
   song: PreparedSong | null = null;
+  /** The lines as shown (moved by the song's lyric delay). */
+  private lines: PreparedSong['lines'] = [];
   style: Style | null = null;
 
   constructor(container: HTMLElement, pixelRatio?: number) {
@@ -84,8 +86,9 @@ export class MvPlayer {
   /**
    * `off`: plates and looks the user turned off in the settings. `only` (development): every shot on this plate,
    * cycling through the given camera setups; `forceLook` (development) puts every section but the drops in that look.
+   * `lyricDelay`: seconds this song's words show later (negative: earlier), the user's per-song setting.
    */
-  load(song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId> = new Set(), only?: { scene: SceneId; variants: string[] }, forceLook?: LookId | 'none'): void {
+  load(song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId> = new Set(), only?: { scene: SceneId; variants: string[] }, forceLook?: LookId | 'none', lyricDelay = 0): void {
     this.unload();
     this.song = song;
     this.style = style;
@@ -93,7 +96,10 @@ export class MvPlayer {
     this.engine.setCover(song.cover);
     const music = this.music = new Music(song.analysis);
     this.hud.glyph = style.glyph;
-    const lyrics = new LyricTrack(song.lines);
+    // (A copy moved by the delay: the song's own lines stay as parsed, for the next load.)
+    const lines = lyricDelay ? song.lines.map(l => ({ ...l, start: l.start + lyricDelay, end: l.end + lyricDelay, words: l.words.map(w => ({ ...w, start: w.start + lyricDelay, end: w.end + lyricDelay })) })) : song.lines;
+    this.lines = lines;
+    const lyrics = new LyricTrack(lines);
     const init: SceneInit = {
       cover: song.cover, coverPixels: song.coverPixels, coverSize: song.coverSize, palette: song.palette,
       music, lyrics, aspect: this.engine.aspect, title: song.name, artists: song.artists, stereo: song.stereo, xyMusic: song.xyMusic, crystal: crystalSpec(song.analysis, song.id),
@@ -117,9 +123,9 @@ export class MvPlayer {
     this.director = new Director(style, shots, this.scenes, music, lyrics, song.palette, init.crystal, song.cover, !only && song.xyMusic, looks);
     const badge = this.director.crystal;
     this.hud.crystalLabel = badge ? `${badge.label} · ${badge.triangles}△` : '';
-    const last = song.lines[song.lines.length - 1];
+    const last = lines[lines.length - 1];
     const opening = this.director.shots[0]?.scene !== 'cards';
-    this.director.overlay.setCredits(song.name ?? '', song.artists ?? [], song.lines[0]?.start ?? Infinity, last?.end ?? 0, song.duration, opening);
+    this.director.overlay.setCredits(song.name ?? '', song.artists ?? [], lines[0]?.start ?? Infinity, last?.end ?? 0, song.duration, opening);
     this.resize();
   }
 
@@ -177,7 +183,7 @@ export class MvPlayer {
   async warm(pause: () => Promise<void>, cancelled: () => boolean = () => false): Promise<void> {
     const director = this.director, music = this.music, song = this.song;
     if (!director || !music || !song) return;
-    const lyrics = new LyricTrack(song.lines), aspect = this.engine.aspect;
+    const lyrics = new LyricTrack(this.lines), aspect = this.engine.aspect;
     for (const [id, scene] of Object.entries(this.scenes) as Array<[SceneId, MvScene]>) {
       const shot = director.shots.find(s => s.scene === id);
       if (!shot) continue;

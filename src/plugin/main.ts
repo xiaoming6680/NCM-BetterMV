@@ -93,16 +93,17 @@ function start(client: Client): void {
     onMinimize: () => minimizeWindow(client.store),
     onToggleMaximize: () => toggleMaximize(client.store),
     // The same settings, in a panel on the MV page (tried out while watching).
-    settings: () => settingsView(config, changed, sketch, true),
+    settings: () => settingsView(config, changed, sketch, true, player?.song ? { id: player.song.id, name: player.song.name ?? '' } : undefined),
   });
   overlay.showControls = config.controls;
   const duration = () => player?.song?.duration || playingSong(client.store)?.duration || 0;
-  // What the loaded MV was planned with: a settings change replans it only when the style or the scenes changed.
+  // What the loaded MV was planned with: a settings change replans it only when the style, the scenes or looks, or
+  // this song's lyric delay changed.
   let plannedWith = '';
-  const planKey = (c: Config) => `${c.style}|${c.off.join(',')}|${c.offLooks.join(',')}`;
+  const planKey = (c: Config, id = player?.song?.id) => `${c.style}|${c.off.join(',')}|${c.offLooks.join(',')}|${id ? c.lyricDelays[id] ?? 0 : 0}`;
   const plan = (song: PreparedSong, c: Config) => {
-    plannedWith = planKey(c);
-    player!.load(song, styleFor(song, c.style), new Set([...c.off, ...c.offLooks]));
+    plannedWith = planKey(c, song.id);
+    player!.load(song, styleFor(song, c.style), new Set([...c.off, ...c.offLooks]), undefined, undefined, (c.lyricDelays[song.id] ?? 0) / 1000);
   };
   /** The MV's style beside the volume (and why, when chosen automatically), and how the lyrics' word times stand. */
   const describe = (song: PreparedSong) => overlay.mvInfo({

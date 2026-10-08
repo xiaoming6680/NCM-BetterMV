@@ -22,6 +22,8 @@ export interface Config {
   off: SceneId[];
   /** Looks the user turned off (no section is redrawn in them). */
   offLooks: LookId[];
+  /** Per song (by id): how much later its words show, ms (negative = earlier), for a song whose lyric runs off. */
+  lyricDelays: Record<string, number>;
 }
 
 export function loadConfig(): Config {
@@ -34,6 +36,7 @@ export function loadConfig(): Config {
     // Kept as "drive,tunnel" (a plain string survives any config store); unknown names are dropped.
     off: String(plugin.getConfig('offScenes', '')).split(',').filter((id): id is SceneId => SCENES.some(s => s.id === id)),
     offLooks: String(plugin.getConfig('offLooks', '')).split(',').filter((id): id is LookId => LOOKS.some(s => s.id === id)),
+    lyricDelays: (() => { try { return JSON.parse(String(plugin.getConfig('lyricDelays', '{}'))) || {}; } catch { return {}; } })(),
   };
 }
 
@@ -845,7 +848,7 @@ function hideSketch(): void {
  * introduction, the sketches shown beside the panel. `preview` gives a scene's sketch (an image URL), or null when
  * there is none.
  */
-export function settingsView(config: Config, onChange: (c: Config) => void, preview: (id: string) => Promise<string | null>, compact = false): HTMLElement {
+export function settingsView(config: Config, onChange: (c: Config) => void, preview: (id: string) => Promise<string | null>, compact = false, song?: { id: number; name: string }): HTMLElement {
   const view = el('div', `font:13px/1.6 ${FONT};color:inherit;` + (compact ? 'padding:0 0 28px' : 'padding:4px 2px 28px;max-width:660px'));
   view.dataset.bmvSettings = '';
 
@@ -922,46 +925,54 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   row('画质', segmented('quality', [['high', '高'], ['mid', '中'], ['low', '低']]), '画面卡顿时调低');
   // Picture delay, no slider: − and + step 10 ms (held, they repeat), the number can be typed, and back to zero.
   const lat = el('div', 'display:flex;align-items:center;gap:10px');
-  const stepper = el('div', `display:inline-flex;align-items:stretch;height:28px;border:1px solid ${TINT(0.35)};border-radius:8px;overflow:hidden`);
-  const latency = el('input', `width:64px;border:0;border-left:1px solid ${TINT(0.25)};border-right:1px solid ${TINT(0.25)};background:transparent;` +
-    'color:inherit;text-align:center;font:13px Consolas,monospace;outline:none;padding:0');
-  latency.inputMode = 'numeric';
-  latency.title = '可直接输入；↑ ↓ 键每次调整 10 ms';
-  const showLatency = () => { const ms = config.latencyMs; latency.value = (ms > 0 ? '+' : '') + ms; zero.style.visibility = ms ? 'visible' : 'hidden'; };
-  const setLatency = (ms: number) => {
-    ms = Math.max(LATENCY_MIN, Math.min(LATENCY_MAX, Math.round(ms)));
-    if (ms !== config.latencyMs) { config.latencyMs = ms; plugin.setConfig('latencyMs', ms); onChange(config); }
-    showLatency();
-  };
-  const step = (text: string, d: number, title: string) => {
-    const b = el('button', `width:30px;border:0;background:${TINT(0.1)};color:inherit;font:16px/1 ${FONT};cursor:pointer;padding:0`, text);
-    b.title = title;
-    // Held down, it repeats after 0.4 s, every 60 ms.
-    let timer = 0;
-    const stop = () => { clearTimeout(timer); timer = 0; };
-    b.onpointerdown = e => {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      b.setPointerCapture(e.pointerId);
-      setLatency(config.latencyMs + d);
-      const again = (wait: number) => { timer = window.setTimeout(() => { setLatency(config.latencyMs + d); again(60); }, wait); };
-      again(400);
+  /**
+   * A milliseconds stepper: − / the value (typed, or ↑ ↓ 10 ms) / +, held buttons repeating, and 归零. `get` / `set`
+   * read and store the value; `less` / `more` title the buttons.
+   */
+  const msStepper = (host: HTMLElement, get: () => number, set: (ms: number) => void, min: number, max: number, by: number, less: string, more: string) => {
+    const stepper = el('div', `display:inline-flex;align-items:stretch;height:28px;border:1px solid ${TINT(0.35)};border-radius:8px;overflow:hidden`);
+    const input = el('input', `width:64px;border:0;border-left:1px solid ${TINT(0.25)};border-right:1px solid ${TINT(0.25)};background:transparent;` +
+      'color:inherit;text-align:center;font:13px Consolas,monospace;outline:none;padding:0');
+    input.inputMode = 'numeric';
+    input.title = '可直接输入；↑ ↓ 键每次调整 10 ms';
+    const show = () => { const ms = get(); input.value = (ms > 0 ? '+' : '') + ms; zero.style.visibility = ms ? 'visible' : 'hidden'; };
+    const apply = (ms: number) => {
+      ms = Math.max(min, Math.min(max, Math.round(ms)));
+      if (ms !== get()) set(ms);
+      show();
     };
-    b.onpointerup = b.onpointercancel = b.onlostpointercapture = stop;
-    b.onclick = e => { if (e.detail === 0) setLatency(config.latencyMs + d); }; // Enter / Space on the focused button
-    return b;
+    const step = (text: string, d: number, title: string) => {
+      const b = el('button', `width:30px;border:0;background:${TINT(0.1)};color:inherit;font:16px/1 ${FONT};cursor:pointer;padding:0`, text);
+      b.title = title;
+      // Held down, it repeats after 0.4 s, every 60 ms.
+      let timer = 0;
+      const stop = () => { clearTimeout(timer); timer = 0; };
+      b.onpointerdown = e => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        b.setPointerCapture(e.pointerId);
+        apply(get() + d);
+        const again = (wait: number) => { timer = window.setTimeout(() => { apply(get() + d); again(60); }, wait); };
+        again(400);
+      };
+      b.onpointerup = b.onpointercancel = b.onlostpointercapture = stop;
+      b.onclick = e => { if (e.detail === 0) apply(get() + d); }; // Enter / Space on the focused button
+      return b;
+    };
+    input.onkeydown = e => {
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); apply(get() + (e.key === 'ArrowUp' ? 10 : -10)); }
+      else if (e.key === 'Enter') input.blur();
+      else if (e.key === 'Escape') { show(); input.blur(); }
+    };
+    input.onblur = () => { const ms = parseInt(input.value.replace(/[^\d-]/g, ''), 10); if (Number.isFinite(ms)) apply(ms); else show(); };
+    input.onfocus = () => input.select();
+    const zero = ghost('归零', () => apply(0));
+    stepper.append(step('−', -by, less), input, step('+', by, more));
+    host.append(stepper, el('span', 'font-size:12px;opacity:.7', 'ms'), zero);
+    show();
   };
-  latency.onkeydown = e => {
-    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); setLatency(config.latencyMs + (e.key === 'ArrowUp' ? 10 : -10)); }
-    else if (e.key === 'Enter') latency.blur();
-    else if (e.key === 'Escape') { showLatency(); latency.blur(); }
-  };
-  latency.onblur = () => { const ms = parseInt(latency.value.replace(/[^\d-]/g, ''), 10); if (Number.isFinite(ms)) setLatency(ms); else showLatency(); };
-  latency.onfocus = () => latency.select();
-  const zero = ghost('归零', () => setLatency(0));
-  stepper.append(step('−', -10, '画面提前 10 ms'), latency, step('+', 10, '画面推后 10 ms'));
-  lat.append(stepper, el('span', 'font-size:12px;opacity:.7', 'ms'), zero);
-  showLatency();
+  msStepper(lat, () => config.latencyMs, ms => { config.latencyMs = ms; plugin.setConfig('latencyMs', ms); onChange(config); },
+    LATENCY_MIN, LATENCY_MAX, 10, '画面提前 10 ms', '画面推后 10 ms');
   row('画面延迟', lat, compact ? '画面早于声音时调大（蓝牙耳机通常需 +150～250 ms），可在播放中实时调整' : '画面早于声音时调大（蓝牙耳机通常需 +150～250 ms）；也可在 MV 页右上角的设置中实时调整');
 
   section('界面');
@@ -970,6 +981,17 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
 
   // The optional aligner pack: its state follows the download while the page is open.
   section('歌词');
+  // On the MV page: this song's own lyric delay (some songs' lyrics run late or early on NetEase's side).
+  if (song) {
+    const box = el('div', 'display:flex;align-items:center;gap:10px');
+    const key = String(song.id);
+    msStepper(box, () => config.lyricDelays[key] ?? 0, ms => {
+      if (ms) config.lyricDelays[key] = ms; else delete config.lyricDelays[key];
+      plugin.setConfig('lyricDelays', JSON.stringify(config.lyricDelays));
+      onChange(config);
+    }, -3000, 3000, 50, '歌词提前 50 ms', '歌词推后 50 ms');
+    row('歌词延迟', box, `仅对当前歌曲（${song.name}）生效：歌词晚于演唱时调小，早于演唱时调大`);
+  }
   const pack = el('div', 'display:flex;align-items:center;gap:10px;flex-wrap:wrap');
   const packNote = el('div', 'font-size:12px;opacity:.6',
     '适用于仅有逐句歌词的歌曲：按音频识别每个字的演唱时间，替代按音节的估算。首次播放时在本机后台分析，耗时数秒至半分钟，结果缓存后复用。全程本地运行，不上传数据。');
