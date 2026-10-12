@@ -55,6 +55,8 @@ export interface SceneInit {
   /** Song title (the ink plate carves its first character into a seal). */
   title?: string;
   artists?: string[];
+  /** This play's random seed (the same song differs from play to play). */
+  seed?: number;
   /** The song's own crystal (src/sigil/crystal.ts). */
   crystal: CrystalSpec;
   /** The audio for the oscilloscope: both channels, 16-bit. */

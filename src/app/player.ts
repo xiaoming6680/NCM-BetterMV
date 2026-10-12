@@ -76,6 +76,12 @@ export class MvPlayer {
   /** The lines as shown (moved by the song's lyric delay). */
   private lines: PreparedSong['lines'] = [];
   style: Style | null = null;
+  /**
+   * This play's seed: plates, cameras, cuts and looks are drawn from it, so a song plays differently each time (the
+   * user: “还要随机性”). Reloading the same song for a settings change keeps it.
+   */
+  seed = 0;
+  private seedFor = -1;
 
   constructor(container: HTMLElement, pixelRatio?: number) {
     this.engine = new Engine(container, pixelRatio);
@@ -88,7 +94,11 @@ export class MvPlayer {
    * cycling through the given camera setups; `forceLook` (development) puts every section but the drops in that look.
    * `lyricDelay`: seconds this song's words show later (negative: earlier), the user's per-song setting.
    */
-  load(song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId> = new Set(), only?: { scene: SceneId; variants: string[] }, forceLook?: LookId | 'none', lyricDelay = 0): void {
+  load(song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId> = new Set(), only?: { scene: SceneId; variants: string[] }, forceLook?: LookId | 'none', lyricDelay = 0, seed?: number): void {
+    if (this.seedFor !== song.id || seed !== undefined) {
+      this.seed = seed ?? (Math.random() * 4294967296) >>> 0;
+      this.seedFor = song.id;
+    }
     this.unload();
     this.song = song;
     this.style = style;
@@ -102,10 +112,10 @@ export class MvPlayer {
     const lyrics = new LyricTrack(lines);
     const init: SceneInit = {
       cover: song.cover, coverPixels: song.coverPixels, coverSize: song.coverSize, palette: song.palette,
-      music, lyrics, aspect: this.engine.aspect, title: song.name, artists: song.artists, stereo: song.stereo, xyMusic: song.xyMusic, crystal: crystalSpec(song.analysis, song.id),
+      music, lyrics, aspect: this.engine.aspect, title: song.name, artists: song.artists, stereo: song.stereo, xyMusic: song.xyMusic, crystal: crystalSpec(song.analysis, song.id), seed: this.seed,
     };
     // Pure music (or a song whose lyrics NetEase doesn't have) gets no word plates.
-    let shots = planShots(music, style, song.id, { graphic: song.palette.graphic, lyrics: song.lines.length > 0 }, off);
+    let shots = planShots(music, style, this.seed, { graphic: song.palette.graphic, lyrics: song.lines.length > 0 }, off);
     if (only) shots.forEach((sh, i) => { sh.scene = only.scene; sh.variant = only.variants[i % only.variants.length]; });
     else if (song.xyMusic) shots = scopeOnly(shots);
     const look = style.look;
@@ -118,7 +128,7 @@ export class MvPlayer {
     };
     for (const id of new Set(shots.map(s => s.scene))) this.scenes[id] = make[id]();
     const sections = song.analysis.sections;
-    const looks = song.xyMusic || forceLook === 'none' ? [] : forceLook ? sections.map(s => (s.label === 'drop' ? null : forceLook)) : planLooks(sections, style, song.id, off);
+    const looks = song.xyMusic || forceLook === 'none' ? [] : forceLook ? sections.map(s => (s.label === 'drop' ? null : forceLook)) : planLooks(sections, style, this.seed, off);
     this.engine.setLooks(song.palette, song.lines.map(l => l.text + (l.translation ?? '')).join(''));
     this.director = new Director(style, shots, this.scenes, music, lyrics, song.palette, init.crystal, song.cover, !only && song.xyMusic, looks);
     const badge = this.director.crystal;

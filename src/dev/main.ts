@@ -97,7 +97,7 @@ async function main() {
   // ?plate=ridges&variants=front,low: every shot on one plate (for reviewing a plate).
   const plate = params.get('plate') as SceneId | null;
   const off = new Set((params.get('off') || '').split(',').filter(Boolean) as SceneId[]);
-  player.load(song, style, off, plate ? { scene: plate, variants: (params.get('variants') || 'front').split(',') } : undefined, (params.get('look') as LookId | 'none' | null) ?? undefined);
+  player.load(song, style, off, plate ? { scene: plate, variants: (params.get('variants') || 'front').split(',') } : undefined, (params.get('look') as LookId | 'none' | null) ?? undefined, 0, params.get('seed') ? Number(params.get('seed')) : undefined);
   cover.textContent = '准备画面…';
   await player.warm(nextTick);
   window.addEventListener('resize', () => player.resize());
