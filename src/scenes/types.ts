@@ -6,7 +6,7 @@ import type { Fx } from '../render/engine.ts';
 import type { Section } from '../types.ts';
 import type { CrystalSpec } from '../sigil/crystal.ts';
 
-export type SceneId = 'relief' | 'shatter' | 'diorama' | 'bokeh' | 'tunnel' | 'drive' | 'kaleido' | 'flip' | 'rings' | 'poster' | 'ridges' | 'halftone' | 'particles' | 'typewall' | 'ink' | 'crystal' | 'cards' | 'debug' | 'subdivide' | 'align' | 'scope' | 'vinyl' | 'clouds';
+export type SceneId = 'relief' | 'shatter' | 'diorama' | 'bokeh' | 'tunnel' | 'drive' | 'kaleido' | 'flip' | 'rings' | 'poster' | 'ridges' | 'halftone' | 'particles' | 'typewall' | 'ink' | 'crystal' | 'cards' | 'debug' | 'subdivide' | 'align' | 'scope' | 'vinyl' | 'clouds' | 'city' | 'aurora' | 'canvas' | 'pillars';
 
 /** A section redrawn in another medium (src/render/looks.ts): a riso print, Hi-bit pixels, characters on a tube. */
 export type LookId = 'riso' | 'hibit' | 'ascii';
@@ -77,6 +77,11 @@ export interface MvScene {
   readonly camera: THREE.PerspectiveCamera;
   update(ctx: FrameCtx): void;
   resize(aspect: number): void;
+  /**
+   * Every frame, on screen or not: a plate whose picture builds up over the whole song (the canvas) keeps it up to t,
+   * so coming back to it doesn't stall on a minute of catching up.
+   */
+  keepUp?(t: number, renderer: THREE.WebGLRenderer): void;
 }
 
 /** Small deterministic PRNG (mulberry32). */

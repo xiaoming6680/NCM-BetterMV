@@ -28,6 +28,10 @@ import { AlignScene } from '../scenes/align.ts';
 import { ScopeScene } from '../scenes/scope.ts';
 import { Vinyl } from '../scenes/vinyl.ts';
 import { Clouds } from '../scenes/clouds.ts';
+import { City } from '../scenes/city.ts';
+import { Aurora } from '../scenes/aurora.ts';
+import { CanvasScene } from '../scenes/canvas.ts';
+import { Pillars } from '../scenes/pillars.ts';
 import { crystalSpec } from '../sigil/crystal.ts';
 import type { MvScene, SceneId, SceneInit, Shot } from '../scenes/types.ts';
 import type { Style } from '../style/style.ts';
@@ -124,7 +128,8 @@ export class MvPlayer {
       tunnel: () => new Tunnel(init, look), drive: () => new Drive(init), kaleido: () => new Kaleido(init, look), flip: () => new Flip(init, look),
       rings: () => new Rings(init, look), poster: () => new Poster(init, look), ridges: () => new Ridges(init, look), halftone: () => new Halftone(init, look), particles: () => new Particles(init, look),
       typewall: () => new TypeWall(init), ink: () => new Ink(init, song.name), crystal: () => new CrystalScene(init), cards: () => new CardsScene(init), debug: () => new DebugScene(init), subdivide: () => new SubdivideScene(init, look), align: () => new AlignScene(init), scope: () => new ScopeScene(init),
-      vinyl: () => new Vinyl(init, look), clouds: () => new Clouds(init, look),
+      vinyl: () => new Vinyl(init, look), clouds: () => new Clouds(init, look), city: () => new City(init, look), aurora: () => new Aurora(init, look),
+      canvas: () => new CanvasScene(init, look, init.seed), pillars: () => new Pillars(init, look, init.seed),
     };
     for (const id of new Set(shots.map(s => s.scene))) this.scenes[id] = make[id]();
     const sections = song.analysis.sections;
@@ -170,6 +175,7 @@ export class MvPlayer {
     (this.scenes.align as AlignScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.scope as ScopeScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.clouds as Clouds | undefined)?.setViewport(canvas.width, canvas.height, pr);
+    (this.scenes.city as City | undefined)?.setViewport(canvas.width, canvas.height);
     this.director?.overlay.resize(this.engine.aspect);
     this.director?.overlay.setViewport(canvas.width, canvas.height, pr);
   }
@@ -179,6 +185,7 @@ export class MvPlayer {
     if (!this.director) return null;
     this.director.overlay.showBadge = this.hud.visible;
     const { scene, fx, shot, transition } = this.director.frame(t, dt, this.engine.aspect);
+    for (const s of Object.values(this.scenes)) s?.keepUp?.(t, this.engine.renderer);
     this.engine.render(scene.scene, scene.camera, fx, t, transition, this.director.overlay);
     const info = this.music!.at(t);
     this.hud.update(shot, this.director.shots.indexOf(shot), this.director.shots.length, info.bar + 1, info.bpm);

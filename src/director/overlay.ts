@@ -132,8 +132,10 @@ export class MgOverlay {
     };
     const big = sec.label === 'chorus' || sec.label === 'drop';
 
-    // Bursts from the middle on downbeats of big sections (every beat in a drop).
-    if (busy && big && shot.scene !== 'drive') {
+    // Bursts from the middle on downbeats of big sections (every beat in a drop). Not over the push tunnel or the
+    // places filmed like a film (the city, the aurora, the pillars, the canvas): a hairline shape over them reads as a
+    // sticker on the lens.
+    if (busy && big && shot.scene !== 'drive' && shot.scene !== 'city' && shot.scene !== 'aurora' && shot.scene !== 'pillars' && shot.scene !== 'canvas') {
       const every = sec.label === 'drop' && !this.soft ? 1 : m.meter;
       const n = Math.floor(info.pos / every);
       for (let q = 0; q < 2; q++) {
@@ -272,7 +274,7 @@ export class MgOverlay {
     const idx = shot.sectionIndex, sec = shot.section;
     const age = t - sec.start, life = beat * this.music.meter * 1.6;
     // (The type wall and the poster set their own type up there.)
-    const show = idx > 0 && age >= 0 && age < life && shot.scene !== 'typewall' && shot.scene !== 'poster';
+    const show = vis > 0 && idx > 0 && age >= 0 && age < life && shot.scene !== 'typewall' && shot.scene !== 'poster';
     if (!show) {
       if (this.card) this.card.label.visible = false;
       return;

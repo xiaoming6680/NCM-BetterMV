@@ -40,6 +40,11 @@ const PLAN: Record<SceneId, { style: string; variants: string; in: SectionLabel;
   debug: { style: 'pulse', variants: 'orbit', in: 'chorus', at: 0.15 },
   vinyl: { style: 'pulse', variants: 'tilt', in: 'verse', at: 0.35 },
   clouds: { style: 'ballad', variants: 'over', in: 'chorus', at: 0.35 },
+  city: { style: 'pulse', variants: 'canyon', in: 'chorus', at: 0.35 },
+  aurora: { style: 'ballad', variants: 'lake', in: 'chorus', at: 0.35 },
+  // (These two were picked against BMV_PREVIEW_SONG=403710535; the canvas from above near the end, mostly painted.)
+  canvas: { style: 'pulse', variants: 'map', in: 'outro', at: 0.9 },
+  pillars: { style: 'pulse', variants: 'orbit', in: 'chorus', at: 0.55 },
 };
 
 /** The looks: a plate drawn in each. */

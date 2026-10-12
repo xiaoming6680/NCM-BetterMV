@@ -39,7 +39,7 @@ function cutTimes(music: Music, style: Style, section: Section, next: Section | 
   return cuts;
 }
 
-const TAKE_TURNS = new Set(['verse', 'break', 'bridge']);
+const TAKE_TURNS = new Set(['verse', 'chorus', 'break', 'bridge']);
 
 /**
  * The plates a section may use once the ones the user turned off (the settings page) are taken out. A section left
@@ -103,7 +103,11 @@ export function planShots(music: Music, style: Style, songSeed: number, song: So
     }
   });
   joinRuns(shots, barLen);
-  if (!off.has('crystal')) placeCrystal(shots, music, style, songSeed);
+  // Most plays end on the canvas rising over the cover this song has painted; the others on the crystal gathering.
+  // (Not under ink: a painting in colour on a dark canvas would end a piece on rice paper in another world.)
+  const finale = style.id !== 'ink' && !off.has('canvas') && rng((songSeed ^ 0xf1a1e) >>> 0)() < 0.6;
+  if (!off.has('crystal')) placeCrystal(shots, music, style, songSeed, !finale);
+  if (finale) placeFinale(shots, music, songSeed);
   return off.has('cards') ? shots : placeOpening(shots, music, songSeed);
 }
 
@@ -173,7 +177,22 @@ function carve(shots: Shot[], music: Music, scene: SceneId, from: number, to: nu
   shots.push(...out);
 }
 
-function placeCrystal(shots: Shot[], music: Music, style: Style, songSeed: number): Shot[] {
+/**
+ * The canvas over the end of the song: from the start of a closing outro (if it is between 6 and 45 seconds long),
+ * else the last 12 seconds or so, in one shot — the brush finishes and the camera rises over the whole picture.
+ */
+function placeFinale(shots: Shot[], music: Music, songSeed: number): void {
+  const sections = music.a.sections, downs = music.downbeats;
+  if (!sections.length) return;
+  const end = sections[sections.length - 1].end, outro = music.ending;
+  const from = Number.isFinite(outro) && end - outro >= 6 && end - outro <= 45 ? outro : downs[Math.max(0, lastIndex(downs, end - 12))] ?? end - 12;
+  const si = Math.max(0, sections.findIndex(s => from >= s.start - 0.05 && from < s.end));
+  const variants = ['chase', 'high', 'side'];
+  carve(shots, music, 'canvas', from, end, si, variants[Math.floor(rng((songSeed ^ 0xca5) >>> 0)() * variants.length)], songSeed);
+}
+
+/** `ending`: the crystal also gathers over the last bars (not when the canvas closes the song). */
+function placeCrystal(shots: Shot[], music: Music, style: Style, songSeed: number, ending = true): Shot[] {
   const sections = music.a.sections, downs = music.downbeats;
   const crystal = (from: number, to: number, sectionIndex: number, variant: string) => carve(shots, music, 'crystal', from, to, sectionIndex, variant, songSeed);
   if (style.transitions.dropPunch) {
@@ -185,7 +204,7 @@ function placeCrystal(shots: Shot[], music: Music, style: Style, songSeed: numbe
       crystal(downs[last], s.end, i, 'orbit');
     });
   }
-  if (style.id !== 'ink' && sections.length) {
+  if (ending && style.id !== 'ink' && sections.length) {
     const end = sections[sections.length - 1].end, bars = downs.length >= 5 ? 4 : 2;
     const from = downs[Math.max(0, lastIndex(downs, end - 0.1) - bars + 1)];
     const si = Math.max(0, sections.findIndex(s => from >= s.start && from < s.end));
@@ -274,8 +293,8 @@ export function planLooks(sections: Section[], style: Style, songSeed: number, o
  */
 const NO_CHARACTERS: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'halftone', 'shatter', 'ink', 'clouds', 'bokeh']);
 
-/** Plates that show the cover itself large (its white is the picture's white). */
-const COVER_PLATES: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'shatter', 'align']);
+/** Plates that show the cover itself large (its white is the picture's white; the canvas paints it). */
+const COVER_PLATES: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'shatter', 'align', 'canvas']);
 
 const { zoom, spin, whip } = TransitionKind;
 /**
@@ -287,7 +306,7 @@ const MOTION: Record<SceneId, TransitionKind[]> = {
   kaleido: [spin], rings: [spin], shatter: [spin, zoom], flip: [whip, spin],
   poster: [whip], typewall: [whip], halftone: [whip, zoom], ridges: [whip, zoom], diorama: [whip, zoom], ink: [TransitionKind.ink],
   crystal: [zoom, spin], cards: [zoom], debug: [whip, zoom], scope: [zoom, whip], subdivide: [spin, zoom], align: [whip, spin],
-  vinyl: [spin, zoom], clouds: [zoom],
+  vinyl: [spin, zoom], clouds: [zoom], city: [zoom], aurora: [zoom], canvas: [zoom], pillars: [spin, zoom],
 };
 const SOFT: TransitionKind[] = [zoom, TransitionKind.matte, TransitionKind.iris, spin];
 
@@ -514,13 +533,14 @@ export class Director {
   }
 
   /**
-   * The section's look on this shot. Not on the opening cards or the crystal (they are the song's own marks). Some
+   * The section's look on this shot. Not on the opening cards or the crystal (they are the song's own marks), nor on
+   * the canvas (a medium of its own: printed over, its bare weave turned to a field of noise). Some
    * plates are on the tube without the characters (NO_CHARACTERS).
    * Trails, the duotone and the negative fight the media (a print has no glow), so they are left out under one.
    */
   private applyLook(shot: Shot, fx: Fx): void {
     const look = this.looks[shot.sectionIndex];
-    if (!look || shot.scene === 'cards' || shot.scene === 'crystal') return;
+    if (!look || shot.scene === 'cards' || shot.scene === 'crystal' || shot.scene === 'canvas') return;
     if (look === 'riso') { fx.riso = 1; fx.bloom *= 0.5; }
     else if (look === 'hibit') { fx.hibit = 1; }
     else { fx.crt = 1; if (!NO_CHARACTERS.has(shot.scene)) fx.ascii = 1; }
