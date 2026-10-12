@@ -343,7 +343,11 @@ const echoShader = /* glsl */ `
     vec3 now = texture2D(tNew, vUv).rgb;
     // The old frame drifts outward a touch each frame, so trails stream away from the centre.
     vec3 old = texture2D(tOld, (vUv - 0.5) * (1.0 - uDrift) + 0.5).rgb * uDecay;
-    gl_FragColor = vec4(max(now, old), 1.0);
+    // (This is the one loop in the chain: a stray non-finite or runaway pixel from a plate would be kept and spread
+    // by the drift until the whole frame is white or black. Held to finite light here.)
+    vec3 c = max(now, old);
+    if (any(isnan(c)) || any(isinf(c))) c = vec3(0.0);
+    gl_FragColor = vec4(min(c, vec3(16.0)), 1.0);
   }`;
 
 /**
