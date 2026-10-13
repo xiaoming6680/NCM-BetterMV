@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, inOutCubic, lerp, rng, smooth } from './types.ts';
 import { LyricRig } from './lyricRig.ts';
+import { voiceFaces } from './lyricBlock.ts';
 
 const LAYERS = 6;
 const GAP = 0.85;
@@ -269,6 +270,7 @@ export class Diorama implements MvScene {
     this.scene.add(this.dust);
 
     this.rig = new LyricRig(palette, 'poem');
+    this.rig.faces = voiceFaces('ballad', init.seed);
     this.rig.frame = { vh: 7.5, vw: 10 };
     this.rig.depthTest = true;
     this.rig.place = (root, st) => { root.position.set((st.index % 2 ? 1 : -1) * SIZE * 0.33, 0.2, -GAP * 0.5); };

@@ -3,11 +3,12 @@
 // work over animation frames (the client blocks Web Workers).
 //
 // Pipeline: STFT (100 fps) → onset functions → tempogram + Viterbi tempo path → DP beat tracking → constant-tempo
-// lock + robust smoothing of the grid → beat features → bar phase / meter → sections → hits and envelopes.
+// lock + robust smoothing of the grid → beat features → bar phase / meter → sections → hits and envelopes → the
+// tempo as it is cited (the grid's or twice it).
 import type { Analysis, Envelopes, LyricLine } from '../types.ts';
 import { computeSpectra, FPS } from './spectrum.ts';
 import { computeOnsets } from './onset.ts';
-import { pathTempo, tempoFactor, tempogram, tempoPath } from './tempo.ts';
+import { namedTempo, pathTempo, tempoFactor, tempogram, tempoPath } from './tempo.ts';
 import { trackBeats, regularizeBeats, lockConstantTempo, cleanBeats } from './beats.ts';
 import { beatFeatures } from './features.ts';
 import { detectMeter } from './meter.ts';
@@ -28,6 +29,12 @@ export interface AnalyzeOptions {
    * matches no relative of it is ignored.
    */
   bpmHint?: number;
+  /**
+   * NetEase's own chorus mark (/api/song/chorus: the 副歌 it plays as the song's highlight), seconds: on 11 of 12 songs
+   * annotated by hand it lies on the chorus or the drop, often starting a beat or a few seconds early. Used only where
+   * the sections found have no chorus or drop over it (src/analysis/sections.ts).
+   */
+  chorusHint?: [number, number];
 }
 
 /** Yields progress 0..1 roughly every sliceMs of work; returns the finished Analysis. */
@@ -57,7 +64,12 @@ export function* analyzeSteps(samples: Float32Array, sampleRate: number, opts: A
   let curve = tempoPath(tg);
   // Octave from the hint; a dotted pulse (drum & bass) moved to the beat.
   const factor = tempoFactor(pathTempo(tg, curve), opts.bpmHint, tg);
-  if (factor !== 1) curve = tempoPath(tg, pathTempo(tg, curve) * factor, 0.3);
+  if (factor !== 1) {
+    // A path sent to another tempo can settle on a strong peak a fifth of the way off it (4∶5); held closer then.
+    const target = pathTempo(tg, curve) * factor;
+    curve = tempoPath(tg, target, 0.3);
+    if (Math.abs(Math.log(pathTempo(tg, curve) / target)) > Math.log(1.06)) curve = tempoPath(tg, target, 0.12);
+  }
   yield* pause(0.84);
   const rawBeats = yield* trackBeats(nov, curve.period, slicer, 0.84, 0.88);
   // Beat times: DP frames minus the novelty's latency against the actual attack.
@@ -82,7 +94,7 @@ export function* analyzeSteps(samples: Float32Array, sampleRate: number, opts: A
   yield* pause(0.91);
   const rmsLin = sqrtArr(spec.power);
   const hits = yield* detectHits(ons, fps, levelDb, rmsLin, beats, slicer, 0.91, 0.95);
-  const sections = findSections({ features: feats, beats, bars: makeBars(beats, beatInBar, duration), duration, rms: rmsLin, fps, lyrics, hits, low: spec.low, high: spec.high });
+  const sections = findSections({ features: feats, beats, bars: makeBars(beats, beatInBar, duration), duration, rms: rmsLin, fps, lyrics, hits, low: spec.low, high: spec.high, chorus: opts.chorusHint });
   yield* pause(0.97);
 
   // Envelopes: amplitude with a 10 ms attack / 90 ms release follower, each divided by its own 99th percentile.
@@ -96,11 +108,13 @@ export function* analyzeSteps(samples: Float32Array, sampleRate: number, opts: A
   const highEnv = follow(sqrtArr(spec.high));
   yield* pause(0.99);
   const env: Envelopes = { fps, rms: rmsEnv, low: lowEnv, mid: midEnv, high: highEnv, onset: normalizeQuantile(ons.flux) };
+  const bpm = dominantTempo(beats);
   yield 1;
   return {
     version: ANALYSIS_VERSION,
     duration,
-    bpm: dominantTempo(beats),
+    bpm,
+    namedBpm: Math.round(namedTempo(bpm, beats, beatInBar, bars.meter, hits.kick, hits.snare, levelDb, fps) * 1000) / 1000,
     meter: bars.meter,
     beats: beats.map(round4),
     beatInBar,

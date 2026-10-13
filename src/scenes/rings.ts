@@ -5,11 +5,14 @@
 // ring turns a notch as each word begins and the sung words trail away round it; the translation round the bottom.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, inOutCubic, lerp, outExpo, rng } from './types.ts';
+import { clamp01, inOutCubic, lerp, outExpo, rng, snap } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
 import { LyricOrbit } from './lyricSpace.ts';
+import { voiceOpts } from './lyricBlock.ts';
+import { COLS, Spectrogram } from './viz.ts';
 
 const SEGMENTS = [3, 6, 8, 12, 16, 24, 32, 48, 64];
+const NB = 64;
 const discVertex = /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 const discFragment = /* glsl */ `
   uniform sampler2D uCover; uniform float uGlow; varying vec2 vUv;
@@ -28,9 +31,12 @@ export class Rings implements MvScene {
   private resolution = new THREE.Vector2(1920, 1080);
   private pixelRatio = 1;
   private colors: Array<[number, number, number]>;
+  private spec: Spectrogram;
+  private level = new Float32Array(NB);
 
   constructor(private init: SceneInit, private look: 'pulse' | 'ballad' = 'pulse') {
     const { palette } = init;
+    this.spec = Spectrogram.of(init.stereo, init.music.duration + 8, NB, 30);
     this.scene.background = palette.ink.clone();
     const c = (x: THREE.Color): [number, number, number] => [x.r, x.g, x.b];
     this.colors = [c(palette.paper), c(palette.accent), c(palette.signal)];
@@ -39,7 +45,7 @@ export class Rings implements MvScene {
       uniforms: { uCover: { value: init.cover }, uGlow: { value: 0 } },
     }));
     this.scene.add(this.disc, this.lines.mesh);
-    this.orbit = new LyricOrbit(palette, { style: look === 'ballad' ? 'poem' : 'hook', em: 0.55, radius: 3.2, mode: 'flat', trans: { em: 0.26, radius: 2.3 } });
+    this.orbit = new LyricOrbit(palette, { style: look === 'ballad' ? 'poem' : 'hook', em: 0.55, radius: 3.2, mode: 'flat', trans: { em: 0.26, radius: 2.3 }, ...voiceOpts(look, init.seed) });
     this.orbit.group.position.z = 0.15;
     this.scene.add(this.orbit.group);
     this.resize(init.aspect);
@@ -53,6 +59,23 @@ export class Rings implements MvScene {
   setViewport(width: number, height: number, pixelRatio: number): void {
     this.resolution.set(width, height);
     this.pixelRatio = pixelRatio;
+  }
+
+  keepUp(t: number): void {
+    this.spec.prefetch(t, 0.8);
+  }
+
+  /** Each band's peak of the last 0.15 s, falling away over it (a pure function of t), stretched to 0..1. */
+  private levels(t: number): Float32Array {
+    const c0 = Math.floor(t * COLS), out = this.level;
+    if (!this.init.stereo) return out.fill(0.5);
+    out.fill(0);
+    for (let k = 0; k < 9; k++) {
+      const col = this.spec.column(c0 - k);
+      for (let b = 0; b < NB; b++) out[b] = Math.max(out[b], col[b] - k * 0.03);
+    }
+    for (let b = 0; b < NB; b++) out[b] = clamp01((out[b] - 0.35) / 0.6);
+    return out;
   }
 
   private arc(r: number, z: number, a0: number, a1: number, w: number, rgb: [number, number, number], I: number): void {
@@ -77,17 +100,26 @@ export class Rings implements MvScene {
     const L = this.lines;
     L.clear();
     const beatI = Math.floor(info.pos), ph = info.pos - beatI;
+    // The dial is an equaliser too: the rings run from the bass inside to the treble outside, and each segment is its
+    // own slice of its ring's bands (mirrored round, so the dial stays symmetrical): as bright, as thick and as far
+    // out as that slice is loud.
+    const lv = this.levels(t);
     for (let ring = 0; ring < 9; ring++) {
       const n = SEGMENTS[(ring + Math.floor(random() * 3)) % SEGMENTS.length];
       const r = 1.05 + ring * 0.33, z = -ring * 0.12;
       const dir = ring % 2 ? 1 : -1;
       const step = (2 * Math.PI) / n;
       // Pulse: one segment per beat, snapping; ballad: a slow steady turn.
-      const turn = soft ? t * 0.08 * dir * (1 + ring * 0.1) : dir * step * (beatI + outExpo(clamp01(ph / 0.25)));
+      const turn = soft ? t * 0.08 * dir * (1 + ring * 0.1) : dir * step * (beatI + snap(ph / 0.25));
       const rgb = this.colors[ring % 3 === 2 ? 2 : ring % 3 === 1 ? 1 : 0];
       const I = (0.35 + 0.08 * ring) * (1 + (ring < 3 ? kick * 1.2 : 0)) * (0.8 + energy * 0.4);
       const fill = 0.62 + 0.25 * Math.sin(ring * 1.7 + random() * 6);
-      for (let s = 0; s < n; s++) this.arc(r, z, turn + s * step, turn + s * step + step * fill, ring === 0 ? 2.2 : 1.2, rgb, I);
+      const b0 = Math.floor((ring / 9) * NB), bw = NB / 9;
+      for (let s = 0; s < n; s++) {
+        const m = Math.abs(((s + 0.5) / n) * 2 - 1); // 0 at one side of the ring, 1 at the other, mirrored
+        const v = lv[Math.min(NB - 1, Math.floor(b0 + m * (bw - 1)))];
+        this.arc(r + v * 0.14, z, turn + s * step, turn + s * step + step * fill, (ring === 0 ? 2.2 : 1.2) * (0.7 + 1.6 * v), rgb, I * (0.3 + 2.2 * v * v));
+      }
     }
     // Sequencer: 16 steps round the outside; the current step and the downbeats glow.
     const R = 4.35, step16 = Math.floor(info.barPhase * 16);

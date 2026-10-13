@@ -1,27 +1,37 @@
 // Subdivide: the sphere of the user's 《△ 三角》 (an icosahedron split every half beat until it is a ball, then
-// breathing with the bass), grown from this song's crystal. Every half beat (every beat in ballads) each triangle
+// breathing with the bass), grown from a solid the song's tempo picks. Every half beat (every beat in ballads) each triangle
 // splits in four: the new vertices appear at the old edges' middles — the shape unchanged — then spring out towards
 // the sphere within a sixth of a second, the new edges flashing in the signal colour. At the last level it is a
 // ball that breathes with the bass, a ripple running over it on each kick. Beside it, the level and the count.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, lerp, rng, smooth } from './types.ts';
-import { crystalPoly } from '../sigil/crystal.ts';
+import { SEEDS, type Vec } from '../sigil/polyhedron.ts';
 import { textMesh } from '../render/text.ts';
 import { LyricOrbit } from './lyricSpace.ts';
+import { voiceOpts } from './lyricBlock.ts';
+import { COLS, Spectrogram } from './viz.ts';
 
 type V = [number, number, number];
 const MAX_TRIS = 70000;
 
+// Once whole, the ball is the song's spectrum: latitude is the band (the bass round the equator, the treble at the
+// poles), and every facet stands out as far as its band is loud, its edges burning brighter.
+const NB = 64;
 const vertexShader = /* glsl */ `
   attribute vec3 aFrom, aBary, aNew;
-  uniform float uGrow, uBreath, uRipple, uRippleAt;
+  uniform float uGrow, uBreath, uRipple, uRippleAt, uSpecOn;
+  uniform sampler2D tSpec;
   varying vec3 vBary, vNew, vN, vView, vLocal;
+  varying float vLoud;
   void main() {
     vec3 p = mix(aFrom, position, uGrow);
     vec3 d = normalize(p);
     // Breathing, and a ripple from the top on each kick.
     float r = 1.0 + uBreath + uRipple * exp(-pow((acos(clamp(d.y, -1.0, 1.0)) - uRippleAt) * 3.0, 2.0));
+    float k = abs(d.y);
+    vLoud = texture2D(tSpec, vec2((k * ${(NB - 1).toFixed(1)} + 0.5) / ${NB.toFixed(1)}, 0.5)).r * uSpecOn;
+    r += 0.16 * vLoud;
     p *= r;
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
     vN = normalize(normalMatrix * d);
@@ -36,16 +46,17 @@ const fragmentShader = /* glsl */ `
   uniform vec3 uTint, uEdge, uGlowCol;
   uniform float uGlow, uLine;
   varying vec3 vBary, vNew, vN, vView, vLocal;
+  varying float vLoud;
   void main() {
     vec3 n = normalize(vN), v = normalize(vView);
     float facing = abs(dot(n, v)), fres = pow(1.0 - facing, 2.0);
     vec3 fw = fwidth(vBary);
-    vec3 e = 1.0 - smoothstep(vec3(0.0), fw * uLine, vBary);
+    vec3 e = 1.0 - smoothstep(vec3(0.0), fw * uLine * (1.0 + 0.3 * vLoud), vBary);
     float wire = max(max(e.x, e.y), e.z);
     float fresh = max(max(e.x * vNew.x, e.y * vNew.y), e.z * vNew.z);
     vec3 cover = texture2D(uCover, vLocal.xy * 0.4 + 0.5).rgb;
-    vec3 col = cover * (0.1 + 0.2 * facing) + uTint * fres * 0.7;
-    col += uEdge * wire * (0.45 + 0.4 * facing) + uGlowCol * fresh * uGlow * 2.0;
+    vec3 col = cover * (0.1 + 0.2 * facing + 0.2 * vLoud * vLoud) + uTint * fres * 0.7;
+    col += mix(uEdge, uGlowCol, vLoud) * wire * (0.45 + 0.4 * facing) * (0.55 + 0.7 * vLoud) + uGlowCol * fresh * uGlow * 2.0;
     gl_FragColor = vec4(col, 1.0);
   }`;
 
@@ -59,13 +70,24 @@ export class SubdivideScene implements MvScene {
   private labels: Array<THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>> = [];
   private orbit: LyricOrbit;
   private readonly soft: boolean;
+  private spec: Spectrogram;
+  private specData = new Uint8Array(NB);
+  private specTex = new THREE.DataTexture(this.specData, NB, 1, THREE.RedFormat, THREE.UnsignedByteType);
 
   constructor(private init: SceneInit, look: 'pulse' | 'ballad' = 'pulse') {
     const { palette } = init;
     this.soft = look === 'ballad';
+    this.spec = Spectrogram.of(init.stereo, init.music.duration + 8, NB, 30);
+    this.specTex.minFilter = this.specTex.magFilter = THREE.LinearFilter;
+    this.specTex.needsUpdate = true;
     this.scene.background = palette.ink.clone();
-    // Level 0: the crystal's faces as triangles (fans). Each level splits every triangle in four.
-    const poly = crystalPoly(init.crystal);
+    // Level 0: a Platonic solid picked by the tempo, slow songs round and fast ones sharp (under 80 BPM the
+    // dodecahedron, under 100 the icosahedron, under 115 the octahedron, under 130 the cube, faster — or three beats
+    // in a bar — the tetrahedron), in the unit sphere, its faces as triangles. Each level splits every triangle in four.
+    const a = init.music.a, bpm = a.bpm;
+    const poly = SEEDS[a.meter === 3 ? 'T' : bpm < 80 ? 'D' : bpm < 100 ? 'I' : bpm < 115 ? 'O' : bpm < 130 ? 'C' : 'T']();
+    const reach = Math.max(...poly.v.map(v => Math.hypot(v[0], v[1], v[2])));
+    poly.v = poly.v.map(v => [v[0] / reach, v[1] / reach, v[2] / reach] as Vec);
     let tris: Array<[V, V, V]> = [];
     // (Faces of more than three sides are cut round their centre, not fanned from a corner: fans leave slivers that
     // subdivide into a visible crease.)
@@ -107,12 +129,13 @@ export class SubdivideScene implements MvScene {
       uniforms: {
         uCover: { value: init.cover }, uTint: { value: palette.signal.clone() }, uEdge: { value: palette.paper.clone() }, uGlowCol: { value: palette.signal.clone() },
         uGlow: { value: 0 }, uLine: { value: 1.2 }, uGrow: { value: 1 }, uBreath: { value: 0 }, uRipple: { value: 0 }, uRippleAt: { value: 0 },
+        tSpec: { value: this.specTex }, uSpecOn: { value: 0 },
       },
     }));
     this.mesh.frustumCulled = false;
     this.scene.add(this.mesh);
     this.labels = this.levels.map((l, i) => {
-      const m = textMesh(`LOD ${i} · ${l.tris.toLocaleString('en').replace(/,/g, ' ')} △`, 'bold', 0.13, { px: 96, halo: 'dark' });
+      const m = textMesh(`LOD ${i}\u2003${l.tris.toLocaleString('en').replace(/,/g, ' ')} △`, 'bold', 0.13, { px: 96, halo: 'dark' });
       m.material.toneMapped = false;
       m.visible = false;
       this.scene.add(m);
@@ -120,7 +143,7 @@ export class SubdivideScene implements MvScene {
     });
     // The words are written round the ball's waist, each on the side facing the camera as it is sung, and the ball's
     // turning carries them round.
-    this.orbit = new LyricOrbit(palette, { style: this.soft ? 'poem' : 'hook', em: 0.17, radius: 1.32, mode: 'band', trans: { em: 0.085, radius: 1.32 } });
+    this.orbit = new LyricOrbit(palette, { style: this.soft ? 'poem' : 'hook', em: 0.17, radius: 1.32, mode: 'band', trans: { em: 0.085, radius: 1.32 }, ...voiceOpts(look, init.seed) });
     this.scene.add(this.orbit.group);
     this.resize(init.aspect);
   }
@@ -149,6 +172,21 @@ export class SubdivideScene implements MvScene {
     this.camera.updateProjectionMatrix();
   }
 
+  keepUp(t: number): void {
+    this.spec.prefetch(t, 0.8);
+  }
+
+  /** Each band's peak of the last 0.15 s, falling away over it (a pure function of t), stretched to 0..1. */
+  private loudness(t: number): void {
+    const c0 = Math.floor(t * COLS), out = this.specData;
+    for (let b = 0; b < NB; b++) {
+      let v = 0;
+      for (let k = 0; k < 9; k++) v = Math.max(v, this.spec.column(c0 - k)[b] - k * 0.03);
+      out[b] = Math.round(clamp01((v - 0.35) / 0.6) * 255);
+    }
+    this.specTex.needsUpdate = true;
+  }
+
   update(ctx: FrameCtx): void {
     const { t, music, shot } = ctx;
     const len = Math.max(0.2, shot.end - shot.start), k = clamp01(ctx.shotT / len);
@@ -164,6 +202,9 @@ export class SubdivideScene implements MvScene {
     u.uLine.value = lerp(1.4, 0.9, level / Math.max(1, this.levels.length - 1));
     const low = music.env('low', t);
     u.uBreath.value = done ? 0.06 * low : 0;
+    // The spectrum comes in as the last level settles.
+    this.loudness(t);
+    u.uSpecOn.value = done && this.init.stereo ? smooth(age / 0.6) * (this.soft ? 0.6 : 1) : 0;
     const kick = music.hitsBetween('kick', t - 0.6, t + 1e-3).filter(h => h[1] > 0.35).pop();
     const ka = kick ? t - kick[0] : 9;
     u.uRipple.value = done ? 0.08 * Math.exp(-ka / 0.35) : 0;

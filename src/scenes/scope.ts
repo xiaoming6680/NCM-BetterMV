@@ -13,6 +13,7 @@ import { clamp01, rng } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
 import { BeamBatch } from '../render/beam.ts';
 import { LyricRig } from './lyricRig.ts';
+import { voiceFaces } from './lyricBlock.ts';
 import { textMesh } from '../render/text.ts';
 
 const W = 7.2, H = 4.5; // the screen, world units (16:10), at the origin facing +z
@@ -52,10 +53,11 @@ export class ScopeScene implements MvScene {
       m.position.set(-W / 2, -H / 2 - 0.28, 0);
       return m;
     };
-    this.readout = text(`CH1  0.2 V/div   ${Math.round((SWEEP / 10) * 1000)} ms/div   TRIG ↑ 0.00 V   ${Math.round(init.music.a.bpm)} BPM`);
+    this.readout = text(`CH1  0.2 V/div   ${Math.round((SWEEP / 10) * 1000)} ms/div   TRIG ↑ 0.00 V   ${Math.round(init.music.a.namedBpm ?? init.music.a.bpm)} BPM`);
     this.readoutXy = text('X  CH1 L  0.5 V/div      Y  CH2 R  0.5 V/div      XY');
     // The words are on the scope's screen, on the glass over the trace.
     this.rig = new LyricRig(init.palette, 'hook');
+    this.rig.faces = voiceFaces('pulse', init.seed);
     this.rig.frame = { vh: H * 1.1, vw: W * 0.95 };
     this.rig.place = root => { root.position.set(0, 0, 0.05); };
     this.scene.add(this.grid.mesh, this.beam.mesh, this.readout, this.readoutXy, this.rig.group);

@@ -4,19 +4,30 @@
 // round the middle, the inner ones faster, flaring on the kicks. rain (ballad): they drift down off the picture and
 // come round again from the top. A cover on a plain ground (a white sheet with a figure on it, a black one with a
 // bright subject) keeps only its subject: the ground is left out, and a light ground becomes the paper they float on.
+// The sound moves through the picture: out from the middle a point is further back in time (the spectrum flows outwards
+// across the cover, about two seconds to the edge), round it the bands run from the bass at the bottom to the treble
+// at the top (left and right mirrored); where its band was loud the point is lifted towards the camera and lights up.
+// So every kick is a swell running out through the picture, a held chord a raised ring, a quiet passage a flat print.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, inOutCubic, lerp, outExpo, rng } from './types.ts';
 import { LyricRig } from './lyricRig.ts';
+import { voiceFaces } from './lyricBlock.ts';
+import { COLS, SpecRing, Spectrogram } from './viz.ts';
 
 const N = 176; // points per side
 const SIZE = 6.4;
+const NB = 64;
+const RING = 256;
+/** Seconds of the spectrum's past per unit out from the middle. */
+const LAG = 0.55;
 
 const vertexShader = /* glsl */ `
   attribute vec3 aColor;
   attribute vec4 aSeed;
   attribute float aW;
-  uniform float uTime, uBurst, uVortex, uRain, uDrift, uKick, uPx, uDepth;
+  uniform sampler2D tSpec;
+  uniform float uTime, uBurst, uVortex, uRain, uDrift, uKick, uPx, uDepth, uNow, uLift, uBase;
   varying vec3 vColor;
   varying float vA;
   vec3 curl(vec3 p) {
@@ -26,6 +37,17 @@ const vertexShader = /* glsl */ `
     vec3 p = position;
     float lum = dot(aColor, vec3(0.2126, 0.7152, 0.0722));
     p.z = (lum - 0.4) * uDepth + (aSeed.z - 0.5) * 0.15;
+    // The spectrum at this point's time (out from the middle) and band (round from the bottom).
+    float r0 = length(position.xy);
+    float k = acos(clamp(-position.y / max(r0, 1e-3), -1.0, 1.0)) / 3.14159265;
+    float c = uNow - r0 * ${(LAG * COLS).toFixed(2)};
+    float x = (k * ${(NB - 1).toFixed(1)} + 0.5) / ${NB.toFixed(1)};
+    #define SPEC(dc) texture2D(tSpec, vec2(x, (mod(c - (dc), ${RING.toFixed(1)}) + 0.5) / ${RING.toFixed(1)})).r
+    float s = SPEC(0.0);
+    // How much louder than the half second before: each note or hit flashes up in its ring as it passes.
+    float rise = max(0.0, s - 0.25 * (SPEC(8.0) + SPEC(16.0) + SPEC(24.0) + SPEC(32.0)) - 0.02);
+    float glow = clamp(0.45 * smoothstep(0.55, 1.0, s) + 1.2 * smoothstep(0.02, 0.3, rise), 0.0, 1.0), on = step(0.001, uLift);
+    p.z += glow * uLift * (0.8 + 0.4 * aSeed.w);
     p += curl(p * 0.6 + aSeed.xyz * 6.0) * 0.06 * uDrift;
     // Burst: out from the middle along each point's own direction, harder for the bright ones.
     vec3 dir = normalize(vec3(p.xy + (aSeed.xy - 0.5) * 0.3, (aSeed.w - 0.5) * 2.0));
@@ -39,8 +61,13 @@ const vertexShader = /* glsl */ `
       p.y = mod(p.y + ${(SIZE / 2 + 0.5).toFixed(2)}, ${(SIZE + 1).toFixed(2)}) - ${(SIZE / 2 + 0.5).toFixed(2)};
     }
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
-    gl_PointSize = uPx * (0.9 + lum * 1.4) * (1.0 + uKick * 0.6) * aW / max(0.5, -mv.z);
-    vColor = aColor * (0.95 + uKick * 0.35);
+    // (With the sound on, the points shrink to sparks with dark between them, so the lit rings read; lumped together
+    // under additive blending a light cover was one cream blob.)
+    gl_PointSize = uPx * (0.9 + lum * 1.4) * mix(1.0 + uKick * 0.6, uBase + 0.2 + 0.45 * glow, on) * aW / max(0.5, -mv.z);
+    // (With the sound on, a point is the cover's colour as light: its hue lifted towards full strength, so a dark
+    // cover's points still glow, and the sound sets how bright.)
+    vec3 hueC = mix(aColor, aColor / max(0.2, max(aColor.r, max(aColor.g, aColor.b))), 0.6);
+    vColor = mix(aColor * (0.95 + uKick * 0.35), hueC * (uBase + 1.6 * glow), on);
     vA = (0.7 + lum * 0.3) * aW;
     gl_Position = projectionMatrix * mv;
   }`;
@@ -78,9 +105,11 @@ export class Particles implements MvScene {
   private rig: LyricRig;
   private height = 1080;
   private readonly onPaper: boolean;
+  private ring: SpecRing;
 
   constructor(private init: SceneInit, private look: 'pulse' | 'ballad' = 'pulse') {
     const { palette } = init;
+    this.ring = new SpecRing(Spectrogram.of(init.stereo, init.music.duration + 8, NB, 30), RING);
     const S = init.coverSize, px = init.coverPixels, random = rng(11), c = new THREE.Color();
     const ground = plainGround(px, S);
     // Ballads float the subject on the cover's own light ground; pulse always on ink, where it glows.
@@ -112,6 +141,10 @@ export class Particles implements MvScene {
       uniforms: {
         uTime: { value: 0 }, uBurst: { value: 0 }, uVortex: { value: 0 }, uRain: { value: 0 }, uDrift: { value: 1 },
         uKick: { value: 0 }, uPx: { value: 20 }, uDepth: { value: 1.2 },
+        // How much of the picture stays lit between the swells: a light cover is let down most (lumped under additive
+        // blending it was one cream blob), a dark one hardly (let down too, it was gone); ballads keep more (the slow
+        // rain is the picture coming apart).
+        tSpec: { value: this.ring.texture }, uNow: { value: 0 }, uLift: { value: 0 }, uBase: { value: look === 'ballad' ? 0.6 : palette.light ? 0.42 : 0.72 },
       },
     });
     const points = new THREE.Points(g, this.material);
@@ -120,6 +153,7 @@ export class Particles implements MvScene {
     // The words hang in front of the cloud of points, so the slow orbit slides them across it; ballad lines to one
     // side. Each line comes in from deeper in the cloud.
     this.rig = new LyricRig(palette, look === 'ballad' ? 'poem' : 'hook');
+    this.rig.faces = voiceFaces(look, init.seed);
     this.rig.onLight = onPaper;
     this.rig.frame = { vh: 5.2, vw: 8.5 };
     this.rig.place = (root, st) => {
@@ -138,6 +172,10 @@ export class Particles implements MvScene {
   /** Viewport height in device pixels: point sizes follow it. */
   setViewportHeight(h: number): void { this.height = h; }
 
+  keepUp(t: number): void {
+    this.ring.spec.prefetch(t, 0.8);
+  }
+
   update(ctx: FrameCtx): void {
     const { t, music, shot } = ctx;
     const u = this.material.uniforms;
@@ -150,6 +188,11 @@ export class Particles implements MvScene {
     const since = t - shot.start;
     u.uTime.value = t;
     u.uKick.value = kick;
+    const now = t * COLS;
+    this.ring.sync(Math.floor(now - 4.6 * LAG * COLS) - 2, Math.floor(now) + 1);
+    u.uNow.value = now;
+    // (Not on a light ground: there the points are printed, not lit.)
+    u.uLift.value = !this.init.stereo || this.onPaper ? 0 : (soft ? 0.7 : 1.4) * (shot.section.label === 'chorus' || shot.section.label === 'drop' ? 1.2 : 1);
     // Points about as wide as the gap between them, so the picture reads as a picture.
     u.uPx.value = this.height * 0.032 * (this.onPaper ? 1.6 : soft ? 1.1 : 1);
     u.uBurst.value = 0;

@@ -1,11 +1,14 @@
 // The plugin's surface inside NetEase: a small "MV" button, the full-window MV view with its controls, and the
-// settings page.
+// settings page. The look (src/plugin/uiStyle.ts): white glyphs over a soft scrim on the picture, frosted sheets for
+// what slides over it, grouped lists for the settings.
 import { STYLES, type StyleId } from '../style/style.ts';
 import type { LookId, SceneId } from '../scenes/types.ts';
 import { LOOKS, SCENE_GROUPS, SCENES } from '../scenes/catalog.ts';
 import { SECTION_LABELS, type Section } from '../types.ts';
 import { installPack, removePack, watchPack } from './aligner.ts';
 import type { PlayMode } from './client.ts';
+import { appIcon, icon, type IconName } from './icons.ts';
+import { ensureStyles } from './uiStyle.ts';
 
 /** The plugin's version (plugin/manifest.json, put in at build time). */
 export const VERSION = typeof __VERSION__ === 'string' ? __VERSION__ : '';
@@ -24,7 +27,47 @@ export interface Config {
   offLooks: LookId[];
   /** Per song (by id): how much later its words show, ms (negative = earlier), for a song whose lyric runs off. */
   lyricDelays: Record<string, number>;
+  /** Each play of a song arranged anew, or always the same arrangement (its seed taken from the song). */
+  arrange: 'random' | 'fixed';
+  /** Frames drawn at most per second (0: as many as the screen shows). */
+  fpsCap: 0 | 240 | 120 | 60 | 30;
+  /** Analyse the play list's next track in the background while one plays. */
+  prefetch: boolean;
+  /** The key of each action, as `Ctrl+Shift+KeyM`: the modifiers, then the key's code. */
+  keys: Keys;
 }
+
+/** What the keyboard can do: open or leave the MV page (anywhere in NetEase), and on the MV page itself. */
+export type KeyAction = 'toggle' | 'exit' | 'playPause' | 'back' | 'forward' | 'volUp' | 'volDown';
+export type Keys = Record<KeyAction, string>;
+export const DEFAULT_KEYS: Keys = {
+  toggle: 'Ctrl+Shift+KeyM', exit: 'Escape', playPause: 'Space', back: 'ArrowLeft', forward: 'ArrowRight', volUp: 'ArrowUp', volDown: 'ArrowDown',
+};
+const MODIFIER_CODES = ['ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight'];
+/** A key press as the settings store it (null for a modifier alone). */
+export function keyCombo(e: KeyboardEvent): string | null {
+  if (!e.code || MODIFIER_CODES.indexOf(e.code) >= 0) return null;
+  const parts: string[] = [];
+  if (e.ctrlKey) parts.push('Ctrl');
+  if (e.altKey) parts.push('Alt');
+  if (e.shiftKey) parts.push('Shift');
+  if (e.metaKey) parts.push('Win');
+  parts.push(e.code);
+  return parts.join('+');
+}
+const KEY_NAMES: Record<string, string> = {
+  Space: '空格', Escape: 'Esc', ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓', Backspace: '退格', Enter: 'Enter',
+  Comma: ',', Period: '.', Slash: '/', Semicolon: ';', Quote: "'", BracketLeft: '[', BracketRight: ']', Backslash: '\\', Minus: '-',
+  Equal: '=', Backquote: '`', PageUp: 'PgUp', PageDown: 'PgDn',
+};
+/** The caps of a stored key, e.g. `Ctrl`, `Shift`, `M`. */
+export function keyCaps(combo: string): string[] {
+  return combo.split('+').map(p => KEY_NAMES[p] ?? p.replace(/^(Key|Digit)/, '').replace(/^Numpad/, '小键盘 '));
+}
+export const keyLabel = (combo: string) => keyCaps(combo).join('+');
+/** True while the settings wait for a new key (no action takes the press meanwhile). */
+let recordingKeys = false;
+export const isRecordingKeys = () => recordingKeys;
 
 export function loadConfig(): Config {
   return {
@@ -37,45 +80,31 @@ export function loadConfig(): Config {
     off: String(plugin.getConfig('offScenes', '')).split(',').filter((id): id is SceneId => SCENES.some(s => s.id === id)),
     offLooks: String(plugin.getConfig('offLooks', '')).split(',').filter((id): id is LookId => LOOKS.some(s => s.id === id)),
     lyricDelays: (() => { try { return JSON.parse(String(plugin.getConfig('lyricDelays', '{}'))) || {}; } catch { return {}; } })(),
+    arrange: plugin.getConfig('arrange', 'random' as Config['arrange']) === 'fixed' ? 'fixed' : 'random',
+    fpsCap: (() => { const n = Number(plugin.getConfig('fpsCap', 0)); return n === 240 || n === 120 || n === 60 || n === 30 ? n : 0; })(),
+    prefetch: plugin.getConfig<boolean>('prefetch', false) as unknown === true,
+    keys: (() => {
+      const keys = { ...DEFAULT_KEYS };
+      try {
+        const saved = JSON.parse(String(plugin.getConfig('keys', '{}'))) || {};
+        for (const a of Object.keys(keys) as KeyAction[]) if (typeof saved[a] === 'string' && saved[a]) keys[a] = saved[a];
+      } catch { /* the defaults */ }
+      return keys;
+    })(),
   };
 }
 
 export const pixelRatio = (q: Config['quality']) =>
   q === 'high' ? Math.min(window.devicePixelRatio || 1, 2) : q === 'mid' ? 1 : 0.7;
 
-const FONT = '"Noto Sans SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif';
-const ICON = {
-  prev: 'M6 5h2v14H6zM20 5v14L9 12z',
-  next: 'M16 5h2v14h-2zM4 5v14l11-7z',
-  play: 'M8 5v14l11-7z',
-  pause: 'M7 5h4v14H7zM13 5h4v14h-4z',
-  volume: 'M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06a9 9 0 0 0 0-17.54z',
-  gear: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.48.48 0 0 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z',
-  muted: 'M16.5 12A4.5 4.5 0 0 0 14 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0 0 21 12a9 9 0 0 0-7-8.77v2.06A7 7 0 0 1 19 12zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 0 0 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4 9.91 6.09 12 8.18V4z',
-  heart: 'M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z',
-  heartLine: 'M16.5 3c-1.74 0-3.41.81-4.5 2.09C10.91 3.81 9.24 3 7.5 3 4.42 3 2 5.42 2 8.5c0 3.78 3.4 6.86 8.55 11.54L12 21.35l1.45-1.32C18.6 15.36 22 12.28 22 8.5 22 5.42 19.58 3 16.5 3zm-4.4 15.55l-.1.1-.1-.1C7.14 14.24 4 11.39 4 8.5 4 6.5 5.5 5 7.5 5c1.54 0 3.04.99 3.57 2.36h1.87C13.46 5.99 14.96 5 16.5 5c2 0 3.5 1.5 3.5 3.5 0 2.89-3.14 5.74-7.9 10.05z',
-  order: 'M3 6h12v2H3zm0 5h12v2H3zm0 5h8v2H3zm14-5v6.17l-1.59-1.58L14 17l4 4 4-4-1.41-1.41L19 17.17V11z',
-  loop: 'M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z',
-  loopOne: 'M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4zm-4-2V9h-1l-2 1v1h1.5v4H13z',
-  shuffle: 'M10.59 9.17 5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z',
-  sparkle: 'M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z',
-  list: 'M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z',
-};
-/** The window's buttons, drawn in lines like NetEase's own title bar. */
-const LINE = {
-  minimize: 'M5 12h14',
-  maximize: 'M5.75 5.75h12.5v12.5H5.75z',
-  restore: 'M5.75 8.75h9.5v9.5h-9.5zM8.75 8.75v-3h9.5v9.5h-3',
-  close: 'M6.5 6.5l11 11M17.5 6.5l-11 11',
-};
 /** NetEase's play modes, in the order its own button steps through them (心动模式 and 私人 FM are entered elsewhere). */
-const MODES: Record<PlayMode, { icon: string; name: string }> = {
-  playOrder: { icon: ICON.order, name: '顺序播放' },
-  playCycle: { icon: ICON.loop, name: '列表循环' },
-  playOneCycle: { icon: ICON.loopOne, name: '单曲循环' },
-  playRandom: { icon: ICON.shuffle, name: '随机播放' },
-  playAi: { icon: ICON.sparkle, name: '心动模式' },
-  playFm: { icon: ICON.loop, name: '私人 FM' },
+const MODES: Record<PlayMode, { icon: IconName; name: string }> = {
+  playOrder: { icon: 'order', name: '顺序播放' },
+  playCycle: { icon: 'repeat', name: '列表循环' },
+  playOneCycle: { icon: 'repeatOne', name: '单曲循环' },
+  playRandom: { icon: 'shuffle', name: '随机播放' },
+  playAi: { icon: 'sparkle', name: '心动模式' },
+  playFm: { icon: 'repeat', name: '私人 FM' },
 };
 const MODE_CYCLE: PlayMode[] = ['playOrder', 'playCycle', 'playOneCycle', 'playRandom'];
 /** A section of the song for the progress bar: loud ones (choruses, drops) are marked. */
@@ -84,24 +113,53 @@ export interface BarSection { start: number; end: number; name: string; loud: bo
 export interface SongInfo { name: string; artists: string[]; cover: string | null }
 /** A track of NetEase's play list. */
 export interface QueueTrack { name: string; artists: string[]; duration: number }
-/** How the MV shows the song: its style, why it was chosen (null: chosen by hand), the lyrics' word times. */
-export interface MvInfo { style: string; why: string | null; lyrics: 'aligning' | 'aligned' | null }
-const svg = (d: string, size: number) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor"><path d="${d}"/></svg>`;
-const stroke = (d: string, size: number) =>
-  `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
-/** NetEase's covers come in any size: a small one for the thumbnail. */
-const thumb = (url: string) => url.replace(/^http:/, 'https:') + (/\?/.test(url) ? '' : '?param=96y96');
+/** How the MV shows the song: its style, why it was chosen (null: chosen by hand), its tempo, the lyrics' word times. */
+export interface MvInfo { style: string; why: string | null; bpm?: number; lyrics: 'aligning' | 'aligned' | null }
+/** What the waiting view says besides its line: how far along (0..1), or that it failed. */
+export interface StatusOptions { progress?: number; error?: boolean; hint?: string }
+/** NetEase's covers come in any size: a small one for the thumbnail, a large one for the waiting view. */
+const sized = (url: string, px: number) => url.replace(/^http:/, 'https:') + (/\?/.test(url) ? '' : `?param=${px}y${px}`);
 const clock = (s: number) => { s = Math.max(0, s); return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`; };
+const EASE = 'cubic-bezier(.32,.72,0,1)';
+/**
+ * One small movement on an element, transform and opacity only (they run off the main thread, beside the MV); none
+ * when the system asks for reduced motion.
+ */
+function play(e: Element | null | undefined, frames: Keyframe[], opts: KeyframeAnimationOptions): void {
+  if (!e || typeof (e as HTMLElement).animate !== 'function') return;
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  (e as HTMLElement).animate(frames, opts);
+}
+/** Things arriving one after another: each rises a few px and fades in, `step` ms apart. */
+function arrive(items: Element[], step = 35, delay = 40, rise = 10): void {
+  items.forEach((e, i) => play(e, [{ opacity: 0, transform: `translateY(${rise}px)` }, { opacity: 1, transform: 'none' }],
+    { duration: 420, delay: delay + i * step, easing: EASE, fill: 'backwards' }));
+}
+
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text?: string): HTMLElementTagNameMap[K] {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+/** A glyph button of the MV page. */
+function glyph(name: IconName, title: string, fn: () => void, size = 22, extra = ''): HTMLButtonElement {
+  const b = el('button', 'bmv-g' + (extra ? ' ' + extra : ''));
+  b.innerHTML = icon(name, size);
+  b.title = title;
+  b.setAttribute('aria-label', title);
+  b.onclick = ev => { ev.stopPropagation(); fn(); };
+  return b;
+}
+
+const mvButtonTitle = (key: string) => `BetterMV：为当前歌曲生成 MV（${keyLabel(key)}）`;
 
 export function mvButton(onClick: () => void): HTMLButtonElement {
-  const b = document.createElement('button');
-  b.textContent = 'MV';
-  b.title = 'BetterMV：为当前歌曲生成 MV（Ctrl+Shift+M）';
-  b.style.cssText = `position:fixed;right:22px;bottom:92px;z-index:2147480000;height:30px;padding:0 13px;border:1px solid rgba(255,255,255,.18);` +
-    `border-radius:15px;background:rgba(18,18,22,.72);color:#fff;font:700 12px/28px ${FONT};letter-spacing:.14em;cursor:pointer;` +
-    `backdrop-filter:blur(10px);box-shadow:0 4px 18px rgba(0,0,0,.25);transition:background .2s,transform .2s`;
-  b.onmouseenter = () => { b.style.background = 'rgba(236,65,65,.92)'; b.style.transform = 'translateY(-1px)'; };
-  b.onmouseleave = () => { b.style.background = 'rgba(18,18,22,.72)'; b.style.transform = ''; };
+  ensureStyles();
+  const b = el('button', 'bmv-ui bmv-mvbtn');
+  b.innerHTML = `${icon('play', 11)}<span>MV</span>`;
+  b.title = mvButtonTitle(loadConfig().keys.toggle);
   b.onclick = e => { e.stopPropagation(); onClick(); };
   document.body.appendChild(b);
   return b;
@@ -131,68 +189,97 @@ export interface OverlayHandlers {
   onResizeWindow: (edge: WindowEdge) => void;
   onMinimize: () => void;
   onToggleMaximize: () => void;
+  /** Try making the MV again after it failed. */
+  onRetry?: () => void;
   /** The settings panel's contents, built each time it opens (so it shows the settings as they are now). */
   settings: () => HTMLElement;
 }
 
-/** Width of the MV page's settings panel, px. */
-const PANEL = 400;
+/** Width of the MV page's sheet, px; it floats 10 px in from the window's edges. */
+const PANEL = 380;
+const PANEL_ROOM = PANEL + 20;
 
 /** Mouse and touch events that must not reach the page under the MV (NetEase or other plugins' listeners). */
 const SWALLOW = ['pointerdown', 'pointerup', 'pointermove', 'mousedown', 'mouseup', 'mousemove', 'click', 'dblclick', 'contextmenu', 'wheel', 'touchstart', 'touchmove', 'touchend'];
 
+/** A song's sections as capsules on a line (the progress bar, the waiting view's line). */
+function drawSegments(layer: HTMLElement, sections: BarSection[], duration: number): void {
+  const d = duration || sections[sections.length - 1]?.end || 1;
+  const list = sections.length ? sections : [{ start: 0, end: d, name: '', loud: false }];
+  layer.textContent = '';
+  for (const s of list) {
+    const e = el('i', s.loud ? 'is-loud' : '');
+    e.style.left = `calc(${(s.start / d) * 100}% + 1px)`;
+    e.style.width = `calc(${((s.end - s.start) / d) * 100}% - 2px)`;
+    layer.append(e);
+  }
+}
+
 export class Overlay {
-  readonly root = document.createElement('div');
-  readonly stage = document.createElement('div');
-  private backdrop = document.createElement('div');
-  private statusEl = document.createElement('div');
-  private dragEl = document.createElement('div');
+  readonly root = el('div', 'bmv-ui bmv-root');
+  readonly stage = el('div', 'bmv-stage');
+  private backdrop = el('div', 'bmv-backdrop');
+  private backdropLayers = [el('div', 'bmv-bd'), el('div', 'bmv-bd')];
+  /** The waiting view: the artwork, the song, a line of progress and what is being done. */
+  private loadEl = el('div', 'bmv-load');
+  private loadArt = el('div', 'bmv-load-art');
+  private loadTitle = el('div', 'bmv-load-title');
+  private loadArtist = el('div', 'bmv-load-artist');
+  private loadDim = el('div', 'bmv-segs');
+  private loadLit = el('div', 'bmv-segs is-lit');
+  private loadFill = el('div', 'bmv-load-fill');
+  private loadProgress = -1;
+  private loadStep = el('span');
+  private loadPct = el('b');
+  private loadHint = el('div', 'bmv-load-hint');
+  private hasSong = false;
+  /** When the waiting view came up (a glimpse of it is faded, not flown). */
+  private loadSince = 0;
+  private dragEl = el('div', 'bmv-drag');
   private grips: HTMLElement[] = [];
   /** Along the top: a shade, and the settings and window buttons (they make room for an open panel). */
-  private top = document.createElement('div');
-  private topButtons = document.createElement('div');
+  private top = el('div', 'bmv-top');
+  private topButtons = el('div', 'bmv-top-btns');
   private gearEl!: HTMLButtonElement;
   private maxEl!: HTMLButtonElement;
-  private closeEl!: HTMLButtonElement;
-  private panel = document.createElement('div');
-  private panelTitle = document.createElement('div');
-  private panelAside = document.createElement('div');
-  private panelBody = document.createElement('div');
+  private panel = el('div', 'bmv-sheet');
+  private panelTitle = el('div', 'bmv-sheet-title');
+  private panelAside = el('div', 'bmv-sheet-aside');
+  private panelBody = el('div', 'bmv-sheet-body bmv-scroll');
   /** Which panel slides in from the right: the settings or the play list (the controls and the cursor then stay up). */
   private open: 'settings' | 'queue' | null = null;
   get panelOpen(): boolean { return this.open !== null; }
-  private bar = document.createElement('div');
+  private bar = el('div', 'bmv-bar');
   /** The song: cover, name, artists. */
-  private songEl = document.createElement('div');
-  private coverEl = document.createElement('img');
-  private nameEl = document.createElement('div');
-  private artistEl = document.createElement('div');
+  private songEl = el('div', 'bmv-song');
+  private coverEl = el('img', 'bmv-cover');
+  private nameEl = el('div', 'bmv-name');
+  private artistEl = el('div', 'bmv-artist');
   private likeEl!: HTMLButtonElement;
   private modeEl!: HTMLButtonElement;
   private liked: boolean | null | undefined;
   private mode: PlayMode | null | undefined;
-  /** The MV's style (opens the settings). */
-  private styleEl = document.createElement('button');
+  /** The MV's style and tempo (opens the settings). */
+  private styleEl = el('button', 'bmv-chip');
   private mv: MvInfo | null = null;
   private listEl!: HTMLButtonElement;
-  private rightCol!: HTMLDivElement;
-  private rightItems = document.createElement('div');
-  private playEl = document.createElement('button');
-  private track = document.createElement('div');
-  private fill = document.createElement('div');
-  private knob = document.createElement('div');
-  private timeEl = document.createElement('div');
-  private lengthEl = document.createElement('div');
+  private rightCol = el('div', 'bmv-right');
+  private rightItems = el('div', 'bmv-right-items');
+  private playEl!: HTMLButtonElement;
+  private transport = el('div', 'bmv-transport');
+  private track = el('div', 'bmv-track');
+  private knob = el('div', 'bmv-knob');
+  private timeEl = el('span');
+  private lengthEl = el('span');
   /** The song's sections along the progress bar: dim, and a bright copy clipped to what has been played. */
-  private segDim = document.createElement('div');
-  private segLit = document.createElement('div');
-  private tipEl = document.createElement('div');
+  private segDim = el('div', 'bmv-segs');
+  private segLit = el('div', 'bmv-segs is-lit');
+  private tipEl = el('div', 'bmv-tip');
   private sections: BarSection[] = [];
-  private accent = '#ffffff';
-  private volTrack = document.createElement('div');
-  private volFill = document.createElement('div');
-  private volKnob = document.createElement('div');
-  private volIcon = document.createElement('button');
+  private volTrack = el('div', 'bmv-vol-track');
+  private volFill = el('div', 'bmv-vol-fill');
+  private volKnob = el('div', 'bmv-knob');
+  private volIcon!: HTMLButtonElement;
   private vol = -1;
   private volDragging = false;
   /** The volume before muting, to come back to. */
@@ -212,19 +299,22 @@ export class Overlay {
   visible = false;
 
   constructor(private handlers: OverlayHandlers) {
+    ensureStyles();
     const r = this.root;
-    r.style.cssText = `position:fixed;inset:0;z-index:2147483647;background:#000;display:none;overflow:hidden;font-family:${FONT};user-select:none`;
-    this.backdrop.style.cssText = 'position:absolute;inset:-40px;background-size:cover;background-position:center;filter:blur(40px) brightness(.45);transition:opacity .6s';
-    this.stage.style.cssText = 'position:absolute;inset:0';
-    this.statusEl.style.cssText = 'position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;color:#eee;font-size:15px;letter-spacing:.08em;text-shadow:0 1px 8px rgba(0,0,0,.6);pointer-events:none';
+    this.backdrop.append(...this.backdropLayers);
+    this.buildLoad();
     this.buildTop();
     this.buildBar();
     this.buildDrag();
     this.buildGrips();
     this.buildPanel();
-    r.append(this.backdrop, this.stage, this.statusEl, this.dragEl, this.top, this.bar, this.panel, ...this.grips);
+    // The waiting view covers the picture (while NetEase switches songs the last frame stays on the canvas).
+    r.append(this.stage, this.backdrop, this.loadEl, this.dragEl, this.top, this.bar, this.panel, ...this.grips);
     document.body.appendChild(r);
     r.addEventListener('mousemove', () => this.wake());
+    // A button clicked with the mouse lets the focus go (a key pressed later would ring it); one pressed from the
+    // keyboard (detail 0) keeps it.
+    r.addEventListener('click', e => { const b = (e.target as HTMLElement | null)?.closest?.('button'); if (b && e.detail > 0) b.blur(); });
     // Leaving the window puts the controls away at once.
     r.addEventListener('mouseleave', () => this.sleep());
     // Clicks on the MV are the MV's: page-wide listeners (NetEase's, other plugins') never see them.
@@ -232,132 +322,123 @@ export class Overlay {
     this.stage.addEventListener('dblclick', () => handlers.onTogglePlay());
     // A click on the picture puts the open panel away.
     this.stage.addEventListener('pointerdown', () => { if (this.panelOpen) this.closePanel(); });
+    // The keys as set (Overlay.keys); any other press, NetEase's own shortcuts among them (Ctrl+← → …), goes through.
     window.addEventListener('keydown', e => {
-      if (!this.visible) return;
-      // NetEase's own shortcuts (Ctrl+← → for the previous / next song, …) go through.
-      if (e.ctrlKey || e.altKey || e.metaKey) return;
+      if (!this.visible || recordingKeys) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
-      // Keys on the settings panel's own controls are theirs (Esc still closes the panel).
-      if (e.key !== 'Escape' && t?.closest?.('[data-bmv-settings]')) return;
+      const c = keyCombo(e), k = this.keys;
+      if (!c) return;
+      // Keys on the settings panel's own controls are theirs (the exit key still closes the panel).
+      if (c !== k.exit && t?.closest?.('[data-bmv-settings]')) return;
       let hit = true;
-      if (e.key === 'Escape') { if (this.panelOpen) this.closePanel(); else handlers.onClose(); }
-      else if (e.code === 'Space') handlers.onTogglePlay();
-      else if (e.code === 'ArrowRight') handlers.onSeek(this.current + 5);
-      else if (e.code === 'ArrowLeft') handlers.onSeek(this.current - 5);
-      else if (e.code === 'ArrowUp') this.nudgeVolume(0.05);
-      else if (e.code === 'ArrowDown') this.nudgeVolume(-0.05);
+      if (c === k.exit) { if (this.panelOpen) this.closePanel(); else handlers.onClose(); }
+      else if (c === k.playPause) handlers.onTogglePlay();
+      else if (c === k.forward) handlers.onSeek(this.current + 5);
+      else if (c === k.back) handlers.onSeek(this.current - 5);
+      else if (c === k.volUp) this.nudgeVolume(0.05);
+      else if (c === k.volDown) this.nudgeVolume(-0.05);
       else hit = false;
-      if (hit) { e.preventDefault(); e.stopPropagation(); this.wake(); }
+      if (hit) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.wake();
+        // A button last clicked keeps the focus, and a key press shows its focus ring (the user: “在使用快捷键时不要有提示
+        // 框”): a shortcut takes the focus off the MV page's controls. (Tab still shows where the focus is.)
+        const f = document.activeElement as HTMLElement | null;
+        if (f && f !== document.body && r.contains(f) && !t?.closest?.('[data-bmv-settings]')) f.blur();
+      }
     }, true);
+    this.setKeys(this.keys);
   }
+
+  /** The keys of the MV page's actions (the settings'); the buttons' tips name them. */
+  keys: Keys = { ...DEFAULT_KEYS };
+  setKeys(keys: Keys): void {
+    this.keys = keys;
+    this.playEl.title = `播放 / 暂停（${keyLabel(keys.playPause)}）`;
+    this.closeEl.title = `退出 MV（${keyLabel(keys.exit)}）`;
+  }
+  private closeEl!: HTMLButtonElement;
 
   private current = 0;
 
-  /** An icon button of the controls: round, lit on hover. */
-  private button(icon: string, title: string, fn: () => void): HTMLButtonElement {
-    const e = document.createElement('button');
-    e.innerHTML = icon;
-    e.title = title;
-    e.style.cssText = 'flex:none;display:flex;align-items:center;justify-content:center;border:0;background:transparent;color:#fff;cursor:pointer;padding:6px;border-radius:50%;' +
-      'opacity:.85;transition:opacity .15s,background .15s';
-    e.onmouseenter = () => { e.style.opacity = '1'; e.style.background = 'rgba(255,255,255,.12)'; };
-    e.onmouseleave = () => { e.style.opacity = '.85'; e.style.background = 'transparent'; };
-    e.onclick = ev => { ev.stopPropagation(); fn(); this.wake(); };
-    return e;
+  /** A glyph of the controls; using one keeps the controls up. */
+  private button(name: IconName, title: string, fn: () => void, size = 22, extra = ''): HTMLButtonElement {
+    return glyph(name, title, () => { fn(); this.wake(); }, size, extra);
+  }
+
+  /** The waiting view, centred over the cover's moving colours. */
+  private buildLoad(): void {
+    const line = el('div', 'bmv-load-line');
+    this.loadFill.append(this.loadLit);
+    line.append(this.loadDim, this.loadFill);
+    const step = el('div', 'bmv-load-step');
+    step.append(this.loadStep, this.loadPct);
+    const mark = el('div', 'bmv-load-mark');
+    mark.innerHTML = appIcon(72);
+    const retry = el('button', 'bmv-btn bmv-load-retry', '重试');
+    retry.onclick = ev => { ev.stopPropagation(); this.handlers.onRetry?.(); };
+    this.loadEl.append(mark, this.loadArt, this.loadTitle, this.loadArtist, line, step, this.loadHint, retry);
+    drawSegments(this.loadDim, [], 1);
+    drawSegments(this.loadLit, [], 1);
   }
 
   /** Top right, as on NetEase's play page: the settings, then minimise, maximise / restore and leave the MV. */
   private buildTop(): void {
-    this.top.style.cssText = 'position:absolute;left:0;right:0;top:0;height:76px;pointer-events:none;transition:opacity .4s;' +
-      'background:linear-gradient(to bottom,rgba(0,0,0,.4),rgba(0,0,0,0))';
     const g = this.topButtons;
-    g.style.cssText = 'position:absolute;top:10px;right:10px;display:flex;align-items:center;pointer-events:auto;filter:drop-shadow(0 1px 3px rgba(0,0,0,.45));' +
-      'transition:right .3s cubic-bezier(.2,.8,.2,1)';
-    const win = (icon: string, title: string, fn: () => void) => {
-      const b = this.button(icon, title, fn);
-      b.style.width = '36px';
-      b.style.height = '32px';
-      b.style.borderRadius = '6px';
-      return b;
-    };
-    this.gearEl = win(svg(ICON.gear, 18), '设置', () => this.togglePanel('settings'));
-    const rule = document.createElement('div');
-    rule.style.cssText = 'width:1px;height:14px;margin:0 8px;background:rgba(255,255,255,.3)';
-    this.maxEl = win(stroke(LINE.maximize, 18), '最大化', () => this.handlers.onToggleMaximize());
-    this.closeEl = win(stroke(LINE.close, 18), '退出 MV（Esc）', () => this.handlers.onClose());
-    g.append(this.gearEl, rule, win(stroke(LINE.minimize, 18), '最小化', () => this.handlers.onMinimize()), this.maxEl, this.closeEl);
+    this.gearEl = this.button('sliders', '设置', () => this.togglePanel('settings'), 20);
+    this.maxEl = this.button('maximize', '最大化', () => this.handlers.onToggleMaximize(), 18);
+    this.closeEl = this.button('close', '退出 MV', () => this.handlers.onClose(), 18);
+    g.append(this.gearEl, el('div', 'bmv-rule'), this.button('minimize', '最小化', () => this.handlers.onMinimize(), 18), this.maxEl, this.closeEl);
     this.top.append(g);
   }
 
   /**
-   * The controls: the progress bar, then the song (left), the playback buttons (centred, as on NetEase's play bar:
-   * like, previous, play, next, play mode) and the MV's style, the volume and the play list (right).
+   * The controls: the progress bar with the times under its ends, then the song (left), the playback buttons
+   * (centred, as on NetEase's play bar: like, previous, play, next, play mode) and the MV's style, the volume and the
+   * play list (right).
    */
   private buildBar(): void {
-    const b = this.bar;
-    b.style.cssText = 'position:absolute;left:0;right:0;bottom:0;padding:40px 24px 14px;transition:opacity .4s,right .3s cubic-bezier(.2,.8,.2,1);' +
-      'background:linear-gradient(to top,rgba(0,0,0,.72),rgba(0,0,0,.4) 55%,rgba(0,0,0,0));color:#fff';
-    const row = document.createElement('div');
-    row.style.cssText = 'display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;column-gap:16px;margin-top:8px';
+    const row = el('div', 'bmv-row3');
 
     // The song: name and artists on lines of their own, each cut short with an ellipsis (whole on hover).
-    this.songEl.style.cssText = 'display:flex;align-items:center;gap:12px;min-width:0';
-    this.coverEl.style.cssText = 'flex:none;width:40px;height:40px;border-radius:4px;object-fit:cover;background:rgba(255,255,255,.08);display:none';
+    this.coverEl.alt = '';
+    this.coverEl.style.display = 'none';
     this.coverEl.onerror = () => { this.coverEl.style.display = 'none'; };
-    const text = document.createElement('div');
-    text.style.cssText = 'min-width:0;line-height:1.35';
-    this.nameEl.style.cssText = 'font-size:14px;font-weight:600;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
-    this.artistEl.style.cssText = 'margin-top:2px;font-size:12px;opacity:.65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    const text = el('div', 'bmv-song-text');
     text.append(this.nameEl, this.artistEl);
     this.songEl.append(this.coverEl, text);
 
-    const buttons = document.createElement('div');
-    buttons.style.cssText = 'display:flex;align-items:center;gap:8px';
-    this.likeEl = this.button(svg(ICON.heartLine, 20), '喜欢', () => this.handlers.onToggleLike());
-    this.modeEl = this.button(svg(ICON.loop, 20), '', () => {
+    const transport = this.transport;
+    this.likeEl = this.button('heart', '喜欢', () => this.handlers.onToggleLike(), 20, 'is-quiet');
+    this.modeEl = this.button('repeat', '', () => {
       const next = MODE_CYCLE[(MODE_CYCLE.indexOf(this.mode as PlayMode) + 1) % MODE_CYCLE.length];
       this.handlers.onPlayMode(next);
-    });
+    }, 20, 'is-quiet');
     // Until NetEase says (and when it can't: not signed in, private FM), they keep their place but don't show.
     this.likeEl.style.visibility = this.modeEl.style.visibility = 'hidden';
-    this.playEl = this.button(svg(ICON.pause, 26), '播放 / 暂停（空格）', () => this.handlers.onTogglePlay());
-    buttons.append(this.likeEl, this.button(svg(ICON.prev, 20), '上一首（Ctrl+←）', () => this.handlers.onPrev()), this.playEl,
-      this.button(svg(ICON.next, 20), '下一首（Ctrl+→）', () => this.handlers.onNext()), this.modeEl);
+    this.playEl = this.button('pause', '播放 / 暂停（空格）', () => this.handlers.onTogglePlay(), 30, 'is-play');
+    transport.append(this.likeEl, this.button('prev', '上一首（Ctrl+←）', () => this.handlers.onPrev(), 24), this.playEl,
+      this.button('next', '下一首（Ctrl+→）', () => this.handlers.onNext(), 24), this.modeEl);
 
     // The right column, and in it what it holds at its natural width (to see what fits).
-    const right = document.createElement('div');
-    right.style.cssText = 'display:flex;justify-content:flex-end;min-width:0';
-    const rightItems = this.rightItems;
-    rightItems.style.cssText = 'flex:none;display:flex;align-items:center;gap:4px';
-    right.append(rightItems);
     const s = this.styleEl;
-    s.style.cssText = `flex:none;display:none;margin-right:8px;padding:4px 11px;border:1px solid rgba(255,255,255,.28);border-radius:13px;background:transparent;color:#fff;` +
-      `font:12px/1.2 ${FONT};letter-spacing:.04em;white-space:nowrap;cursor:pointer;opacity:.85;transition:opacity .15s,background .15s`;
-    s.onmouseenter = () => { s.style.opacity = '1'; s.style.background = 'rgba(255,255,255,.12)'; };
-    s.onmouseleave = () => { s.style.opacity = '.85'; s.style.background = 'transparent'; };
+    s.style.display = 'none';
     s.onclick = ev => { ev.stopPropagation(); this.togglePanel('settings'); };
-    this.listEl = this.button(svg(ICON.list, 20), '播放列表', () => this.togglePanel('queue'));
-    rightItems.append(s, this.buildVolume(), this.listEl);
-    this.rightCol = right;
-    row.append(this.songEl, buttons, right);
+    this.listEl = this.button('list', '播放列表', () => this.togglePanel('queue'), 22, 'is-quiet');
+    this.rightItems.append(s, this.buildVolume(), this.listEl);
+    this.rightCol.append(this.rightItems);
+    row.append(this.songEl, transport, this.rightCol);
     // A narrow bar (a small window, or a panel open beside it) drops the volume slider, then the style.
-    new ResizeObserver(() => this.fit()).observe(right);
+    new ResizeObserver(() => this.fit()).observe(this.rightCol);
 
-    const seek = document.createElement('div');
-    seek.style.cssText = 'display:flex;align-items:center;gap:12px;font:11px/1 Consolas,monospace;opacity:.85';
-    this.track.style.cssText = 'position:relative;flex:1;height:18px;cursor:pointer';
     // The bar is the song's structure: a segment a section, dim ahead of the playhead, lit behind it.
-    for (const layer of [this.segDim, this.segLit]) layer.style.cssText = 'position:absolute;left:0;right:0;top:0;bottom:0;pointer-events:none';
     this.segLit.style.clipPath = 'inset(0 100% 0 0)';
-    this.fill.style.cssText = 'display:none';
-    this.knob.style.cssText = 'position:absolute;top:4px;width:10px;height:10px;margin-left:-5px;border-radius:5px;background:#fff;left:0;opacity:0;transition:opacity .2s;box-shadow:0 0 6px rgba(0,0,0,.4)';
-    this.tipEl.style.cssText = 'position:absolute;bottom:20px;transform:translateX(-50%);padding:3px 8px;border-radius:4px;background:rgba(0,0,0,.72);' +
-      `font:12px/1.4 ${FONT};letter-spacing:.04em;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .15s`;
     this.track.append(this.segDim, this.segLit, this.knob, this.tipEl);
     this.renderSections();
-    this.track.onmouseenter = () => { this.knob.style.opacity = '1'; this.tipEl.style.opacity = '1'; };
-    this.track.onmouseleave = () => { if (!this.dragging) this.knob.style.opacity = '0'; this.tipEl.style.opacity = '0'; };
+    this.track.onmouseenter = () => { this.tipEl.style.opacity = '1'; this.tipEl.style.transform = 'translate(-50%,0)'; };
+    this.track.onmouseleave = () => { this.tipEl.style.opacity = '0'; this.tipEl.style.transform = ''; };
     const at = (x: number) => { const r = this.track.getBoundingClientRect(); return Math.max(0, Math.min(1, (x - r.left) / r.width)); };
     // Pointer capture keeps the drag on the track (no window listeners, so nothing leaks to the page).
     this.track.onpointerdown = e => {
@@ -365,16 +446,20 @@ export class Overlay {
       e.preventDefault();
       this.track.setPointerCapture(e.pointerId);
       this.dragging = true;
+      this.track.classList.add('is-drag');
       this.showAt(at(e.clientX));
     };
     this.track.onpointermove = e => { const k = at(e.clientX); this.tip(k); if (this.dragging) this.showAt(k); };
     this.track.onpointerup = e => {
       if (!this.dragging) return;
       this.dragging = false;
+      this.track.classList.remove('is-drag');
       this.track.releasePointerCapture(e.pointerId);
       this.handlers.onSeek(at(e.clientX) * this.duration);
     };
-    this.track.onpointercancel = () => { this.dragging = false; };
+    this.track.onpointercancel = () => { this.dragging = false; this.track.classList.remove('is-drag'); };
+    // The times at the ends of the line, as on NetEase's play bar: one row, not two.
+    const seek = el('div', 'bmv-seek');
     seek.append(this.timeEl, this.track, this.lengthEl);
     this.bar.append(seek, row);
   }
@@ -394,37 +479,28 @@ export class Overlay {
 
   /** NetEase's volume: a speaker (mute / unmute) and a slider; the wheel over it and the up / down keys nudge it. */
   private buildVolume(): HTMLElement {
-    const box = document.createElement('div');
-    box.style.cssText = 'flex:none;display:flex;align-items:center;gap:4px';
-    const icon = this.volIcon;
-    icon.style.cssText = 'display:flex;align-items:center;justify-content:center;border:0;background:transparent;color:#fff;cursor:pointer;padding:6px;border-radius:50%;opacity:.85';
-    icon.onmouseenter = () => { icon.style.opacity = '1'; icon.style.background = 'rgba(255,255,255,.12)'; };
-    icon.onmouseleave = () => { icon.style.opacity = '.85'; icon.style.background = 'transparent'; };
-    icon.onclick = ev => {
-      ev.stopPropagation();
+    const box = el('div', 'bmv-vol');
+    this.volIcon = this.button('speaker', '静音', () => {
       if (this.vol > 0.001) { this.unmuted = this.vol; this.setVol(0); } else this.setVol(this.unmuted > 0.02 ? this.unmuted : 0.6);
-      this.wake();
-    };
+    }, 22, 'is-quiet');
     const t = this.volTrack;
-    t.style.cssText = 'position:relative;width:96px;height:18px;margin-right:8px;cursor:pointer';
-    const rail = document.createElement('div');
-    rail.style.cssText = 'position:absolute;left:0;right:0;top:8px;height:2px;border-radius:1px;background:rgba(255,255,255,.25)';
-    this.volFill.style.cssText = 'position:absolute;left:0;top:8px;height:2px;border-radius:1px;background:#fff;width:0';
-    this.volKnob.style.cssText = 'position:absolute;top:4px;width:10px;height:10px;margin-left:-5px;border-radius:5px;background:#fff;left:0';
-    t.append(rail, this.volFill, this.volKnob);
+    const bar = el('div', 'bmv-vol-bar');
+    bar.append(el('div', 'bmv-vol-rail'), this.volFill);
+    t.append(bar, this.volKnob);
     const at = (x: number) => { const r = t.getBoundingClientRect(); return Math.max(0, Math.min(1, (x - r.left) / r.width)); };
     t.onpointerdown = e => {
       if (e.button !== 0) return;
       e.preventDefault();
       t.setPointerCapture(e.pointerId);
       this.volDragging = true;
+      t.classList.add('is-drag');
       this.setVol(at(e.clientX));
     };
     t.onpointermove = e => { if (this.volDragging) this.setVol(at(e.clientX)); };
-    t.onpointerup = e => { if (!this.volDragging) return; this.volDragging = false; t.releasePointerCapture(e.pointerId); };
-    t.onpointercancel = () => { this.volDragging = false; };
+    t.onpointerup = e => { if (!this.volDragging) return; this.volDragging = false; t.classList.remove('is-drag'); t.releasePointerCapture(e.pointerId); };
+    t.onpointercancel = () => { this.volDragging = false; t.classList.remove('is-drag'); };
     box.onwheel = e => { e.preventDefault(); this.nudgeVolume(e.deltaY < 0 ? 0.05 : -0.05); };
-    box.append(icon, t);
+    box.append(this.volIcon, t);
     this.showVol(0.6);
     return box;
   }
@@ -446,7 +522,7 @@ export class Overlay {
     this.volFill.style.width = v * 100 + '%';
     this.volKnob.style.left = v * 100 + '%';
     this.volTrack.title = `音量 ${Math.round(v * 100)}%（滚轮或 ↑ ↓ 调节）`;
-    if (was < 0 || (was > 0.001) !== (v > 0.001)) this.volIcon.innerHTML = svg(v > 0.001 ? ICON.volume : ICON.muted, 20);
+    if (was < 0 || (was > 0.001) !== (v > 0.001)) this.volIcon.innerHTML = icon(v > 0.001 ? 'speaker' : 'muted', 22);
     this.volIcon.title = v > 0.001 ? '静音' : '取消静音';
   }
 
@@ -456,64 +532,39 @@ export class Overlay {
     this.showVol(v);
   }
 
-  /** The song's structure along the progress bar ([] while none is known: one plain bar). */
+  /** The song's structure along the progress bar ([] while none is known: one plain bar), its loud parts in `accent`. */
   setStructure(sections: BarSection[], accent: string): void {
     this.sections = sections;
-    this.accent = accent;
+    this.root.style.setProperty('--song', accent);
     this.renderSections();
   }
 
   private renderSections(): void {
     const d = this.duration || this.sections[this.sections.length - 1]?.end || 1;
-    const list = this.sections.length ? this.sections : [{ start: 0, end: d, name: '', loud: false }];
-    const draw = (layer: HTMLElement, lit: boolean) => {
-      layer.textContent = '';
-      for (const s of list) {
-        const e = document.createElement('div');
-        const left = (s.start / d) * 100, width = ((s.end - s.start) / d) * 100;
-        const h = s.loud ? 4 : 2;
-        const color = s.loud ? this.accent : lit ? '#fff' : 'rgba(255,255,255,.28)';
-        e.style.cssText = `position:absolute;top:${9 - h / 2}px;height:${h}px;left:calc(${left}% + 1px);width:calc(${width}% - 2px);` +
-          `border-radius:1px;background:${color};opacity:${s.loud && !lit ? 0.45 : 1}`;
-        layer.append(e);
-      }
-    };
-    draw(this.segDim, false);
-    draw(this.segLit, true);
+    for (const layer of [this.segDim, this.segLit, this.loadDim, this.loadLit]) drawSegments(layer, this.sections, d);
   }
 
   /** The hover label: the section under the cursor and its time. */
   private tip(k: number): void {
     const t = k * this.duration, s = this.sections.find(x => t >= x.start && t < x.end);
-    this.tipEl.textContent = s ? `${s.name} · ${clock(t)}` : clock(t);
+    this.tipEl.textContent = '';
+    if (s) this.tipEl.append(s.name, el('span', '', clock(t))); else this.tipEl.append(clock(t));
     this.tipEl.style.left = k * 100 + '%';
   }
 
   /**
-   * The panel that slides in from the right over the picture, for the settings or the play list (one at a time); the
+   * The sheet that slides in over the right of the picture, for the settings or the play list (one at a time); the
    * MV keeps playing beside it.
    */
   private buildPanel(): void {
-    const p = this.panel;
-    p.style.cssText = `position:absolute;top:0;right:0;bottom:0;width:${PANEL}px;max-width:100%;box-sizing:border-box;display:flex;flex-direction:column;` +
-      'background:rgba(14,14,18,.9);backdrop-filter:blur(20px);border-left:1px solid rgba(255,255,255,.08);box-shadow:-24px 0 60px rgba(0,0,0,.4);' +
-      'color:#e8e8e8;transform:translateX(105%);visibility:hidden;transition:transform .3s cubic-bezier(.2,.8,.2,1),visibility 0s .3s';
-    const head = document.createElement('div');
-    head.style.cssText = 'flex:none;display:flex;align-items:baseline;gap:10px;padding:18px 16px 10px 22px';
-    this.panelTitle.style.cssText = 'font-size:16px;font-weight:700;letter-spacing:.1em';
-    this.panelAside.style.cssText = 'flex:1;min-width:0;font-size:12px;opacity:.5;letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
-    const close = document.createElement('button');
-    close.innerHTML = stroke(LINE.close, 16);
+    const head = el('div', 'bmv-sheet-head');
+    const close = el('button', 'bmv-x');
+    close.innerHTML = icon('xmark', 14, 2);
     close.title = '收起（Esc）';
-    close.style.cssText = 'flex:none;align-self:center;display:flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:0;border-radius:16px;' +
-      'background:rgba(255,255,255,.08);color:#fff;cursor:pointer';
+    close.setAttribute('aria-label', '收起');
     close.onclick = () => this.closePanel();
     head.append(this.panelTitle, this.panelAside, close);
-    this.panelBody.className = 'bmv-scroll';
-    const scroll = document.createElement('style');
-    scroll.textContent = '.bmv-scroll::-webkit-scrollbar{width:8px}.bmv-scroll::-webkit-scrollbar-track{background:transparent}' +
-      '.bmv-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16);border-radius:4px}.bmv-scroll::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.28)}';
-    p.append(scroll, head, this.panelBody);
+    this.panel.append(head, this.panelBody);
   }
 
   private togglePanel(which: 'settings' | 'queue'): void {
@@ -527,10 +578,11 @@ export class Overlay {
     const body = this.panelBody;
     body.textContent = '';
     body.scrollTop = 0;
-    body.style.cssText = 'position:relative;flex:1;overflow-y:auto;overscroll-behavior:contain;' + (which === 'settings' ? 'padding:0 22px' : 'padding:0 0 12px');
+    body.style.paddingBottom = which === 'queue' ? '12px' : '';
     if (which === 'settings') {
       this.panelTitle.textContent = '设置';
-      this.panelAside.textContent = VERSION ? `BetterMV v${VERSION}` : '';
+      this.panelAside.innerHTML = appIcon(18);
+      this.panelAside.append(VERSION ? `BetterMV ${VERSION}` : 'BetterMV');
       body.append(this.handlers.settings());
     } else {
       this.panelTitle.textContent = '播放列表';
@@ -540,13 +592,26 @@ export class Overlay {
       const row = this.rows[this.queueAt];
       if (row) body.scrollTop = row.offsetTop - (body.clientHeight - row.offsetHeight) / 2;
     }
-    this.panel.style.transition = 'transform .3s cubic-bezier(.2,.8,.2,1)';
-    this.panel.style.visibility = 'visible';
-    this.panel.style.transform = 'none';
-    // The controls make room for it.
-    this.bar.style.right = PANEL + 'px';
-    this.topButtons.style.right = PANEL + 10 + 'px';
-    this.listEl.style.color = which === 'queue' ? ACCENT : '#fff';
+    // The contents are laid out first; the sheet slides in (and the controls make room) a frame later, not under that
+    // work.
+    if (!this.panel.classList.contains('is-open')) {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (!this.open || this.panel.classList.contains('is-open')) return;
+        this.panel.classList.add('is-open');
+        // Its contents arrive in turn behind it: the settings' sections, or the rows in sight of the play list.
+        const items = this.open === 'settings'
+          ? Array.from(this.panelBody.querySelectorAll('.bmv-sec')).slice(0, 6)
+          : this.rows.filter(r => r.offsetTop + r.offsetHeight > this.panelBody.scrollTop && r.offsetTop < this.panelBody.scrollTop + this.panelBody.clientHeight).slice(0, 14);
+        arrive(items, this.open === 'settings' ? 45 : 22, 80);
+        // The scrim stays across the window (the sheet covers its end); only the controls move over.
+        this.shift(() => {
+          this.bar.style.paddingRight = PANEL_ROOM + 28 + 'px';
+          this.topButtons.style.right = PANEL_ROOM + 10 + 'px';
+        });
+      }));
+    }
+    this.gearEl.classList.toggle('is-on', which === 'settings');
+    this.listEl.classList.toggle('is-on', which === 'queue');
     this.wake();
   }
 
@@ -554,13 +619,34 @@ export class Overlay {
     if (!this.open) return;
     if (this.open === 'settings') hideSketch();
     this.open = null;
-    this.panel.style.transition = 'transform .3s cubic-bezier(.2,.8,.2,1),visibility 0s .3s';
-    this.panel.style.visibility = 'hidden';
-    this.panel.style.transform = 'translateX(105%)';
-    this.bar.style.right = '0';
-    this.topButtons.style.right = '10px';
-    this.listEl.style.color = '#fff';
+    if (this.panel.classList.contains('is-open')) {
+      this.panel.classList.remove('is-open');
+      this.shift(() => {
+        this.bar.style.paddingRight = '';
+        this.topButtons.style.right = '';
+      });
+    }
+    this.gearEl.classList.remove('is-on');
+    this.listEl.classList.remove('is-on');
     this.wake();
+  }
+
+  /**
+   * Resize the controls for the sheet (or back) at once, then play the change as transforms from where things were: the
+   * progress line stretches, the rest slide. A layout animation would lay the bar out every frame beside the MV.
+   */
+  private shift(apply: () => void): void {
+    const moving: Array<[HTMLElement, boolean]> = [[this.track, true], [this.lengthEl, false], [this.transport, false], [this.rightItems, false], [this.topButtons, false]];
+    const before = moving.map(([e]) => e.getBoundingClientRect());
+    apply();
+    if (!this.visible || typeof this.track.animate !== 'function') return;
+    moving.forEach(([e, stretch], i) => {
+      const a = before[i], b = e.getBoundingClientRect();
+      if (!a.width || !b.width) return;
+      const dx = stretch ? a.left - b.left : a.right - b.right, sx = stretch ? a.width / b.width : 1;
+      if (Math.abs(dx) < 0.5 && Math.abs(sx - 1) < 0.001) return;
+      e.animate([{ transform: `translateX(${dx}px) scaleX(${sx})` }, { transform: 'none' }], { duration: 450, easing: EASE });
+    });
   }
 
   /** NetEase's play list and the playing track's place in it (-1: not in it); drawn when the list is open. */
@@ -575,36 +661,31 @@ export class Overlay {
     if (this.rowsFor !== this.tracks) {
       this.rowsFor = this.tracks;
       this.litRow = -1;
-      this.panelAside.textContent = this.tracks.length ? `共 ${this.tracks.length} 首` : '';
+      this.panelAside.textContent = this.tracks.length ? `${this.tracks.length} 首` : '';
       const body = this.panelBody;
       body.textContent = '';
-      if (!this.tracks.length) body.append(el('div', 'padding:40px 22px;text-align:center;font-size:13px;opacity:.5', '播放列表为空'));
+      if (!this.tracks.length) body.append(el('div', 'bmv-q-empty', '播放列表为空'));
       // A long list costs little: rows off screen are skipped until scrolled to.
       this.rows = this.tracks.map((t, i) => {
-        const row = el('div', 'display:flex;align-items:center;gap:12px;height:52px;padding:0 22px;cursor:pointer;content-visibility:auto;contain-intrinsic-size:52px');
-        const num = el('div', 'flex:none;display:flex;justify-content:flex-end;width:26px;font:12px/1 Consolas,monospace;opacity:.45', String(i + 1).padStart(2, '0'));
-        const text = el('div', 'flex:1;min-width:0;line-height:1.4');
+        const row = el('div', 'bmv-q');
+        const text = el('div', 'bmv-q-text');
         const artists = t.artists.join(' / ');
-        text.append(el('div', 'font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis', t.name || '未知歌曲'),
-          el('div', 'font-size:12px;opacity:.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis', artists));
-        row.title = artists ? `${t.name} — ${artists}` : t.name;
-        row.append(num, text, el('div', 'flex:none;font:12px/1 Consolas,monospace;opacity:.45', t.duration ? clock(t.duration) : ''));
-        row.onmouseenter = () => { row.style.background = 'rgba(255,255,255,.07)'; };
-        row.onmouseleave = () => { row.style.background = ''; };
+        text.append(el('div', 'bmv-q-name', t.name || '未知歌曲'), el('div', 'bmv-q-artist', artists));
+        row.title = artists ? `${t.name} - ${artists}` : t.name;
+        row.append(el('div', 'bmv-q-num', String(i + 1)), text, el('div', 'bmv-q-dur', t.duration ? clock(t.duration) : ''));
         row.onclick = () => this.handlers.onPlayAt(i);
-        this.panelBody.append(row);
+        body.append(row);
         return row;
       });
     }
     if (this.litRow === this.queueAt) return;
-    // The playing track in red, a speaker in place of its number.
+    // The playing track: bars moving with the music in place of its number.
     const paint = (i: number, on: boolean) => {
       const row = this.rows[i];
       if (!row) return;
-      const num = row.firstElementChild as HTMLElement, name = row.children[1].firstElementChild as HTMLElement;
-      num.innerHTML = on ? svg(ICON.volume, 14) : String(i + 1).padStart(2, '0');
-      num.style.color = name.style.color = on ? ACCENT : '';
-      num.style.opacity = on ? '1' : '.45';
+      row.classList.toggle('is-now', on);
+      const num = row.firstElementChild as HTMLElement;
+      num.innerHTML = on ? '<span class="bmv-eq"><i></i><i></i><i></i></span>' : String(i + 1);
     };
     paint(this.litRow, false);
     paint(this.queueAt, true);
@@ -617,7 +698,6 @@ export class Overlay {
    */
   private buildDrag(): void {
     const d = this.dragEl;
-    d.style.cssText = 'position:absolute;left:0;right:0;top:0;height:56px';
     let down: { x: number; y: number } | null = null;
     d.addEventListener('mousedown', e => { down = e.button === 0 ? { x: e.screenX, y: e.screenY } : null; });
     d.addEventListener('mousemove', e => {
@@ -642,7 +722,7 @@ export class Overlay {
       ['right', 'top:8px;bottom:8px;right:0;width:5px;cursor:ew-resize'],
     ];
     this.grips = grips.map(([edge, css]) => {
-      const g = document.createElement('div');
+      const g = el('div');
       g.style.cssText = 'position:absolute;' + css;
       g.addEventListener('mousedown', e => { if (e.button === 0) this.handlers.onResizeWindow(edge); });
       return g;
@@ -654,13 +734,12 @@ export class Overlay {
     if (on === this.isMax) return;
     this.isMax = on;
     for (const g of this.grips) g.style.display = on ? 'none' : '';
-    this.maxEl.innerHTML = stroke(on ? LINE.restore : LINE.maximize, 18);
+    this.maxEl.innerHTML = icon(on ? 'restore' : 'maximize', 18);
     this.maxEl.title = on ? '向下还原' : '最大化';
   }
   private isMax = false;
 
   private showAt(k: number): void {
-    this.fill.style.width = k * 100 + '%';
     this.segLit.style.clipPath = `inset(0 ${(1 - k) * 100}% 0 0)`;
     this.knob.style.left = k * 100 + '%';
     this.timeEl.textContent = clock(k * this.duration);
@@ -672,6 +751,8 @@ export class Overlay {
   private wake(): void {
     this.awake = true;
     this.top.style.opacity = '1';
+    this.top.style.transform = '';
+    this.bar.style.transform = '';
     this.bar.style.opacity = this.showControls ? '1' : '0';
     this.bar.style.pointerEvents = this.showControls ? 'auto' : 'none';
     this.root.style.cursor = '';
@@ -685,7 +766,9 @@ export class Overlay {
     clearTimeout(this.idleTimer);
     this.awake = false;
     this.top.style.opacity = '0';
+    this.top.style.transform = 'translateY(-6px)';
     this.bar.style.opacity = '0';
+    this.bar.style.transform = 'translateY(10px)';
     this.bar.style.pointerEvents = 'none';
     this.root.style.cursor = 'none';
   }
@@ -694,35 +777,138 @@ export class Overlay {
     this.visible = true;
     // Last in the page, so nothing another plugin added at the same z-index sits over the MV.
     if (this.root !== document.body.lastElementChild) document.body.appendChild(this.root);
+    const was = this.root.style.display === 'block';
     this.root.style.display = 'block';
+    if (!was) play(this.root, [{ opacity: 0 }, { opacity: 1 }], { duration: 320, easing: 'ease-out' });
     this.wake();
+    // The settings' first layout (its many glyphs shaped for the first time) takes tens of ms: done once, out of
+    // sight, while the MV is being made, so the first opening of the panel doesn't stall.
+    if (!this.warmed) {
+      this.warmed = true;
+      window.setTimeout(() => {
+        if (!this.visible || this.open) return;
+        const v = this.handlers.settings();
+        v.style.cssText = `position:absolute;left:-10000px;top:0;width:${PANEL}px;visibility:hidden;pointer-events:none`;
+        this.root.append(v);
+        void v.offsetHeight;
+        v.remove();
+      }, 1200);
+    }
   }
-  hide(): void { this.closePanel(); this.visible = false; this.root.style.display = 'none'; }
-
-  status(text: string | null): void {
-    this.statusEl.textContent = text ?? '';
-    this.backdrop.style.opacity = text ? '1' : '0';
+  private warmed = false;
+  hide(): void {
+    this.closePanel();
+    this.visible = false;
+    const r = this.root;
+    if (typeof r.animate !== 'function' || r.style.display !== 'block') { r.style.display = 'none'; return; }
+    // A short fade out; gone at once if it is shown again meanwhile.
+    const fade = r.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, easing: 'ease-in' });
+    fade.onfinish = () => { if (!this.visible) r.style.display = 'none'; };
   }
 
-  /** The song under the controls (null: none playing). */
+  /**
+   * What the MV page is waiting on (null: nothing, the MV shows). With a song known the waiting view shows its
+   * artwork, name and a line of progress; without one, the text alone.
+   */
+  status(text: string | null, opts: StatusOptions = {}): void {
+    const l = this.loadEl;
+    if (text === null) { this.finishLoading(); return; }
+    const p = opts.progress;
+    l.classList.toggle('is-error', !!opts.error);
+    l.classList.toggle('is-empty', !this.hasSong);
+    this.loadStep.textContent = text;
+    this.loadHint.textContent = opts.hint ?? '';
+    this.loadPct.textContent = p === undefined || opts.error ? '' : `${Math.round(Math.max(0, Math.min(1, p)) * 100)}%`;
+    const k = Math.max(0, Math.min(1, p ?? 0));
+    if (k !== this.loadProgress) {
+      this.loadProgress = k;
+      this.loadFill.style.transform = `translateX(${(k - 1) * 100}%)`;
+      this.loadLit.style.transform = `translateX(${(1 - k) * 100}%)`;
+    }
+    this.loadArt.style.visibility = '';
+    clearTimeout(this.leaveTimer);
+    l.classList.remove('is-leaving');
+    this.backdrop.classList.remove('is-leaving');
+    if (!l.classList.contains('is-on')) {
+      this.loadSince = performance.now();
+      if (this.hasSong) {
+        play(this.loadArt, [{ opacity: 0, transform: 'scale(.94)' }, { opacity: 1, transform: 'none' }], { duration: 600, easing: EASE, fill: 'backwards' });
+        arrive([this.loadTitle, this.loadArtist, this.loadDim.parentElement!, this.loadStep.parentElement!], 60, 120, 8);
+      }
+    }
+    l.classList.add('is-on');
+    this.backdrop.classList.add('is-on');
+  }
+
+  /**
+   * The MV is ready: the waiting view goes. With the controls up, its artwork flies into the thumbnail by the song's
+   * name, where it can be seen to land. With them away (the usual case), the whole view (cover colours, artwork,
+   * name, line) fades out as one, the artwork settling back a little, and the MV comes up behind it.
+   */
+  private finishLoading(): void {
+    const l = this.loadEl, wasOn = l.classList.contains('is-on');
+    const shown = wasOn && this.visible && this.hasSong && !l.classList.contains('is-error') && !l.classList.contains('is-empty') &&
+      performance.now() - this.loadSince >= 700;
+    const to = this.coverEl.getBoundingClientRect();
+    const intoThumb = shown && this.awake && this.showControls && to.width > 0 && typeof this.loadArt.animate === 'function';
+    if (shown && !intoThumb) {
+      l.classList.add('is-leaving');
+      this.backdrop.classList.add('is-leaving');
+      clearTimeout(this.leaveTimer);
+      this.leaveTimer = window.setTimeout(() => { l.classList.remove('is-leaving'); this.backdrop.classList.remove('is-leaving'); }, 900);
+    }
+    l.classList.remove('is-on');
+    this.backdrop.classList.remove('is-on');
+    if (!intoThumb) return;
+    const from = this.loadArt.getBoundingClientRect(), box = this.root.getBoundingClientRect();
+    if (!from.width) return;
+    const fly = el('div', 'bmv-load-art');
+    fly.style.cssText = `position:absolute;left:${from.left - box.left}px;top:${from.top - box.top}px;width:${from.width}px;height:${from.height}px;` +
+      `background-image:${this.loadArt.style.backgroundImage};transform-origin:0 0;pointer-events:none;will-change:transform,opacity`;
+    this.root.insertBefore(fly, this.dragEl);
+    this.loadArt.style.visibility = 'hidden';
+    // Transform and opacity only, so it runs off the main thread while the MV's first frames are drawn.
+    const k = to.width / from.width;
+    const land = fly.animate([
+      { transform: 'none' },
+      { transform: `translate(${to.left - from.left}px,${to.top - from.top}px) scale(${k})` },
+    ], { duration: 720, easing: EASE, fill: 'forwards' });
+    land.onfinish = () => {
+      const fade = fly.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 260, fill: 'forwards' });
+      fade.onfinish = () => fly.remove();
+    };
+  }
+  private leaveTimer = 0;
+
+  /** The song under the controls and in the waiting view (null: none playing). */
   song(info: SongInfo | null): void {
     const name = info?.name || '', artists = info?.artists.join(' / ') || '';
-    this.nameEl.textContent = name;
-    this.artistEl.textContent = artists;
-    this.songEl.title = artists ? `${name} — ${artists}` : name;
-    const cover = info?.cover ? thumb(info.cover) : '';
+    this.hasSong = !!info;
+    this.root.classList.toggle('is-nosong', !info);
+    if (!info) {
+      // Nothing playing: no structure, and play (not pause) under the dimmed buttons.
+      this.setStructure([], '#fff');
+      this.playing = null;
+      this.playEl.innerHTML = icon('play', 30);
+    }
+    this.nameEl.textContent = this.loadTitle.textContent = name;
+    this.artistEl.textContent = this.loadArtist.textContent = artists;
+    this.songEl.title = artists ? `${name} - ${artists}` : name;
+    const cover = info?.cover ? sized(info.cover, 96) : '';
     if (cover && this.coverEl.getAttribute('src') !== cover) this.coverEl.src = cover;
     this.coverEl.style.display = cover ? '' : 'none';
+    this.loadArt.style.backgroundImage = info?.cover ? `url("${sized(info.cover, 640)}")` : '';
   }
 
-  /** The MV's style beside the volume (null while the MV is being made); the reason and the lyrics' state on hover. */
+  /** The MV's style and tempo beside the volume (null while the MV is being made); why, and the lyrics, on hover. */
   mvInfo(info: MvInfo | null): void {
     this.mv = info;
     const s = this.styleEl;
     s.textContent = '';
     if (info) {
-      s.append(el('span', 'opacity:.6;margin-right:6px', '风格'), info.style);
-      if (info.lyrics === 'aligning') s.append(el('span', 'opacity:.6;margin-left:6px', '· 歌词对齐中'));
+      s.append(info.style);
+      if (info.bpm) s.append(el('span', '', `${Math.round(info.bpm)} BPM`));
+      if (info.lyrics === 'aligning') s.append(el('span', '', '正在对齐歌词'));
       s.title = [
         `风格：${info.style}（${info.why ? `自动选择，${info.why}` : '手动指定'}）`,
         info.lyrics === 'aligning' ? '歌词：正在按音频对齐每个字' : info.lyrics === 'aligned' ? '歌词：已按音频对齐每个字' : '',
@@ -738,18 +924,29 @@ export class Overlay {
    */
   playState(liked: boolean | null, mode: PlayMode | null): void {
     if (liked !== this.liked) {
-      this.liked = liked;
-      const l = this.likeEl;
+      const l = this.likeEl, was = this.liked;
       l.style.visibility = liked === null ? 'hidden' : 'visible';
-      l.innerHTML = svg(liked ? ICON.heart : ICON.heartLine, 20);
-      l.style.color = liked ? ACCENT : '#fff';
+      l.innerHTML = icon(liked ? 'heartFill' : 'heart', 20);
+      if (typeof was === 'boolean' && typeof liked === 'boolean') {
+        play(l.firstElementChild, liked
+          ? [{ transform: 'scale(.7)' }, { transform: 'scale(1.22)', offset: 0.45 }, { transform: 'none' }]
+          : [{ transform: 'scale(.8)' }, { transform: 'none' }], { duration: liked ? 380 : 220, easing: 'ease-out' });
+      }
+      l.classList.toggle('is-quiet', !liked);
+      l.classList.toggle('is-liked', !!liked);
       l.title = liked ? '取消喜欢' : '喜欢';
+      this.liked = liked;
     }
     if (mode !== this.mode) {
       this.mode = mode;
       const m = this.modeEl, known = mode && mode !== 'playFm' ? MODES[mode] : null;
       m.style.visibility = known ? 'visible' : 'hidden';
-      if (known) { m.innerHTML = svg(known.icon, 20); m.title = known.name; }
+      if (known) {
+        const first = !m.firstElementChild;
+        m.innerHTML = icon(known.icon, 20);
+        m.title = known.name;
+        if (!first) play(m.firstElementChild, [{ opacity: 0, transform: 'rotate(-90deg) scale(.6)' }, { opacity: 1, transform: 'none' }], { duration: 320, easing: EASE });
+      }
     }
   }
 
@@ -759,8 +956,11 @@ export class Overlay {
     if (duration && Math.abs(duration - this.duration) > 0.5) { this.duration = duration; this.renderSections(); }
     this.duration = duration;
     if (playing !== this.playing) {
+      const swap = this.playing !== null;
       this.playing = playing;
-      this.playEl.innerHTML = svg(playing ? ICON.pause : ICON.play, 26);
+      this.playEl.innerHTML = icon(playing ? 'pause' : 'play', 30);
+      if (swap) play(this.playEl.firstElementChild, [{ opacity: 0.2, transform: 'scale(.6)' }, { opacity: 1, transform: 'none' }], { duration: 240, easing: EASE });
+      this.root.classList.toggle('is-playing', playing);
     }
     if (this.dragging || !duration) return;
     const second = Math.floor(seconds * 4);
@@ -771,17 +971,14 @@ export class Overlay {
   }
 
   setBackdrop(url: string | null): void {
-    this.backdrop.style.backgroundImage = url ? `url("${url.replace(/^http:/, 'https:')}")` : '';
+    const image = url ? `url("${sized(url, 200)}")` : '';
+    for (const layer of this.backdropLayers) layer.style.backgroundImage = image;
   }
 }
 
 
-const ACCENT = '#ec4141';
 /** The picture delay's range, ms. */
 const LATENCY_MIN = -200, LATENCY_MAX = 400;
-/** Greys that read on a light and on a dark settings panel alike (the text keeps the panel's own colour). */
-const TINT = (a: number) => `rgba(127,127,127,${a})`;
-const CHECK = '<svg viewBox="0 0 12 12" width="10" height="10"><path d="M2.5 6.2l2.3 2.3 4.7-5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 const STYLE_NOTE: Record<Config['style'], string> = {
   auto: '根据网易云的曲风标签选择：说唱为“字”，国风为“墨”，电子、舞曲、摇滚为“律动”，民谣、古典、轻音乐为“抒情”；无标签时依据鼓点和 drop 判断。',
@@ -790,13 +987,6 @@ const STYLE_NOTE: Record<Config['style'], string> = {
   word: '以歌词为画面主体：字墙、海报排版、网点印刷。适合说唱。',
   ink: '封面呈现为宣纸水墨，歌词竖排，以墨迹晕染转场。适合国风、古风。',
 };
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, css: string, text?: string): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  e.style.cssText = css;
-  if (text !== undefined) e.textContent = text;
-  return e;
-}
 
 /** Which styles use each plate (any section, any cover, with or without lyrics); every style opens on the cards. */
 function stylesUsing(): Map<SceneId, string[]> {
@@ -819,16 +1009,16 @@ let sketch: Sketch | null = null;
 function sketchCard(): Sketch {
   // Last in the page each time, so it shows over the MV (same z-index) when its settings panel is open.
   if (sketch) { if (sketch.root !== document.body.lastElementChild) document.body.append(sketch.root); return sketch; }
-  const root = el('div', `position:fixed;left:0;top:0;z-index:2147483647;width:320px;border-radius:10px;overflow:hidden;background:#141418;color:#eee;font:12px/1.6 ${FONT};` +
-    'box-shadow:0 14px 40px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.07);pointer-events:none;opacity:0;transform:translateY(4px);transition:opacity .14s,transform .14s');
-  const frame = el('div', 'position:relative;width:320px;height:180px;background:#0b0b0e');
-  const img = el('img', 'position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;display:block;visibility:hidden');
-  const blank = el('div', 'position:absolute;left:0;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;opacity:.45;letter-spacing:.08em');
+  const root = el('div', 'bmv-ui bmv-card');
+  const frame = el('div', 'bmv-card-frame');
+  const img = el('img');
+  img.alt = '';
+  const blank = el('div', 'bmv-card-blank');
   frame.append(img, blank);
-  const body = el('div', 'padding:10px 12px 12px');
-  const title = el('div', 'display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;letter-spacing:.04em');
-  const note = el('div', 'margin-top:4px;opacity:.8');
-  const foot = el('div', 'margin-top:6px;font-size:11px;opacity:.5;letter-spacing:.03em');
+  const body = el('div', 'bmv-card-body');
+  const title = el('div', 'bmv-card-title');
+  const note = el('div', 'bmv-card-note');
+  const foot = el('div', 'bmv-card-foot');
   body.append(title, note, foot);
   root.append(frame, body);
   document.body.append(root);
@@ -839,64 +1029,132 @@ function hideSketch(): void {
   if (!sketch) return;
   sketch.token++;
   clearTimeout(sketch.timer);
-  sketch.root.style.opacity = '0';
-  sketch.root.style.transform = 'translateY(4px)';
+  sketch.root.classList.remove('is-on');
+}
+
+/**
+ * Whether the host shows the settings page in a dark theme (BetterNCM's panel follows NetEase's own skin, not the
+ * system's). The page's ancestors don't say (NetEase paints its dark ground on a layer beside them, and BetterNCM hands
+ * down black text), so it asks what is painted under the page: the elements stacked at a point of it, top first,
+ * past its own, until one has a ground. Failing that, the host's own words around the page (light on a dark skin;
+ * the median of a few, so an accent colour doesn't decide), then the ancestors' grounds, then the system's setting.
+ * Whatever it decides, the page carries its own ground, so its words never stand on the wrong one.
+ */
+function hostIsDark(view: HTMLElement): boolean {
+  const lum = (css: string) => {
+    const m = css.match(/[\d.]+/g);
+    if (!m || m.length < 3) return null;
+    if (m.length > 3 && Number(m[3]) < 0.5) return null;
+    return (0.2126 * Number(m[0]) + 0.7152 * Number(m[1]) + 0.0722 * Number(m[2])) / 255;
+  };
+  // What is painted under the page, at a point of it in sight.
+  const r = view.getBoundingClientRect();
+  const x = Math.min(Math.max(r.left + 6, 0), window.innerWidth - 1), y = Math.min(Math.max(r.top + 6, 0), window.innerHeight - 1);
+  if (r.width && r.height && x >= r.left && x < r.right && y >= r.top && y < r.bottom && document.elementsFromPoint) {
+    for (const e of document.elementsFromPoint(x, y)) {
+      if (view.contains(e) || e.closest('.bmv-ui')) continue;
+      const l = lum(getComputedStyle(e).backgroundColor);
+      if (l !== null) return l < 0.45;
+    }
+  }
+  // The host's own words around the page.
+  const words = (root: Element, out: number[], room: number) => {
+    const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = walk.nextNode(), seen = 0; n && seen < 400 && out.length < room; n = walk.nextNode(), seen++) {
+      const e = n.parentElement;
+      if (!n.nodeValue || !n.nodeValue.trim() || !e || !e.getClientRects().length) continue;
+      const l = lum(getComputedStyle(e).color);
+      if (l !== null) out.push(l);
+    }
+  };
+  for (let branch: Element = view, up = view.parentElement; up && up !== document.documentElement; branch = up, up = up.parentElement) {
+    const seen: number[] = [];
+    for (const sib of Array.from(up.children)) {
+      if (sib === branch || sib.tagName === 'STYLE' || sib.tagName === 'SCRIPT' || sib.classList.contains('bmv-ui')) continue;
+      words(sib, seen, 9);
+      if (seen.length >= 9) break;
+    }
+    if (seen.length) return seen.sort((a, b) => a - b)[seen.length >> 1] > 0.5;
+  }
+  for (let e = view.parentElement; e; e = e.parentElement) {
+    const l = lum(getComputedStyle(e).backgroundColor);
+    if (l !== null) return l < 0.45;
+  }
+  return !!window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
 /**
  * Settings page for BetterNCM's plugin panel, or (`compact`) the MV page's own settings panel: narrower, without the
- * introduction, the sketches shown beside the panel. `preview` gives a scene's sketch (an image URL), or null when
- * there is none.
+ * header and the keys, the sketches shown beside the panel. `preview` gives a scene's sketch (an image URL), or null
+ * when there is none.
  */
-export function settingsView(config: Config, onChange: (c: Config) => void, preview: (id: string) => Promise<string | null>, compact = false, song?: { id: number; name: string }): HTMLElement {
-  const view = el('div', `font:13px/1.6 ${FONT};color:inherit;` + (compact ? 'padding:0 0 28px' : 'padding:4px 2px 28px;max-width:660px'));
+export function settingsView(config: Config, onChange: (c: Config) => void, preview: (id: string) => Promise<string | null>, compact = false, song?: { id: number; name: string }, actions: { reroll?: () => void } = {}): HTMLElement {
+  ensureStyles();
+  const view = el('div', 'bmv-ui bmv-set ' + (compact ? 'is-compact' : 'is-page'));
   view.dataset.bmvSettings = '';
-
-  // Header: what it is (and which version), and the keys. The MV page's panel shows the version in its own head.
+  view.dataset.theme = 'dark';
   if (!compact) {
-    const name = el('div', 'display:flex;align-items:baseline;gap:8px');
-    name.append(el('span', 'font-size:20px;font-weight:800;letter-spacing:.02em', 'BetterMV'));
-    if (VERSION) name.append(el('span', 'font:12px Consolas,monospace;opacity:.55', `v${VERSION}`));
-    view.append(name);
-  }
-  if (!compact) view.append(el('div', 'opacity:.7;margin-top:2px', '为正在播放的歌曲实时生成 3D MV：以封面构建场景，按歌曲结构剪辑镜头，按曲风自动选择风格。'));
-  const keys = el('div', 'display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px;font-size:12px;opacity:.85');
-  for (const [key, what] of [['Ctrl+Shift+M', '打开（或点击播放栏上方的 MV）'], ['Esc', '退出'], ['空格', '播放 / 暂停'], ['← →', '快退 / 快进'], ['↑ ↓', '音量']]) {
-    const item = el('span', 'display:inline-flex;align-items:center;gap:6px');
-    item.append(el('kbd', `font:11px/1 Consolas,${FONT};padding:3px 6px;border-radius:4px;border:1px solid ${TINT(0.4)};border-bottom-width:2px`, key), document.createTextNode(what));
-    keys.append(item);
-  }
-  if (!compact) view.append(keys);
+    // The host's theme is known once the page is in it, and followed while it is (NetEase's theme can change).
+    view.dataset.theme = 'light';
+    let tries = 0, shown = false;
+    const look = () => {
+      if (view.isConnected) {
+        shown = true;
+        const theme = hostIsDark(view) ? 'dark' : 'light';
+        if (view.dataset.theme !== theme) view.dataset.theme = theme;
+        window.setTimeout(look, 1000);
+      } else if (!shown && tries++ < 240) requestAnimationFrame(look);
+    };
+    requestAnimationFrame(look);
 
-  const section = (title: string, aside?: HTMLElement) => {
-    const head = el('div', `display:flex;align-items:center;gap:10px;margin:${compact && !view.childElementCount ? 4 : 24}px 0 4px;padding-bottom:6px;border-bottom:1px solid ${TINT(0.22)}`);
-    head.append(el('div', 'font-size:14px;font-weight:700;letter-spacing:.06em', title));
-    if (aside) { aside.style.marginLeft = 'auto'; head.append(aside); }
+    const head = el('div', 'bmv-set-head');
+    const mark = el('div', 'bmv-appicon');
+    mark.innerHTML = appIcon(56);
+    const text = el('div');
+    const name = el('div', 'bmv-set-name', 'BetterMV');
+    if (VERSION) name.append(el('span', 'bmv-set-ver', VERSION));
+    text.append(name, el('div', 'bmv-set-desc', '为正在播放的歌曲实时生成 3D MV：以封面构建场景，按歌曲结构剪辑镜头，按曲风自动选择风格。'));
+    head.append(mark, text);
     view.append(head);
+  }
+
+  /** A titled section; returns the place for its rows (a rounded group) unless `bare`. */
+  const section = (title: string, aside?: HTMLElement, note?: string) => {
+    const sec = el('div', 'bmv-sec');
+    const h = el('div', 'bmv-sec-h');
+    h.append(el('div', 'bmv-sec-title', title));
+    if (aside) { aside.classList.add('bmv-sec-aside'); h.append(aside); }
+    sec.append(h);
+    if (note) sec.append(el('div', 'bmv-sec-note', note));
+    view.append(sec);
+    return sec;
   };
-  const row = (label: string, control: HTMLElement, note?: string | HTMLElement) => {
-    const r = el('div', `display:grid;grid-template-columns:${compact ? '64px 1fr;column-gap:12px' : '84px 1fr;column-gap:16px'};row-gap:4px;align-items:center;padding:9px 0`);
-    control.style.justifySelf = 'start';
-    r.append(el('div', 'font-weight:600', label), control);
-    if (note) r.append(el('div', ''), typeof note === 'string' ? el('div', 'font-size:12px;opacity:.6', note) : note);
-    view.append(r);
+  const group = (host: HTMLElement) => { const g = el('div', 'bmv-group'); host.append(g); return g; };
+  /** A row: the label (and a short line under it) on the left, the control on the right, a longer note across. */
+  const row = (host: HTMLElement, label: string, control: HTMLElement, sub?: string, note?: HTMLElement | string) => {
+    const r = el('div', 'bmv-row');
+    const l = el('div', 'bmv-row-l');
+    l.append(el('div', 'bmv-row-label', label));
+    if (sub) l.append(el('div', 'bmv-row-sub', sub));
+    const c = el('div', 'bmv-row-c');
+    c.append(control);
+    r.append(l, c);
+    if (note) {
+      const n = typeof note === 'string' ? el('div', '', note) : note;
+      n.classList.add('bmv-row-note');
+      r.append(n);
+    }
+    host.append(r);
+    return r;
   };
-  const ghost = (text: string, fn: () => void) => {
-    const b = el('button', `border:1px solid ${TINT(0.35)};background:transparent;color:inherit;font:12px/1 ${FONT};padding:5px 10px;border-radius:6px;cursor:pointer`, text);
-    b.onclick = fn;
-    return b;
-  };
-  const segmented = <K extends 'style' | 'quality'>(key: K, options: Array<[Config[K], string]>, then?: () => void) => {
-    const g = el('div', `display:inline-flex;gap:2px;padding:3px;border-radius:9px;background:${TINT(0.14)}`);
-    const paint = () => g.querySelectorAll('button').forEach(b => {
-      const on = b.dataset.value === String(config[key]);
-      b.style.background = on ? ACCENT : 'transparent';
-      b.style.color = on ? '#fff' : 'inherit';
-      b.style.fontWeight = on ? '600' : '400';
-      b.style.boxShadow = on ? '0 1px 4px rgba(236,65,65,.35)' : 'none';
-    });
+  const button = (text: string, fn: () => void) => { const b = el('button', 'bmv-btn', text); b.onclick = fn; return b; };
+  const link = (text: string, fn: () => void) => { const b = el('button', 'bmv-link', text); b.onclick = fn; return b; };
+  const segmented = <K extends 'style' | 'quality' | 'arrange' | 'fpsCap'>(key: K, options: Array<[Config[K], string]>, then?: () => void) => {
+    const g = el('div', 'bmv-segc');
+    g.setAttribute('role', 'group');
+    const paint = () => g.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.value === String(config[key]))));
     for (const [value, text] of options) {
-      const b = el('button', 'border:0;border-radius:7px;padding:3px 14px;cursor:pointer;font:inherit;transition:background .15s', text);
+      const b = el('button', '', text);
       b.dataset.value = String(value);
       b.onclick = () => { config[key] = value; plugin.setConfig(key, value); paint(); then?.(); onChange(config); };
       g.append(b);
@@ -904,46 +1162,38 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     paint();
     return g;
   };
-  const toggle = (key: 'button' | 'controls') => {
-    const b = el('button', 'position:relative;width:36px;height:20px;border:0;border-radius:10px;padding:0;cursor:pointer;transition:background .18s');
-    const knob = el('span', 'position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:8px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform .18s');
-    b.append(knob);
+  const toggle = (key: 'button' | 'controls' | 'prefetch', label: string) => {
+    const b = el('button', 'bmv-switch');
     b.setAttribute('role', 'switch');
-    const paint = () => {
-      b.style.background = config[key] ? ACCENT : TINT(0.4);
-      knob.style.transform = config[key] ? 'translateX(16px)' : '';
-      b.setAttribute('aria-checked', String(config[key]));
-    };
+    b.setAttribute('aria-label', label);
+    const paint = () => b.setAttribute('aria-checked', String(config[key]));
     b.onclick = () => { config[key] = !config[key]; plugin.setConfig(key, config[key]); paint(); onChange(config); };
     paint();
     return b;
   };
-
-  section('画面');
-  const styleNote = el('div', 'font-size:12px;opacity:.6', STYLE_NOTE[config.style]);
-  row('风格', segmented('style', [['auto', '自动'], ['pulse', '律动'], ['ballad', '抒情'], ['word', '字'], ['ink', '墨']], () => { styleNote.textContent = STYLE_NOTE[config.style]; }), styleNote);
-  row('画质', segmented('quality', [['high', '高'], ['mid', '中'], ['low', '低']]), '画面卡顿时调低');
-  // Picture delay, no slider: − and + step 10 ms (held, they repeat), the number can be typed, and back to zero.
-  const lat = el('div', 'display:flex;align-items:center;gap:10px');
   /**
    * A milliseconds stepper: − / the value (typed, or ↑ ↓ 10 ms) / +, held buttons repeating, and 归零. `get` / `set`
    * read and store the value; `less` / `more` title the buttons.
    */
-  const msStepper = (host: HTMLElement, get: () => number, set: (ms: number) => void, min: number, max: number, by: number, less: string, more: string) => {
-    const stepper = el('div', `display:inline-flex;align-items:stretch;height:28px;border:1px solid ${TINT(0.35)};border-radius:8px;overflow:hidden`);
-    const input = el('input', `width:64px;border:0;border-left:1px solid ${TINT(0.25)};border-right:1px solid ${TINT(0.25)};background:transparent;` +
-      'color:inherit;text-align:center;font:13px Consolas,monospace;outline:none;padding:0');
+  const msStepper = (get: () => number, set: (ms: number) => void, min: number, max: number, by: number, less: string, more: string) => {
+    const host = el('div', 'bmv-row-c');
+    host.style.margin = '0';
+    const stepper = el('div', 'bmv-stepper');
+    const input = el('input');
     input.inputMode = 'numeric';
     input.title = '可直接输入；↑ ↓ 键每次调整 10 ms';
+    const zero = link('归零', () => apply(0));
     const show = () => { const ms = get(); input.value = (ms > 0 ? '+' : '') + ms; zero.style.visibility = ms ? 'visible' : 'hidden'; };
     const apply = (ms: number) => {
       ms = Math.max(min, Math.min(max, Math.round(ms)));
       if (ms !== get()) set(ms);
       show();
     };
-    const step = (text: string, d: number, title: string) => {
-      const b = el('button', `width:30px;border:0;background:${TINT(0.1)};color:inherit;font:16px/1 ${FONT};cursor:pointer;padding:0`, text);
+    const step = (name: IconName, d: number, title: string) => {
+      const b = el('button');
+      b.innerHTML = icon(name, 14, 2);
       b.title = title;
+      b.setAttribute('aria-label', title);
       // Held down, it repeats after 0.4 s, every 60 ms.
       let timer = 0;
       const stop = () => { clearTimeout(timer); timer = 0; };
@@ -966,84 +1216,223 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     };
     input.onblur = () => { const ms = parseInt(input.value.replace(/[^\d-]/g, ''), 10); if (Number.isFinite(ms)) apply(ms); else show(); };
     input.onfocus = () => input.select();
-    const zero = ghost('归零', () => apply(0));
-    stepper.append(step('−', -by, less), input, step('+', by, more));
-    host.append(stepper, el('span', 'font-size:12px;opacity:.7', 'ms'), zero);
+    stepper.append(step('minus', -by, less), input, step('plus', by, more));
+    host.append(stepper, el('span', 'bmv-unit', 'ms'), zero);
     show();
+    return host;
   };
-  msStepper(lat, () => config.latencyMs, ms => { config.latencyMs = ms; plugin.setConfig('latencyMs', ms); onChange(config); },
-    LATENCY_MIN, LATENCY_MAX, 10, '画面提前 10 ms', '画面推后 10 ms');
-  row('画面延迟', lat, compact ? '画面早于声音时调大（蓝牙耳机通常需 +150～250 ms），可在播放中实时调整' : '画面早于声音时调大（蓝牙耳机通常需 +150～250 ms）；也可在 MV 页右上角的设置中实时调整');
 
-  section('界面');
-  row('MV 按钮', toggle('button'), '显示在播放栏上方；关闭后可用 Ctrl+Shift+M 打开');
-  row('控制栏', toggle('controls'), 'MV 页底部的播放控制，鼠标静止时自动隐藏');
+  const picture = group(section('画面'));
+  const styleNote = el('div', '', STYLE_NOTE[config.style]);
+  row(picture, '风格', segmented('style', [['auto', '自动'], ['pulse', '律动'], ['ballad', '抒情'], ['word', '字'], ['ink', '墨']], () => { styleNote.textContent = STYLE_NOTE[config.style]; }), undefined, styleNote);
+  row(picture, '画面编排', segmented('arrange', [['random', '每次不同'], ['fixed', '固定']]), '同一首歌再次播放时，场景、镜头与画风是否重新编排');
+  // On the MV page: the playing song arranged anew, at once.
+  if (actions.reroll) {
+    const again = button('换一种', () => {
+      actions.reroll!();
+      again.textContent = '已重新编排';
+      window.setTimeout(() => { again.textContent = '换一种'; }, 1400);
+    });
+    row(picture, '当前歌曲', again, '立即重新编排正在播放的歌曲');
+  }
+  // Picture delay, no slider: − and + step 10 ms (held, they repeat), the number can be typed, and back to zero.
+  row(picture, '画面延迟', msStepper(() => config.latencyMs, ms => { config.latencyMs = ms; plugin.setConfig('latencyMs', ms); onChange(config); },
+    LATENCY_MIN, LATENCY_MAX, 10, '画面提前 10 ms', '画面推后 10 ms'), undefined,
+  compact ? '画面早于声音时调大（蓝牙耳机通常需 +150～250 ms），可在播放中实时调整' : '画面早于声音时调大（蓝牙耳机通常需 +150～250 ms）；也可在 MV 页右上角的设置中实时调整');
+
+  const perf = group(section('性能'));
+  row(perf, '画质', segmented('quality', [['high', '高'], ['mid', '中'], ['low', '低']]), '画面卡顿时调低');
+  row(perf, '帧率上限', segmented('fpsCap', [[0, '不限'], [240, '240'], [120, '120'], [60, '60'], [30, '30']]), '限制每秒绘制的帧数；高刷新率屏幕可选 120 或 240，30 帧可明显降低显卡占用');
+  row(perf, '提前分析下一首', toggle('prefetch', '提前分析下一首'), '播放时在后台分析播放列表中的下一首，切歌后无需等待；会占用部分 CPU');
+
+  const shell = group(section('界面'));
+  const mvButtonRow = row(shell, 'MV 按钮', toggle('button', 'MV 按钮'), `显示在播放栏上方；关闭后可用 ${keyLabel(config.keys.toggle)} 打开`);
+  row(shell, '控制栏', toggle('controls', '控制栏'), 'MV 页底部的播放控制，鼠标静止时自动隐藏');
 
   // The optional aligner pack: its state follows the download while the page is open.
-  section('歌词');
+  const words = group(section('歌词'));
   // On the MV page: this song's own lyric delay (some songs' lyrics run late or early on NetEase's side).
   if (song) {
-    const box = el('div', 'display:flex;align-items:center;gap:10px');
     const key = String(song.id);
-    msStepper(box, () => config.lyricDelays[key] ?? 0, ms => {
+    row(words, '歌词延迟', msStepper(() => config.lyricDelays[key] ?? 0, ms => {
       if (ms) config.lyricDelays[key] = ms; else delete config.lyricDelays[key];
       plugin.setConfig('lyricDelays', JSON.stringify(config.lyricDelays));
       onChange(config);
-    }, -3000, 3000, 50, '歌词提前 50 ms', '歌词推后 50 ms');
-    row('歌词延迟', box, `仅对当前歌曲（${song.name}）生效：歌词晚于演唱时调小，早于演唱时调大`);
+    }, -3000, 3000, 50, '歌词提前 50 ms', '歌词推后 50 ms'), undefined, `仅对当前歌曲（${song.name}）生效：歌词晚于演唱时调小，早于演唱时调大`);
   }
-  const pack = el('div', 'display:flex;align-items:center;gap:10px;flex-wrap:wrap');
-  const packNote = el('div', 'font-size:12px;opacity:.6',
-    '适用于仅有逐句歌词的歌曲：按音频识别每个字的演唱时间，替代按音节的估算。首次播放时在本机后台分析，耗时数秒至半分钟，结果缓存后复用。全程本地运行，不上传数据。');
+  const pack = el('div', 'bmv-row-c');
+  pack.style.margin = '0';
   const mb = (n: number) => `${Math.round(n / 1048576)} MB`;
   const stopWatching = watchPack(st => {
     if (!view.isConnected && pack.childElementCount) { stopWatching(); return; }
     pack.textContent = '';
-    const text = (t: string, accent = false) => pack.append(el('span', `font-size:12px;${accent ? `color:${ACCENT}` : 'opacity:.75'}`, t));
-    if (st.kind === 'checking') text('检查中…');
-    else if (st.kind === 'none') pack.append(ghost('下载对齐包（约 400 MB）', () => void installPack()));
+    const state = (t: string, error = false) => pack.append(el('span', 'bmv-state' + (error ? ' is-error' : ''), t));
+    if (st.kind === 'checking') state('正在检查…');
+    else if (st.kind === 'none') pack.append(button('下载对齐包（约 400 MB）', () => void installPack()));
     else if (st.kind === 'installing') {
       const pct = st.total ? st.done / st.total : 0;
-      const bar = el('div', `width:160px;height:6px;border-radius:3px;background:${TINT(0.2)};overflow:hidden`);
-      bar.append(el('div', `height:100%;width:${(pct * 100).toFixed(1)}%;background:${ACCENT}`));
-      pack.append(bar);
-      text(st.total ? `${st.note} · ${Math.round(pct * 100)}%（${mb(st.done)} / ${mb(st.total)}）` : st.note);
-    } else if (st.kind === 'ready') { text('已安装'); pack.append(ghost('删除', () => void removePack())); }
-    else if (st.kind === 'removing') text('删除中…');
-    else { text('安装失败：' + st.message, true); pack.append(ghost('重试', () => void installPack())); }
+      const box = el('div', 'bmv-pack-progress');
+      const meter = el('div', 'bmv-meter');
+      const fill = el('i');
+      fill.style.width = `${(pct * 100).toFixed(1)}%`;
+      meter.append(fill);
+      const downloading = st.total && st.note.indexOf('正在下载') === 0;
+      box.append(el('span', 'bmv-state', downloading ? `正在下载 ${Math.round(st.done / 1048576)} / ${mb(st.total)}` : st.note), meter);
+      pack.append(box);
+    } else if (st.kind === 'ready') { state('已安装'); pack.append(button('删除', () => void removePack())); }
+    else if (st.kind === 'removing') state('正在删除…');
+    else { state('安装失败：' + st.message, true); pack.append(button('重试', () => void installPack())); }
   });
-  row('逐字对齐', pack, packNote);
+  row(words, '逐字对齐', pack, undefined,
+    '适用于仅有逐句歌词的歌曲：按音频识别每个字的演唱时间，替代按音节的估算。首次播放时在本机后台分析，耗时数秒至半分钟，结果缓存后复用。全程本地运行，不上传数据。');
 
-  // Scenes: each one on or off; resting on one shows its sketch.
-  const off = new Set(config.off);
+  // The keys: a click on one, then the new keys pressed; one already in use by another action trades places with it.
+  const KEY_ROWS: Array<[KeyAction, string, string?]> = [
+    ['toggle', '打开 / 退出 MV 页', '在网易云的任何页面都可用；也可点击播放栏上方的 MV 按钮'],
+    ['exit', '退出 MV 页', '设置或播放列表打开时，先收起面板'],
+    ['playPause', '播放 / 暂停'],
+    ['back', '快退 5 秒'],
+    ['forward', '快进 5 秒'],
+    ['volUp', '音量加大'],
+    ['volDown', '音量减小'],
+  ];
+  const keyName = (a: KeyAction) => KEY_ROWS.find(r => r[0] === a)![1];
+  const keyButtons = new Map<KeyAction, HTMLButtonElement>();
+  const keysNote = el('div', 'bmv-sec-note');
+  const keysTip = '点击后按下新的组合键，Esc 取消；与其他动作重复时两者互换。网易云自身的快捷键（如 Ctrl+← → 切歌）同样有效。';
+  keysNote.textContent = keysTip;
+  let noteTimer = 0;
+  const saveKeys = () => {
+    plugin.setConfig('keys', JSON.stringify(config.keys));
+    onChange(config);
+    refreshKeys();
+    // Where the opening key is named: the MV button's row and the button's own tip.
+    const sub = mvButtonRow.querySelector('.bmv-row-sub');
+    if (sub) sub.textContent = `显示在播放栏上方；关闭后可用 ${keyLabel(config.keys.toggle)} 打开`;
+    document.querySelectorAll<HTMLElement>('.bmv-mvbtn').forEach(b => { b.title = mvButtonTitle(config.keys.toggle); });
+  };
+  const paintKey = (a: KeyAction) => {
+    const b = keyButtons.get(a)!;
+    b.textContent = '';
+    for (const cap of keyCaps(config.keys[a])) b.append(el('span', 'bmv-kbd', cap));
+  };
+  const resetKeys = link('恢复默认', () => {
+    stopRecording?.();
+    config.keys = { ...DEFAULT_KEYS };
+    keyButtons.forEach((_, a) => paintKey(a));
+    saveKeys();
+  });
+  const refreshKeys = () => {
+    resetKeys.style.display = (Object.keys(DEFAULT_KEYS) as KeyAction[]).every(a => config.keys[a] === DEFAULT_KEYS[a]) ? 'none' : '';
+  };
+  let stopRecording: (() => void) | null = null;
+  const record = (a: KeyAction, b: HTMLButtonElement) => {
+    stopRecording?.();
+    recordingKeys = true;
+    b.classList.add('is-recording');
+    b.textContent = '请按下快捷键…';
+    const stop = () => {
+      window.removeEventListener('keydown', onKey, true);
+      document.removeEventListener('pointerdown', away, true);
+      recordingKeys = false;
+      stopRecording = null;
+      b.classList.remove('is-recording');
+      paintKey(a);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.code === 'Escape' && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) { stop(); return; }
+      const c = keyCombo(e);
+      if (!c) return;
+      const other = (Object.keys(config.keys) as KeyAction[]).find(x => x !== a && config.keys[x] === c);
+      if (other) {
+        config.keys[other] = config.keys[a];
+        paintKey(other);
+        keysNote.textContent = `已与“${keyName(other)}”互换。`;
+        clearTimeout(noteTimer);
+        noteTimer = window.setTimeout(() => { keysNote.textContent = keysTip; }, 2400);
+      }
+      config.keys[a] = c;
+      stop();
+      saveKeys();
+    };
+    const away = (e: Event) => { if (!b.contains(e.target as Node)) stop(); };
+    window.addEventListener('keydown', onKey, true);
+    document.addEventListener('pointerdown', away, true);
+    stopRecording = stop;
+  };
+  const keysSec = section('快捷键', (() => { const x = el('div'); x.append(resetKeys); return x; })());
+  keysSec.append(keysNote);
+  const keyGroup = group(keysSec);
+  for (const [a, label, sub] of KEY_ROWS) {
+    const b = el('button', 'bmv-keycap');
+    b.title = '点击后按下新的快捷键';
+    b.onclick = () => (b.classList.contains('is-recording') ? stopRecording?.() : record(a, b));
+    keyButtons.set(a, b);
+    paintKey(a);
+    row(keyGroup, label, b, sub);
+  }
+  refreshKeys();
+
+  // Scenes and looks: each one on or off; resting on one shows its sketch, large, with what it is. Choices are
+  // gathered and applied together from the bar at the bottom (each applied change replans the MV, a moment's work).
+  const off = new Set(config.off), offLooks = new Set(config.offLooks);
   const using = stylesUsing();
-  const count = el('span', 'font-size:12px;opacity:.6');
-  const allOn = ghost('全部开启', () => { off.clear(); refresh(); save(); });
-  const aside = el('div', 'display:flex;align-items:center;gap:10px');
+  const count = el('span');
+  const allOn = link('全部开启', () => { off.clear(); refresh(); });
+  const aside = el('div');
   aside.append(count, allOn);
-  section('场景', aside);
-  view.append(el('div', 'font-size:12px;opacity:.6;margin:8px 0 2px', '点击切换开关，鼠标悬停可查看示意图。关闭的场景由同一段落的其他场景替代，修改即时生效。'));
+  const scenes = section('场景', aside, '点击选择开启或关闭，再点击底部的“应用”生效；鼠标悬停可查看说明。关闭的场景由同一段落的其他场景替代。');
   const paints: Array<() => void> = [];
   let warnTimer = 0;
+  const applyBar = el('div', 'bmv-apply');
+  const applyText = el('span', 'bmv-apply-text');
+  const changes = () => {
+    const diff = (now: Set<string>, saved: string[]) => saved.filter(id => !now.has(id)).length + [...now].filter(id => !saved.includes(id)).length;
+    return diff(off, config.off) + diff(offLooks, config.offLooks);
+  };
   const refresh = () => {
     paints.forEach(p => p());
     count.textContent = `已开启 ${SCENES.length - off.size} / ${SCENES.length}`;
-    count.style.color = '';
+    count.classList.remove('bmv-warn');
     allOn.style.display = off.size ? '' : 'none';
+    const n = changes();
+    if (n) { clearTimeout(doneTimer); applyBar.classList.remove('is-done'); }
+    if (applyBar.classList.contains('is-done')) return;
+    applyText.textContent = `已修改 ${n} 项`;
+    applyBar.classList.toggle('is-on', n > 0);
   };
-  const save = () => {
+  let doneTimer = 0;
+  const apply = () => {
     config.off = SCENES.map(s => s.id).filter(id => off.has(id));
+    config.offLooks = LOOKS.map(l => l.id).filter(id => offLooks.has(id));
     plugin.setConfig('offScenes', config.off.join(','));
+    plugin.setConfig('offLooks', config.offLooks.join(','));
     onChange(config);
+    // Said done for a moment before the bar goes.
+    refresh();
+    applyBar.classList.add('is-on', 'is-done');
+    applyText.textContent = '已应用';
+    clearTimeout(doneTimer);
+    doneTimer = window.setTimeout(() => { applyBar.classList.remove('is-done'); refresh(); }, 1100);
   };
+  const revert = () => {
+    off.clear(); config.off.forEach(id => off.add(id));
+    offLooks.clear(); config.offLooks.forEach(id => offLooks.add(id));
+    refresh();
+  };
+  const applyNow = button('应用', apply);
+  applyNow.classList.add('is-primary');
+  applyBar.append(applyText, button('还原', revert), applyNow);
   /** The card for a scene or a look: `image` is its sketch's name, `by` the styles that use it. */
   const showSketch = (info: { name: string; note: string }, image: string, by: string[], isOff: boolean, anchor: HTMLElement) => {
-    const s = sketchCard(), token = ++s.token;
+    const s = sketchCard(), token = ++s.token, wasOn = s.root.classList.contains('is-on');
     s.title.textContent = info.name;
-    if (isOff) s.title.append(el('span', `font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;background:${ACCENT};color:#fff`, '已关闭'));
+    if (isOff) s.title.append(el('span', 'bmv-card-badge', '已关闭'));
     s.note.textContent = info.note;
     const chosen = config.style === 'auto' ? null : STYLES[config.style].name;
-    s.foot.textContent = `用于：${by.join(' · ') || '—'}` + (chosen && !by.includes(chosen) ? `（当前风格“${chosen}”不使用）` : '');
+    s.foot.textContent = `用于：${by.join('、') || '无'}` + (chosen && !by.includes(chosen) ? `（当前风格“${chosen}”不使用）` : '');
     s.img.style.visibility = 'hidden';
     s.blank.textContent = '';
     void preview(image).then(url => {
@@ -1055,45 +1444,52 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     });
     // Below the scene when there is room, above it otherwise, always inside the window; in the MV's panel, to the
     // left of the panel beside the scene (over the picture, not over the other scenes).
-    const r = anchor.getBoundingClientRect(), h = s.root.offsetHeight || 290;
-    const side = compact ? view.getBoundingClientRect().left - 344 : -1;
-    let top = r.bottom + 8, left = Math.max(8, Math.min(window.innerWidth - 328, r.left));
-    if (side >= 8) { left = side; top = Math.max(8, Math.min(window.innerHeight - h - 8, r.top + r.height / 2 - h / 2)); }
-    else if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - 8 - h);
-    s.root.style.left = left + 'px';
-    s.root.style.top = top + 'px';
-    s.root.style.opacity = '1';
-    s.root.style.transform = 'none';
-    // The panel may close under the pointer (no mouseleave then): the card goes when its scene does.
+    const place = () => {
+      const r = anchor.getBoundingClientRect(), h = s.root.offsetHeight || 290;
+      const side = compact ? view.getBoundingClientRect().left - 352 : -1;
+      let top = r.bottom + 8, left = Math.max(8, Math.min(window.innerWidth - 328, r.left));
+      if (side >= 8) { left = side; top = Math.max(8, Math.min(window.innerHeight - h - 8, r.top + r.height / 2 - h / 2)); }
+      else if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - 8 - h);
+      s.root.style.left = left + 'px';
+      s.root.style.top = top + 'px';
+      s.root.classList.add('is-on');
+    };
     clearTimeout(s.timer);
+    // The sketches are on the page already: the card comes after a short rest, then follows the pointer at once.
     const watch = () => {
       if (s.token !== token) return;
       if (!anchor.isConnected || !anchor.matches(':hover, :focus')) hideSketch();
       else s.timer = window.setTimeout(watch, 300);
     };
-    s.timer = window.setTimeout(watch, 300);
+    s.timer = window.setTimeout(() => { if (s.token !== token) return; place(); watch(); }, wasOn ? 0 : 320);
   };
-  /** A grid of on/off buttons; resting on one shows its card. */
-  const toggles = <T extends { name: string }>(items: T[], isOff: (it: T) => boolean, flip: (it: T, b: HTMLElement) => void, card: (it: T, b: HTMLElement) => void) => {
-    const grid = el('div', `display:grid;grid-template-columns:repeat(auto-fill,minmax(${compact ? 100 : 108}px,1fr));gap:6px`);
+  /** A grid of sketches, each on or off; resting on one shows its card. */
+  const tiles = <T extends { id: string; name: string }>(items: T[], image: (it: T) => string, isOff: (it: T) => boolean, flip: (it: T, b: HTMLElement) => void, card: (it: T, b: HTMLElement) => void) => {
+    const grid = el('div', 'bmv-tiles');
     for (const info of items) {
-      const b = el('button', `display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;border:1px solid ${TINT(0.22)};background:${TINT(0.05)};` +
-        'color:inherit;font:inherit;text-align:left;cursor:pointer;transition:background .12s,border-color .12s');
-      const box = el('span', 'flex:none;display:flex;align-items:center;justify-content:center;width:14px;height:14px;box-sizing:border-box;border-radius:4px;border:1.5px solid;transition:background .12s');
-      const name = el('span', 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:opacity .12s', info.name);
-      b.append(box, name);
+      const b = el('button', 'bmv-tile');
+      const frame = el('span', 'bmv-tile-img');
+      const img = el('img');
+      img.alt = '';
+      // Decoded off the main thread; not lazy: an image without a box (display: none until loaded) is never fetched.
+      img.decoding = 'async';
+      img.onload = () => img.classList.add('is-ready');
+      void preview(image(info)).then(url => { if (url) img.src = url; });
+      const check = el('span', 'bmv-check');
+      check.innerHTML = icon('check', 12, 2.6);
+      frame.append(img, check);
+      b.append(frame, el('span', 'bmv-tile-name', info.name));
       paints.push(() => {
         const on = !isOff(info);
-        box.style.background = on ? ACCENT : 'transparent';
-        box.style.borderColor = on ? ACCENT : TINT(0.6);
-        box.innerHTML = on ? CHECK : '';
-        name.style.opacity = on ? '1' : '.5';
         b.setAttribute('aria-pressed', String(on));
+        b.title = `${info.name}：${on ? '已开启' : '已关闭'}`;
       });
-      b.onclick = () => flip(info, b);
-      const lit = (on: boolean) => { b.style.borderColor = TINT(on ? 0.5 : 0.22); b.style.background = TINT(on ? 0.12 : 0.05); };
-      b.onmouseenter = () => { lit(true); card(info, b); };
-      b.onmouseleave = () => { lit(false); hideSketch(); };
+      b.onclick = () => {
+        flip(info, b);
+        if (!isOff(info)) play(check, [{ transform: 'scale(.4)' }, { transform: 'none' }], { duration: 260, easing: EASE });
+      };
+      b.onmouseenter = () => card(info, b);
+      b.onmouseleave = () => hideSketch();
       b.onfocus = () => card(info, b);
       b.onblur = () => hideSketch();
       grid.append(b);
@@ -1101,37 +1497,34 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     return grid;
   };
   const sceneCard = (info: typeof SCENES[number], b: HTMLElement) => showSketch(info, info.id, using.get(info.id) ?? [], off.has(info.id), b);
-  for (const group of SCENE_GROUPS) {
-    view.append(el('div', 'font-size:12px;opacity:.55;margin:14px 0 6px;letter-spacing:.06em', group.name));
-    view.append(toggles(group.scenes, info => off.has(info.id), (info, b) => {
+  for (const g of SCENE_GROUPS) {
+    scenes.append(el('div', 'bmv-sub', g.name));
+    group(scenes).append(tiles(g.scenes, info => info.id, info => off.has(info.id), (info, b) => {
       if (!off.has(info.id) && off.size >= SCENES.length - 1) {
         count.textContent = '至少保留一个场景';
-        count.style.color = ACCENT;
+        count.classList.add('bmv-warn');
         clearTimeout(warnTimer);
         warnTimer = window.setTimeout(refresh, 1800);
         return;
       }
       if (off.has(info.id)) off.delete(info.id); else off.add(info.id);
       refresh();
-      save();
       sceneCard(info, b);
     }, sceneCard));
   }
 
-  // Looks: each one on or off, like the scenes.
-  const offLooks = new Set(config.offLooks);
-  section('画风');
-  view.append(el('div', 'font-size:12px;opacity:.6;margin:8px 0 8px', '部分段落会改用另一种画风呈现，使整首歌不止一种面貌。关闭的画风不再使用。'));
+  // Looks: each one on or off, like the scenes (applied with them).
+  const looks = section('画风', undefined, '部分段落会改用另一种画风呈现，使整首歌不止一种面貌。关闭的画风不再使用。');
   const lookCard = (info: typeof LOOKS[number], b: HTMLElement) => showSketch(info, `look-${info.id}`, info.styles, offLooks.has(info.id), b);
-  view.append(toggles(LOOKS, info => offLooks.has(info.id), (info, b) => {
+  group(looks).append(tiles(LOOKS, info => `look-${info.id}`, info => offLooks.has(info.id), (info, b) => {
     if (offLooks.has(info.id)) offLooks.delete(info.id); else offLooks.add(info.id);
-    config.offLooks = LOOKS.map(l => l.id).filter(id => offLooks.has(id));
-    plugin.setConfig('offLooks', config.offLooks.join(','));
-    onChange(config);
     refresh();
     lookCard(info, b);
   }, lookCard));
   refresh();
+
+  // Last, so it can stay in sight at the bottom while the page scrolls.
+  view.append(applyBar);
   // The sketches load in the background while the page is read.
   for (const s of SCENES) void preview(s.id);
   for (const l of LOOKS) void preview(`look-${l.id}`);

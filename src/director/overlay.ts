@@ -1,18 +1,20 @@
 // Motion-graphics layer over every shot, after the user's MG pieces (《△ 三角》: hairlines, hard easing, exact beats).
-//  · Bursts: on the downbeats of choruses and drops a hairline shape grows out of the middle (every beat in a drop);
-//    triangles for pulse, circles for ballad.
-//  · Countdown: through a build or pre-chorus that rises into a louder section, a ring fills around the middle with a
-//    tick per beat and the bars left in its centre; its last bar flickers in eighths.
-//  · Snare ticks: in loud pulse sections, each snare flashes short ticks at the four edges of the frame.
+//  · Drum shapes: in choruses and drops each drum puts a hairline shape up, so the more drums a song has, the more
+//    shapes: a kick grows a triangle out of the middle, a snare flips a pair of small triangles in either side, a
+//    hi-hat grows a small triangle near an edge. Ballads: circles, no hi-hats. A section with hardly any kicks takes
+//    its downbeats for them.
+//  · Countdown: through a build or pre-chorus that rises into a louder section, a bar low in the frame fills towards
+//    the drop with a tick per beat and the bars left at its end; its last bar flickers in eighths.
+//  · Snare ticks: in other loud pulse sections, each snare flashes short ticks at the four edges of the frame.
 //  · Title card: each new section is announced top left — a rule sweeps out, the label slides in, then both go.
 //  · Credits: over the first seconds the song's name and artists stand low on the left, over a rule that sweeps out;
 //    again over the last seconds, once the last line has been sung.
-//  · Badge: the song's crystal as a small hairline figure top right, turning, flashing on the kicks (beside the HUD's
-//    notation and triangle count), except while the crystal has the whole frame.
+//  · Badge: the song's armillary as a small hairline figure top right, turning, its core lifting on the kicks (beside
+//    the HUD's notation: rings and marks), except while the armillary has the whole frame.
 // Drawn additive in an orthographic frame (height 2), faded out with the picture.
 import * as THREE from 'three';
 import { LineBatch } from '../render/lines.ts';
-import { textMesh } from '../render/text.ts';
+import { textMesh, type Face } from '../render/text.ts';
 import type { Music } from './music.ts';
 import type { Style } from '../style/style.ts';
 import type { Palette } from '../render/palette.ts';
@@ -21,11 +23,22 @@ import { clamp01, outExpo, rng } from '../scenes/types.ts';
 import type { Fx } from '../render/engine.ts';
 import type { SectionLabel } from '../types.ts';
 import { lastIndex } from './music.ts';
-import type { Crystal } from '../sigil/crystal.ts';
+import type { Armillary } from '../sigil/armillary.ts';
 
 const NAMES: Record<SectionLabel, string> = {
   intro: '前奏', verse: '主歌', pre: '预副歌', chorus: '副歌', drop: '高潮', build: '铺垫', break: '间奏', bridge: '桥段', outro: '尾奏',
 };
+
+/** The plates filmed like a film (and the push tunnel): a hairline shape over them reads as a sticker on the lens. */
+const FILMED = new Set(['drive', 'city', 'aurora', 'pillars', 'canvas']);
+
+/** A drum's hits that put a shape up: their times and strengths, at least `gap` seconds apart. */
+interface Hits { t: Float64Array; s: Float64Array }
+function spaced(hits: ReadonlyArray<readonly [number, number]>, min: number, gap: number): Hits {
+  const t: number[] = [], s: number[] = [];
+  for (const [at, k] of hits) if (k > min && (!t.length || at - t[t.length - 1] >= gap)) { t.push(at); s.push(k); }
+  return { t: Float64Array.from(t), s: Float64Array.from(s) };
+}
 
 type Mesh = THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
 interface Card { index: number; label: Mesh }
@@ -35,11 +48,19 @@ interface Credits { title: [Mesh, Mesh]; artist: [Mesh, Mesh] | null; windows: A
 export class MgOverlay {
   readonly scene = new THREE.Scene();
   readonly camera: THREE.OrthographicCamera;
+  /** Where the badge is seen from (the camera, straight in front of it). */
+  private badgeEye = new THREE.Vector3();
   private lines = new LineBatch(4000);
   private resolution = new THREE.Vector2(1920, 1080);
   private pixelRatio = 1;
   private aspect = 16 / 9;
   private snares: Float64Array;
+  /** The drum shapes' hits; `sparse`: the sections whose kick triangles go on the downbeats instead. */
+  private kicks: Hits;
+  private snareHits: Hits;
+  private hats: Hits;
+  private downbeats: Hits;
+  private sparse: boolean[];
   private card: Card | null = null;
   private ordinal: number[];
   private readonly soft: boolean;
@@ -60,7 +81,7 @@ export class MgOverlay {
   /** The badge shows with the HUD (the player hides both while the playback controls are up). */
   showBadge = true;
 
-  constructor(private palette: Palette, private style: Style, private music: Music, private badge: Crystal | null = null) {
+  constructor(private palette: Palette, private style: Style, private music: Music, private badge: Armillary | null = null) {
     this.camera = new THREE.OrthographicCamera(-this.aspect, this.aspect, 1, -1, 0.1, 20);
     this.camera.position.set(0, 0, 5);
     if (badge) this.scene.add(badge.group);
@@ -70,6 +91,16 @@ export class MgOverlay {
     this.scene.add(this.scrim);
     this.soft = style.look === 'ballad';
     this.snares = Float64Array.from(music.a.hits.snare.filter(h => h[1] > 0.4), h => h[0]);
+    // At most 5 kicks, 6 snares and 6 hi-hats a second (a double kick drum or a hi-hat roll would strobe).
+    this.kicks = spaced(music.a.hits.kick, 0.4, 0.2);
+    this.snareHits = spaced(music.a.hits.snare, 0.4, 0.16);
+    this.hats = spaced(music.a.hits.hat, 0.5, 0.16);
+    this.downbeats = { t: Float64Array.from(music.downbeats), s: new Float64Array(music.downbeats.length).fill(0.8) };
+    this.sparse = music.a.sections.map(s => {
+      let n = 0;
+      for (const t of this.kicks.t) if (t >= s.start && t < s.end) n++;
+      return n / Math.max(1, s.end - s.start) < 0.3;
+    });
     // "副歌 02": which occurrence of its label each section is.
     const seen = new Map<SectionLabel, number>();
     this.ordinal = music.a.sections.map(s => { const n = (seen.get(s.label) ?? 0) + 1; seen.set(s.label, n); return n; });
@@ -79,11 +110,15 @@ export class MgOverlay {
    * The song's name and artists: at the opening, up until a little before the first line is sung (between 3.5 and
    * 8 seconds in); at the end, from 1.5 s after the last line (at most the last 7 s), if that leaves 3 s.
    */
-  /** `opening`: false when the opening cards already show the title. */
-  setCredits(title: string, artists: string[], firstLine: number, lastLine: number, duration: number, opening = true): void {
+  /**
+   * `opening`: false when the opening cards already show the title. `titleFace`, `titleH`: the name's face and height,
+   * the leaned-on face of the song's lyric voice (the player's; the wide display face it was set in is gone: the user
+   * dropped it from pulse, “律动的英文字体就用那个新的，旧的不用了”, then everywhere, “以后都不要用这个字体”).
+   */
+  setCredits(title: string, artists: string[], firstLine: number, lastLine: number, duration: number, opening = true, titleFace: Face = 'condensedBlack', titleH = 0.13): void {
     if (!title) return;
-    const make = (text: string, face: 'display' | 'bold', h: number) => (['dark', 'none'] as const).map(halo => {
-      const m = textMesh(text, face, h, { px: face === 'display' ? 160 : 96, halo });
+    const make = (text: string, face: Face, h: number) => (['dark', 'none'] as const).map(halo => {
+      const m = textMesh(text, face, h, { px: face === 'bold' ? 96 : 160, halo });
       m.material.toneMapped = false;
       m.visible = false;
       this.scene.add(m);
@@ -93,7 +128,7 @@ export class MgOverlay {
     const windows: Array<[number, number]> = opening ? [[0.3, Math.min(8, Math.max(3.5, firstLine - 0.4))]] : [];
     const end: [number, number] = [Math.max(lastLine + 1.5, duration - 7), duration - 0.3];
     if (end[1] - end[0] >= 3 && end[0] > (windows[0]?.[1] ?? 0) + 5) windows.push(end);
-    this.credits = { title: make(title, 'display', 0.11), artist, windows };
+    this.credits = { title: make(title, titleFace, titleH), artist, windows };
   }
 
   resize(aspect: number): void {
@@ -132,22 +167,48 @@ export class MgOverlay {
     };
     const big = sec.label === 'chorus' || sec.label === 'drop';
 
-    // Bursts from the middle on downbeats of big sections (every beat in a drop). Not over the push tunnel or the
-    // places filmed like a film (the city, the aurora, the pillars, the canvas): a hairline shape over them reads as a
-    // sticker on the lens.
-    if (busy && big && shot.scene !== 'drive' && shot.scene !== 'city' && shot.scene !== 'aurora' && shot.scene !== 'pillars' && shot.scene !== 'canvas') {
-      const every = sec.label === 'drop' && !this.soft ? 1 : m.meter;
-      const n = Math.floor(info.pos / every);
-      for (let q = 0; q < 2; q++) {
-        const at = (n - q) * every, age = (info.pos - at) * beat;
-        if (age < 0 || at < m.beatPos(sec.start) - 0.01) continue;
-        const life = beat * every * 1.1, x = clamp01(age / life);
-        if (x >= 1) continue;
-        const r = 0.18 + outExpo(x) * (this.soft ? 0.9 : 1.35);
-        const k = (1 - x) * (1 - x) * (this.soft ? 0.35 : 0.55);
-        const rot = Math.PI / 2 + (this.soft ? 0 : (rng(at * 7919)() - 0.5) * 0.5);
-        poly(0, 0, r, this.soft ? 64 : 3, rot, 1.4, q === 0 && !this.soft ? signal : paper, k);
+    // Drum shapes in big sections, each drum's hits since the section began (newest first) while they last.
+    const shapes = busy && big && !FILMED.has(shot.scene);
+    const each = (hits: Hits, life: number, draw: (i: number, age: number, x: number, s: number) => void) => {
+      for (let i = lastIndex(hits.t, t); i >= 0; i--) {
+        const age = t - hits.t[i];
+        if (age >= life || hits.t[i] < sec.start - 0.01) break;
+        draw(i, age, age / life, hits.s[i]);
       }
+    };
+    if (shapes) {
+      // Kicks: a triangle grows out of the middle, the newest in the signal colour; stronger kicks grow bigger.
+      let newest = true;
+      const kicks = this.sparse[shot.sectionIndex] ? this.downbeats : this.kicks;
+      each(kicks, Math.min(0.9, Math.max(0.5, beat * 1.4)), (i, _age, x, s) => {
+        const random = rng(Math.round(kicks.t[i] * 1000));
+        const turn = this.soft ? 0 : (random() - 0.5) * 0.5 + (random() < 0.5 ? -1 : 1) * 0.15 * outExpo(x);
+        const r = 0.16 + outExpo(x) * (this.soft ? 0.75 : 0.7 + 0.6 * s);
+        const k = (1 - x) * (1 - x) * (this.soft ? 0.35 : 0.3 + 0.3 * s);
+        poly(0, 0, r, this.soft ? 64 : 3, Math.PI / 2 + turn, 1.4, newest && !this.soft ? signal : paper, k);
+        newest = false;
+      });
+      // Snares: a pair of triangles grows either side, pointing out, and flips over (a sixth of a turn) to point at
+      // the middle; the pairs go upper, lower, middle in turn.
+      each(this.snareHits, this.soft ? 0.7 : 0.55, (i, _age, x, s) => {
+        const random = rng(Math.round(this.snareHits.t[i] * 1000) ^ 0x51ed);
+        const y = [0.45, -0.45, 0][i % 3] + (random() - 0.5) * 0.12;
+        const dx = this.aspect * (0.52 + random() * 0.18);
+        const r = 0.06 + outExpo(x) * (0.14 + 0.1 * s);
+        const flip = this.soft ? 0 : (Math.PI / 3) * outExpo(x * 2);
+        const k = (1 - x) * (1 - x) * (this.soft ? 0.35 : 0.6);
+        poly(dx, y, r, this.soft ? 48 : 3, flip, 1.4, paper, k);
+        poly(-dx, y, r, this.soft ? 48 : 3, Math.PI - flip, 1.4, paper, k);
+      });
+      // Hi-hats: a small triangle grows near an edge of the frame, pointing any way.
+      if (!this.soft) each(this.hats, 0.35, (i, _age, x, s) => {
+        const random = rng(Math.round(this.hats.t[i] * 1000) ^ 0xa7);
+        const side = random() < 0.5 ? -1 : 1, sideways = random() < 0.6;
+        const px = sideways ? side * this.aspect * (0.8 + random() * 0.1) : (random() * 2 - 1) * this.aspect * 0.8;
+        const py = sideways ? (random() * 2 - 1) * 0.78 : side * (0.78 + random() * 0.1);
+        const r = 0.03 + outExpo(x) * (0.03 + 0.03 * s);
+        poly(px, py, r, 3, random() * Math.PI * 2, 1.2, signal, (1 - x) * (1 - x) * 0.55);
+      });
     }
 
     // Countdown through a build that rises into a louder section: a bar low in the frame fills towards the drop, a
@@ -168,8 +229,8 @@ export class MgOverlay {
       this.countdown(Math.ceil(((sec.end - t) / beat - 1e-3) / m.meter), x1 + 0.04, y, flick * vis);
     } else this.countdown(0, 0, 0, 0);
 
-    // Snare ticks at the edges in loud pulse sections.
-    if (busy && !this.soft && sec.energy > 0.6) {
+    // Snare ticks at the edges in loud pulse sections (where the snares put no shapes up).
+    if (busy && !this.soft && sec.energy > 0.6 && !shapes) {
       const i = lastIndex(this.snares, t);
       const age = i >= 0 ? t - this.snares[i] : 99;
       if (age < 0.18) {
@@ -184,34 +245,14 @@ export class MgOverlay {
     // Title card for each new section after the first.
     this.titleCard(t, shot, beat, busy ? 1 - fx.fade : 0, seg);
     this.creditsCard(t, seg);
-    // Branching (pdoom's FOOM, the technique): through the bar before a drop, hairlines grow out of the middle along
-    // the triangle's three directions and fork on every eighth note — 3, 6, 12 … 384 tips — filling the frame as
-    // the drop lands.
-    if (shot.scene === 'crystal' && shot.variant === 'orbit') {
-      const e8 = clamp01((t - shot.start) / Math.max(0.2, shot.end - shot.start)) * 8;
-      const flick = 0.75 + 0.25 * Math.cos(e8 * Math.PI * 2);
-      const grow = (level: number, x: number, y: number, ang: number, len: number) => {
-        const f = clamp01(e8 - level);
-        if (f <= 0) return;
-        const ex = x + Math.cos(ang) * len * f, ey = y + Math.sin(ang) * len * f;
-        seg(x, y, ex, ey, level < 2 ? 1.6 : 1.1, level % 2 ? signal : paper, (1.3 - level * 0.06) * flick);
-        if (f < 1 || level >= 7) return;
-        const spread = 0.62 - level * 0.03;
-        grow(level + 1, ex, ey, ang - spread, len * 0.8);
-        grow(level + 1, ex, ey, ang + spread, len * 0.8);
-      };
-      for (let r = 0; r < 3; r++) grow(0, 0, 0, Math.PI / 2 + (r * Math.PI * 2) / 3, 0.4);
-    }
-
-    // The crystal badge, 16 px across in radius, its centre 58 px from the right edge and 38 px from the top.
+    // The armillary badge, 16 px across in radius, its centre 58 px from the right edge and 38 px from the top.
     const badge = this.badge;
-    if (busy && badge && this.showBadge && shot.scene !== 'crystal' && vis > 0.01) {
+    if (busy && badge && this.showBadge && shot.scene !== 'crystal' && shot.scene !== 'cards' && vis > 0.01) {
       const px = 2 / Math.max(1, this.resolution.y / this.pixelRatio);
       badge.group.position.set(this.aspect - 58 * px, 1 - 38 * px, 0);
       badge.group.scale.setScalar(16 * px);
-      badge.set({ turn: t * 0.6, tilt: 0.4, flash: m.pulse('kick', t, 0.1), burst: 0, alpha: vis * 0.85 });
-      badge.group.updateMatrixWorld();
-      badge.lines(L, 1, 1);
+      badge.set({ turn: t * 0.5, beat: m.at(t).pos, bar: 0, whirl: 0, open: 1, align: 0, recede: 0, merge: 0, pulse: m.pulse('kick', t, 0.1), alpha: vis * 0.85 });
+      badge.lines(L, 1, 1, this.badgeEye.set(badge.group.position.x, badge.group.position.y, 5), true);
     } else badge?.set({ alpha: 0 });
     L.commit(this.resolution, this.pixelRatio);
   }

@@ -35,14 +35,19 @@ export type Hit = [number, number];
 export interface Analysis {
   version: number;
   duration: number;
-  /** Dominant tempo. */
+  /** Dominant tempo of the beat grid: how fast the song moves (drum & bass's grid follows its snare at 87). */
   bpm: number;
+  /**
+   * The tempo as it is usually cited, for showing: `bpm` or twice it (drum & bass 174; a ballad on a 65 grid is
+   * cited at 130). Absent in older analyses: `bpm`.
+   */
+  namedBpm?: number;
   /** Beats per bar (4 for nearly everything). */
   meter: number;
   beats: number[];
   /** Per beat: position in the bar, 0 = downbeat. */
   beatInBar: number[];
-  /** Per beat: local BPM. */
+  /** Per beat: local BPM of the beat grid. */
   tempo: number[];
   downbeats: number[];
   sections: Section[];

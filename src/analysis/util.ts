@@ -51,10 +51,37 @@ export function quantile(a: Num, p: number): number {
     if (v === v && v !== Infinity && v !== -Infinity) s[n++] = v;
   }
   if (!n) return 0;
-  const v = s.subarray(0, n).sort();
   const x = Math.min(n - 1, Math.max(0, p * (n - 1)));
   const i = Math.floor(x), f = x - i;
-  return i + 1 < n ? v[i] * (1 - f) + v[i + 1] * f : v[i];
+  // The i-th smallest by selection, then the next one up is the least of what lies above it (no full sort).
+  const vi = select(s, n, i);
+  if (i + 1 >= n) return vi;
+  let next = Infinity;
+  for (let j = i + 1; j < n; j++) if (s[j] < next) next = s[j];
+  return vi * (1 - f) + next * f;
+}
+
+/** Rearranges a[0, n) so that a[k] is its k-th smallest, smaller ones before it and larger after (Hoare's select). */
+function select(a: Float64Array, n: number, k: number): number {
+  let lo = 0, hi = n - 1;
+  while (lo < hi) {
+    // Median of three as the pivot.
+    const mid = (lo + hi) >> 1;
+    let x = a[lo], y = a[mid], z = a[hi];
+    if (x > y) { const t = x; x = y; y = t; }
+    if (y > z) { y = z; if (x > y) y = x; }
+    const pivot = y;
+    let i = lo, j = hi;
+    while (i <= j) {
+      while (a[i] < pivot) i++;
+      while (a[j] > pivot) j--;
+      if (i <= j) { const t = a[i]; a[i] = a[j]; a[j] = t; i++; j--; }
+    }
+    if (k <= j) hi = j;
+    else if (k >= i) lo = i;
+    else break;
+  }
+  return a[k];
 }
 
 export function median(a: Num): number {

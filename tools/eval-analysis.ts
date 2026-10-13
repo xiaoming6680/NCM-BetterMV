@@ -3,14 +3,14 @@
 //                              [--json out.json]
 // Local files are decoded in place with ffmpeg (mono, 22050 Hz, f32le); NetEase songs (ncmId) are fetched from the
 // main session's dev server (NCM_DEV, default http://localhost:5190: /ncm/audio/<id>, /ncm/lyric/<id>, and the wiki
-// BPM from /ncm/wiki/<id> unless the song lists it; passed as bpmHint). Decoded audio goes to a temp cache outside the
-// project, deleted afterwards unless EVAL_PCM_CACHE=<dir> keeps it for the next run; nothing is copied into the repo.
+// BPM from /ncm/wiki/<id> unless the song lists it; passed as bpmHint). Decoded audio is kept in dev/eval-pcm/analysis/
+// (git-ignored; EVAL_PCM_CACHE=<dir> for another place): NetEase drops songs from its cache, and most of the annotated
+// NetEase songs were lost that way before the decodes were kept.
 // --bars prints per bar the levels and which lyric lines start there, and per line its sung span, as repeat-group ids
 // and times only (for annotating truth without handling lyric text); --no-timing runs each song once, untimed.
 // The analysis runs in a child process with raised priority: on this Windows machine a process that has waited on
 // ffmpeg, or a background child, runs JS several times slower, which would distort the timings.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Analysis, LyricLine } from '../src/types.ts';
 
@@ -18,7 +18,8 @@ const FFMPEG = process.env.FFMPEG || 'E:/ffmpeg-master-latest-win64-gpl-shared/b
 const NCM_DEV = process.env.NCM_DEV || 'http://localhost:5190';
 const SR = 22050;
 const TOL = 0.07;
-const CLARITY_TRUTH = 'D:/!XM的项目/个人项目/Clarity_MV/data/audio.json';
+// (The Clarity MV project moved and was renamed.)
+const CLARITY_TRUTH = 'D:/!XM的项目/视频项目/Clarity_游戏是你的解药吗？/data/audio.json';
 
 interface Song {
   id: string;
@@ -49,6 +50,8 @@ const SONGS: Song[] = [
   { id: 'ticking', name: 'VALORANT / Grabbitz / bbno$ - Ticking Away (pop EDM, chorus + drop)', ncmId: 2068401809, wikiBpm: 95, truth: 'tools/truth/ticking-away.json' },
   { id: 'maybe', name: 'BUNT. / Graham - Maybe (folk EDM, half-time)', ncmId: 2142927883, wikiBpm: 86, truth: 'tools/truth/maybe.json' },
   { id: 'falling', name: 'NURKO / Roniit - Falling Again (melodic bass, half-time drops)', ncmId: 565841089, wikiBpm: 76, truth: 'tools/truth/falling-again.json' },
+  // (The same song from a local file, with the lyrics the dev server kept: NetEase has dropped it from its cache.)
+  { id: 'falling-local', name: 'NURKO / Roniit - Falling Again [local FLAC]', file: 'E:/CloudMusic/VipSongsDownload/unlock/NURKO,Roniit - Falling Again.flac', lyric: 'dev/ncm-cache/lyric-565841089.json', wikiBpm: 76, truth: 'tools/truth/falling-again.json' },
   { id: 'shanlu', name: '毛不易 - 一程山路 (ballad)', ncmId: 1417849873, wikiBpm: 69, truth: 'tools/truth/shanlu.json' },
   { id: 'uify', name: 'Stephen Sanchez - Until I Found You (slow, swing)', ncmId: 1874585362, wikiBpm: 67, truth: 'tools/truth/until-i-found-you.json' },
   { id: 'stronger', name: 'Kanye West - Stronger (hip-hop)', ncmId: 18969069, wikiBpm: 103, truth: 'tools/truth/stronger.json' },
@@ -289,7 +292,7 @@ function printSummary(a: Analysis, dur: number) {
   const tmin = Math.min(...a.tempo), tmax = Math.max(...a.tempo);
   const rate = (h: Array<[number, number]>) => (h.length / dur).toFixed(2);
   const strong = (h: Array<[number, number]>) => h.filter(v => v[1] >= 0.5).length / dur;
-  console.log(`  bpm ${a.bpm}, meter ${a.meter}, beats ${a.beats.length} (${fmt(a.beats[0], 2)}…${fmt(a.beats[a.beats.length - 1], 2)}), downbeats ${a.downbeats.length}, tempo ${fmt(tmin, 1)}–${fmt(tmax, 1)} BPM`);
+  console.log(`  bpm ${a.bpm}${a.namedBpm && a.namedBpm !== a.bpm ? ` (shown ${a.namedBpm})` : ''}, meter ${a.meter}, beats ${a.beats.length} (${fmt(a.beats[0], 2)}…${fmt(a.beats[a.beats.length - 1], 2)}), downbeats ${a.downbeats.length}, tempo ${fmt(tmin, 1)}–${fmt(tmax, 1)} BPM`);
   console.log(`  hits/s: kick ${rate(a.hits.kick)}, snare ${rate(a.hits.snare)}, hat ${rate(a.hits.hat)}, accent ${rate(a.hits.accent)}; strong (≥0.5) kick + ½ snare ${(strong(a.hits.kick) + 0.5 * strong(a.hits.snare)).toFixed(2)}/s`);
   console.log('  sections:');
   for (const s of a.sections) {
@@ -306,8 +309,7 @@ const jsonOut = opt('--json');
 const selected = SONGS.filter(s => !only.length || only.indexOf(s.id) >= 0);
 
 if (!args.includes('--child')) {
-  const keep = process.env.EVAL_PCM_CACHE;
-  const dir = keep || mkdtempSync(join(tmpdir(), 'bettermv-pcm-'));
+  const dir = process.env.EVAL_PCM_CACHE || join(import.meta.dir, '../dev/eval-pcm/analysis');
   mkdirSync(dir, { recursive: true });
   const manifest: Record<string, Prepared | string> = {};
   for (const song of selected) manifest[song.id] = await prepare(song, dir, !args.includes('--no-hint'));
@@ -315,7 +317,6 @@ if (!args.includes('--child')) {
   const r = Bun.spawnSync([process.execPath, import.meta.path, ...args, '--child'], {
     stdout: 'inherit', stderr: 'inherit', env: { ...process.env, EVAL_PCM_CACHE: dir },
   });
-  if (!keep) rmSync(dir, { recursive: true, force: true });
   process.exit(r.exitCode ?? 1);
 }
 

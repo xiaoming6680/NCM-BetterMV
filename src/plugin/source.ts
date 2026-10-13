@@ -22,6 +22,18 @@ export async function fetchWiki(id: number): Promise<SongWiki | undefined> {
   try { return parseWiki(await (await fetch(wikiUrl(id, domain()))).json()); } catch { return undefined; }
 }
 
+/** NetEase's chorus mark for the song (the highlight it plays), seconds; the analysis' chorus hint. */
+export async function fetchChorus(id: number): Promise<[number, number] | undefined> {
+  try { return parseChorus(await (await fetch(`${domain()}/api/song/chorus?ids=${encodeURIComponent('[' + id + ']')}`)).json(), id); } catch { return undefined; }
+}
+
+/** The mark for `id` out of /api/song/chorus's answer ({ chorus: [{ id, startTime, endTime }] }, ms). */
+export function parseChorus(doc: unknown, id: number): [number, number] | undefined {
+  const list = (doc as { chorus?: Array<{ id: number; startTime: number; endTime: number }> } | null)?.chorus;
+  const c = Array.isArray(list) ? list.find(x => x && x.id === id) : undefined;
+  return c && c.endTime > c.startTime && c.startTime >= 0 ? [c.startTime / 1000, c.endTime / 1000] : undefined;
+}
+
 export function loadCover(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();

@@ -9,12 +9,16 @@
 // into the corona (up).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { rng, smooth } from './types.ts';
-import { LyricGates } from './lyricSpace.ts';
+import { rng, smooth, surge } from './types.ts';
+import { LyricBlocks, Stands, voiceFor } from './lyricBlock.ts';
 import { lastIndex } from '../director/music.ts';
 
 const SURGES = 4;
-const v3 = (c: THREE.Color, k = 1) => `vec3(${(c.r * k).toFixed(5)},${(c.g * k).toFixed(5)},${(c.b * k).toFixed(5)})`;
+/**
+ * A colour as a uniform: the palette reaches the shader as uniforms, so its source is the same for every song and the
+ * compiled program is reused by the next song with the aurora (as in the city). Rounded as when written into the source.
+ */
+const u3 = (c: THREE.Color) => new THREE.Vector3(+c.r.toFixed(5), +c.g.toFixed(5), +c.b.toFixed(5));
 /** A light's colour: the hue of c at full strength. */
 const hue = (c: THREE.Color) => { const m = Math.max(c.r, c.g, c.b, 1e-4); return c.clone().multiplyScalar(1 / m); };
 
@@ -24,11 +28,15 @@ in vec3 position;
 out vec2 vNdc;
 void main() { vNdc = position.xy; gl_Position = vec4(position.xy, 1.0, 1.0); }`;
 
-function frag(p: { ink: THREE.Color; signal: THREE.Color; accent: THREE.Color; paper: THREE.Color }): string {
+/** FRAG's colours for a palette. */
+function colours(p: { ink: THREE.Color; signal: THREE.Color; accent: THREE.Color; paper: THREE.Color }): Record<string, THREE.IUniform> {
   const low = hue(p.signal), high = hue(p.accent.clone().lerp(p.signal, 0.15));
   const zenith = p.ink.clone().lerp(p.accent, 0.12).multiplyScalar(0.18).add(new THREE.Color(0.0015, 0.002, 0.004));
   const horizon = p.ink.clone().lerp(p.accent, 0.3).multiplyScalar(0.3).add(new THREE.Color(0.003, 0.004, 0.008));
-  return /* glsl */ `
+  return { uLow: { value: u3(low) }, uHigh: { value: u3(high) }, uPaper: { value: u3(hue(p.paper)) }, uZenith: { value: u3(zenith) }, uHorizon: { value: u3(horizon) } };
+}
+
+const FRAG = /* glsl */ `
 precision highp float;
 in vec2 vNdc;
 out vec4 fragColor;
@@ -36,8 +44,12 @@ uniform mat4 uInvVP;
 uniform vec3 uCam;
 uniform float uT, uI, uFlow, uOver, uExposure;
 uniform vec4 uSurge[${SURGES}];
-const vec3 LOW = ${v3(low)}, HIGH = ${v3(high)}, PAPER = ${v3(hue(p.paper))};
-const vec3 ZENITH = ${v3(zenith)}, HORIZON = ${v3(horizon)};
+uniform vec3 uLow, uHigh, uPaper, uZenith, uHorizon;
+#define LOW uLow
+#define HIGH uHigh
+#define PAPER uPaper
+#define ZENITH uZenith
+#define HORIZON uHorizon
 float hash11(float p) { p = fract(p * .1031); p *= p + 33.33; p *= p + p; return fract(p); }
 float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float n1(float x) { float i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f); return mix(hash11(i), hash11(i + 1.0), f); }
@@ -167,10 +179,13 @@ void main() {
   if (any(isnan(col)) || any(isinf(col))) col = vec3(0.0);
   fragColor = vec4(col, 1.0);
 }`;
-}
 
 /** A surge of light along the curtains: when, how strong, from which side. */
 interface Surge { t: number; size: number; dir: number }
+
+/** The aurora's program, to compile ahead while a song is analysed (see cityPrograms). */
+export const auroraPrograms = (): THREE.Object3D[] =>
+  [new THREE.Mesh(new THREE.BufferGeometry(), new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: VERT, fragmentShader: FRAG }))];
 
 export class Aurora implements MvScene {
   readonly scene = new THREE.Scene();
@@ -181,7 +196,9 @@ export class Aurora implements MvScene {
   private surgeT: Float64Array;
   private surgeU = Array.from({ length: SURGES }, () => new THREE.Vector4());
   private snares: Float64Array;
-  private gates: LyricGates;
+  private blocks: LyricBlocks;
+  /** Lines stand in the dark band under the curtains' hem (on the hem a light signal colour vanishes), in turn high left, low right. */
+  private stands = new Stands([[-0.12, -0.07], [0.12, -0.23]]);
   private readonly soft: boolean;
 
   constructor(init: SceneInit, look: 'pulse' | 'ballad' = 'pulse') {
@@ -190,11 +207,11 @@ export class Aurora implements MvScene {
     this.scene.background = palette.ink.clone();
     this.u = {
       uInvVP: { value: this.invVP }, uCam: { value: new THREE.Vector3() }, uT: { value: 0 }, uI: { value: 1 }, uFlow: { value: 0 },
-      uOver: { value: 0 }, uExposure: { value: 1 }, uSurge: { value: this.surgeU },
+      uOver: { value: 0 }, uExposure: { value: 1 }, uSurge: { value: this.surgeU }, ...colours(palette),
     };
     const tri = new THREE.BufferGeometry();
     tri.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
-    const mesh = new THREE.Mesh(tri, new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: VERT, fragmentShader: frag(palette), uniforms: this.u, depthTest: false, depthWrite: false }));
+    const mesh = new THREE.Mesh(tri, new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: VERT, fragmentShader: FRAG, uniforms: this.u, depthTest: false, depthWrite: false }));
     mesh.frustumCulled = false;
     mesh.renderOrder = -10;
     mesh.onBeforeRender = (_r, _s, camera) => {
@@ -219,14 +236,15 @@ export class Aurora implements MvScene {
     this.surgeT = Float64Array.from(this.surges, s => s.t);
     this.snares = Float64Array.from(music.a.hits.snare.filter(h => h[1] > 0.55), h => h[0]);
 
-    this.gates = new LyricGates(palette, { style: this.soft ? 'poem' : 'hook', em: 2.8, maxW: 40, trans: { em: 1.1, vertical: false }, linger: 9 });
-    this.scene.add(this.gates.group);
+    this.blocks = new LyricBlocks(palette, music, { voice: voiceFor(look, init.seed), em: 2.8, maxW: this.soft ? 11 : 13, trans: 0.48, dust: [0, 1.5, 0] });
+    this.scene.add(this.blocks.group);
     this.resize(init.aspect);
   }
 
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
+    this.blocks.setAspect(aspect);
   }
 
   /** lake: low over the ice, gliding towards the curtains; wide: higher on the shore, panning; up: tilting up into the sky. */
@@ -262,7 +280,12 @@ export class Aurora implements MvScene {
     u.uI.value = (loud ? 0.75 : 0.45) + (this.soft ? 0.5 : 0.75) * music.env('rms', t);
     // The folds drift with the tempo; each snare shoves them on.
     const bpm = music.at(t).bpm, n = lastIndex(this.snares, t);
-    const shove = n < 0 ? 0 : n * 1.1 + 1.1 * (1 - Math.exp(-(t - this.snares[n]) / 0.22));
+    let shove = 0;
+    for (let i = n; i >= 0; i--) {
+      const age = t - this.snares[i];
+      if (age > 2) { shove += 1.1 * (i + 1); break; }
+      shove += 1.1 * surge(age, 0.12);
+    }
     u.uFlow.value = t * (bpm / 120) * (this.soft ? 0.45 : 0.7) + (this.soft ? 0.4 : 1) * shove;
     // Looking up in a chorus: the curtains come overhead.
     // (Elsewhere a sheet half overhead is seen edge-on as an odd blob: only a chorus brings them all the way over.)
@@ -279,22 +302,15 @@ export class Aurora implements MvScene {
     }
     for (let i = m; i < SURGES; i++) this.surgeU[i].set(0, 0, 0, 0);
 
-    // The words: signs ahead, in the dark band between the curtains' bright hem and the mountains (on the hem a
-    // light signal colour vanishes), each held until the next comes in (the camera barely moves: none is flown through).
-    const p = new THREE.Vector3(), q = new THREE.Quaternion();
-    const at = (time: number, drop: number, lane: number, root: THREE.Object3D) => {
-      this.pose(time, shot, p, q);
-      const fw = new THREE.Vector3(0, 0, -1).applyQuaternion(q), up = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
-      root.position.copy(p).addScaledVector(fw, 30).addScaledVector(up, (lane % 2 ? -1.9 : 1.9) - drop - 4.6);
-      root.quaternion.copy(q);
-    };
-    this.gates.update(ctx.lyrics, t, sec.energy, (c, time, root) => {
-      at(Math.min(time, c.end), 0, c.ordinal, root);
-      // Held until the next sign comes in (on the other line), at most eight seconds after it is sung.
-      return smooth((time - c.start + 0.12) / 0.25) * (1 - smooth((time - Math.min(c.next, c.end + 8) - 0.1) / 0.4));
-    }, (state, time, root) => {
-      at(Math.min(time, state.line.end), 6.4, 0, root);
-      return 1 - smooth((time - state.line.end - 0.3) / 0.5);
+    // The words: each line one block standing over the ice ahead, in the dark band between the curtains' bright hem
+    // and the mountains, where the camera will have it in view while it is sung (lyricBlock.ts); the camera drifts
+    // up to it as the line ends.
+    const view = { reach: 30, far: 48, fov: cam.fov, aspect: cam.aspect, em: this.soft ? 0.064 : 0.068 };
+    const pose = (time: number, pp: THREE.Vector3, qq: THREE.Quaternion) => this.pose(time, shot, pp, qq);
+    this.blocks.update(ctx.lyrics, t, sec.energy, (st, time, root, leave, size) => {
+      const s = this.stands.get(shot.start, st, leave, pose, 2.8, view, size);
+      s.apply(time, root);
+      return smooth((s.depth(time) - 9) / 7);
     });
 
     ctx.fx.bloom = 0.55;

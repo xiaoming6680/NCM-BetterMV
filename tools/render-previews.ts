@@ -1,7 +1,8 @@
 // Renders the settings page's scene sketches, public/previews/<scene>.webp (480×270): each plate on its own over the
 // demo cover and made-up words (the harness's ?demo), in headless Edge against the frozen dev server (port 5191:
-// `bunx vite --config vite.frozen.config.ts`, or BMV_SERVER). The song is only the timing — Clarity, from the NetEase
-// cache, or BMV_PREVIEW_SONG (a section label it lacks falls back to its longest section). The looks' sketches,
+// `bunx vite --config vite.frozen.config.ts`, or BMV_SERVER). The song is only the timing — ILLENIUM's Reverie, from
+// the NetEase cache, or BMV_PREVIEW_SONG (a section label it lacks falls back to its longest section). Clarity, the
+// earlier default, left the cache; the opening card and the neon street were picked on 2021173064. The looks' sketches,
 // public/previews/look-<id>.webp, are a plate in that look.
 //   bun tools/render-previews.ts [scene…]          the sketches
 //   bun tools/render-previews.ts --try [scene…]    four candidate moments per scene, dev/stills/try-<scene>-<n>.png
@@ -13,7 +14,7 @@ const { chromium } = await import(process.env.BMV_PLAYWRIGHT ?? 'D:/!XM的项目
 
 const FF = process.env.BMV_FFMPEG ?? 'E:/ffmpeg-master-latest-win64-gpl-shared/bin/ffmpeg.exe';
 const SERVER = process.env.BMV_SERVER ?? 'http://localhost:5191';
-const SONG = Number(process.env.BMV_PREVIEW_SONG ?? 3359522924);
+const SONG = Number(process.env.BMV_PREVIEW_SONG ?? 403710535);
 
 /** Each plate: the style it is drawn in, its camera, the section to show it in and how far into it (picked with --try). */
 const PLAN: Record<SceneId, { style: string; variants: string; in: SectionLabel; at: number }> = {
@@ -28,16 +29,16 @@ const PLAN: Record<SceneId, { style: string; variants: string; in: SectionLabel;
   kaleido: { style: 'pulse', variants: 'petal', in: 'chorus', at: 0.55 },
   halftone: { style: 'pulse', variants: 'in', in: 'chorus', at: 0.35 },
   particles: { style: 'pulse', variants: 'burst', in: 'chorus', at: 0.35 },
-  relief: { style: 'pulse', variants: 'crane', in: 'verse', at: 0.35 },
+  relief: { style: 'pulse', variants: 'crane', in: 'verse', at: 0.75 },
   diorama: { style: 'ballad', variants: 'drift', in: 'verse', at: 0.55 },
   bokeh: { style: 'ballad', variants: 'focus', in: 'chorus', at: 0.15 },
   ink: { style: 'ink', variants: 'scroll', in: 'verse', at: 0.35 },
   poster: { style: 'pulse', variants: 'stack', in: 'chorus', at: 0.15 },
-  typewall: { style: 'word', variants: 'stack', in: 'chorus', at: 0.35 },
+  typewall: { style: 'word', variants: 'stack', in: 'chorus', at: 0.15 },
   cards: { style: 'pulse', variants: 'stack', in: 'intro', at: 0.35 },
-  crystal: { style: 'pulse', variants: 'orbit', in: 'build', at: 0.35 },
+  crystal: { style: 'pulse', variants: 'orbit', in: 'build', at: 0.55 },
   subdivide: { style: 'pulse', variants: 'ball', in: 'verse', at: 0.55 },
-  debug: { style: 'pulse', variants: 'orbit', in: 'chorus', at: 0.15 },
+  debug: { style: 'pulse', variants: 'orbit', in: 'chorus', at: 0.55 },
   vinyl: { style: 'pulse', variants: 'tilt', in: 'verse', at: 0.35 },
   clouds: { style: 'ballad', variants: 'over', in: 'chorus', at: 0.35 },
   city: { style: 'pulse', variants: 'canyon', in: 'chorus', at: 0.35 },
@@ -45,6 +46,17 @@ const PLAN: Record<SceneId, { style: string; variants: string; in: SectionLabel;
   // (These two were picked against BMV_PREVIEW_SONG=403710535; the canvas from above near the end, mostly painted.)
   canvas: { style: 'pulse', variants: 'map', in: 'outro', at: 0.9 },
   pillars: { style: 'pulse', variants: 'orbit', in: 'chorus', at: 0.55 },
+  ripple: { style: 'pulse', variants: 'face', in: 'chorus', at: 0.45 },
+  channel: { style: 'pulse', variants: 'axis', in: 'drop', at: 0.55 },
+  orb: { style: 'pulse', variants: 'orbit', in: 'chorus', at: 0.4 },
+  menger: { style: 'pulse', variants: 'glide', in: 'chorus', at: 0.5 },
+  sierpinski: { style: 'pulse', variants: 'glide', in: 'chorus', at: 0.5 },
+  cantor: { style: 'pulse', variants: 'glide', in: 'chorus', at: 0.5 },
+  papercut: { style: 'ink', variants: 'turn', in: 'chorus', at: 0.4 },
+  // (These three were picked against BMV_PREVIEW_SONG=2021173064.)
+  rain: { style: 'ballad', variants: 'pane', in: 'verse', at: 0.35 },
+  lanterns: { style: 'ballad', variants: 'shore', in: 'chorus', at: 0.6 },
+  neon: { style: 'word', variants: 'walk', in: 'verse', at: 0.35 },
 };
 
 /** The looks: a plate drawn in each. */
@@ -52,6 +64,7 @@ const LOOK_PLAN: Record<string, { plate: SceneId; style: string; variants: strin
   riso: { plate: 'ridges', style: 'pulse', variants: 'front', in: 'verse', at: 0.75 },
   hibit: { plate: 'tunnel', style: 'pulse', variants: 'rush', in: 'verse', at: 0.4 },
   ascii: { plate: 'relief', style: 'pulse', variants: 'crane', in: 'verse', at: 0.35 },
+  vhs: { plate: 'vinyl', style: 'ballad', variants: 'top', in: 'verse', at: 0.5 },
 };
 
 const args = process.argv.slice(2);
@@ -96,7 +109,7 @@ for (const id of scenes) {
   const p = look ? LOOK_PLAN[look] : { plate: id, ...PLAN[id as SceneId] };
   await page.goto(`${SERVER}/?id=${SONG}&demo&style=${p.style}&plate=${p.plate}&variants=${p.variants}&look=${look ?? 'none'}`);
   await page.waitForFunction(() => (window as any).bmv?.player?.director, null, { timeout: 240000 });
-  // (The HUD off takes the crystal badge with it: the sketch is the plate alone.)
+  // (The HUD off takes the armillary badge with it: the sketch is the plate alone.)
   await page.evaluate(() => { const b = (window as any).bmv; b.audio.pause(); b.player.hud.visible = false; b.player.resize(); });
   const [from, to] = await page.evaluate((label: string) => {
     const s = (window as any).bmv.analysis.sections as Array<{ label: string; start: number; end: number }>;

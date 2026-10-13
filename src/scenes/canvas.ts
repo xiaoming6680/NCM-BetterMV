@@ -8,10 +8,16 @@
 // every stamp up to t (drawn as time goes on, redrawn from the start after a seek back).
 // Cameras: behind the brush (chase), ahead looking back at it and its trail (front), alongside (side), above (high),
 // the whole canvas (map). In the song's last shot every camera rises into the whole canvas.
+// 墨 (ink): the same hand on rice paper (写意). The paint maps are read as ink: the cover's darks become scorched,
+// solid and pale ink (焦、浓、淡墨), its lights a faint trace, with a breath of its colour (淡彩); the stroke's edges
+// bleed into the paper's fibres, the thin parts break into flying white (飞白), fresh ink is a shade darker and
+// spreads a little; no relief, no gloss, the paper lit flat. No point of light: the newest, wettest ink shows where
+// the brush is. Beyond the sheet, paper-coloured mist. The song leaves more of the paper blank (留白).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { rng, smooth, clamp01, lerp } from './types.ts';
-import { LyricGates } from './lyricSpace.ts';
+import { LyricBlocks, Stands, voiceFor } from './lyricBlock.ts';
+import { INK_BLACK, ricePaper } from './ink.ts';
 import type { Music } from '../director/music.ts';
 import type { LyricLine, SectionLabel } from '../types.ts';
 
@@ -112,7 +118,8 @@ function liftsOf(music: Music): Lift[] {
   return out;
 }
 
-function plan(music: Music, lines: LyricLine[], sal: Float32Array, seed: number, soft: boolean): { plan: Plan; lifts: Lift[] } {
+/** `share`: how much of the canvas the song should cover. */
+function plan(music: Music, lines: LyricLine[], sal: Float32Array, seed: number, soft: boolean, share = 0.8): { plan: Plan; lifts: Lift[] } {
   const n = Math.ceil((music.duration + 2) * RATE) + 1;
   const p: Plan = {
     n, x: new Float32Array(n), z: new Float32Array(n), dx: new Float32Array(n), dz: new Float32Array(n),
@@ -148,7 +155,7 @@ function plan(music: Music, lines: LyricLine[], sal: Float32Array, seed: number,
     widths += WIDTH[music.section(Math.min(t, music.duration - 0.01)).label] * (soft ? 1.15 : 1) * (0.85 + 0.3 * level);
     steps++;
   }
-  const fill = steps ? THREE.MathUtils.clamp((0.8 * S * S) / (along * (widths / steps)), 0.9, 2.4) : 1;
+  const fill = steps ? THREE.MathUtils.clamp((share * S * S) / (along * (widths / steps)), (0.9 * share) / 0.8, 2.4) : 1;
 
   const score = (c: number, loud: boolean) => Math.pow(sal[c], loud ? 1.6 : 0.8) * Math.pow(1 - cov[c], 2);
   const pickGoal = (loud: boolean) => {
@@ -323,6 +330,7 @@ flat in vec4 vA;
 flat in vec4 vB;
 flat in vec2 vC;
 uniform sampler2D uCover;
+uniform float uBlur, uBristle;
 out vec4 fragColor;
 ${NOISE}
 const float S = ${S.toFixed(1)};
@@ -385,10 +393,12 @@ void main() {
   bool stroke = int(vC.x + 0.5) == 0;
   vec2 dir = stroke ? vA.zw : normalize(vLocal + 1e-4) * (int(vC.x + 0.5) == 1 ? 1.0 : 0.0);
   vec3 col = vec3(0.0);
-  for (int i = 0; i < 4; i++) col += texture(uCover, coverUv(vWorld - dir * 2.2 * float(i))).rgb;
+  for (int i = 0; i < 4; i++) col += texture(uCover, coverUv(vWorld - dir * 2.2 * float(i)), uBlur).rgb;
   col *= 0.25;
-  // (A little lighter and darker along the bristles.)
-  if (stroke) col *= 0.9 + 0.2 * n1(vLocal.y * 0.55 + vC.y);
+  // (A little lighter and darker along the bristles; with ink, clear streaks.)
+  float br = n1(vLocal.y * 0.55 + vC.y);
+  if (uBristle > 0.2) br = br * 0.7 + n1(vLocal.y * 2.1 + vC.y * 1.3) * 0.3;
+  if (stroke) col *= 1.0 - uBristle + 2.0 * uBristle * br;
   fragColor = vec4(col, sh.x);
 #else
   // Thickness (the thickest coat: a stroke's own overlapping segments don't pile up) and when it was painted.
@@ -504,6 +514,81 @@ void main() {
 }`;
 }
 
+/** The cover's own range of brightness (sRGB luma, its 8th and 92nd percentiles): the inks span it, light cover or dark. */
+function lumaRange(px: Uint8ClampedArray): [number, number] {
+  const hist = new Uint32Array(64);
+  let n = 0;
+  for (let o = 0; o < px.length; o += 16, n++) hist[Math.min(63, Math.floor(((0.2126 * px[o] + 0.7152 * px[o + 1] + 0.0722 * px[o + 2]) / 255) * 64))]++;
+  const at = (q: number) => { let acc = 0; for (let i = 0; i < 64; i++) { acc += hist[i]; if (acc >= q * n) return (i + 0.5) / 64; } return 1; };
+  const lo = at(0.08), hi = at(0.92);
+  return hi - lo < 0.25 ? [Math.max(0, (lo + hi) / 2 - 0.125), Math.min(1, (lo + hi) / 2 + 0.125)] : [lo, hi];
+}
+
+/** 墨: the sheet of rice paper, the paint maps read as ink (see the header). */
+function inkCanvasFrag(paper: THREE.Color, [lo, hi]: [number, number]): string {
+  const fog = paper.clone().multiplyScalar(0.97);
+  return /* glsl */ `
+precision highp float;
+in vec3 vWorld;
+uniform sampler2D uColor, uThick;
+uniform vec3 uCam;
+uniform float uT, uReveal;
+out vec4 fragColor;
+${NOISE}
+const float S = ${S.toFixed(1)};
+const vec3 PAPER = ${v3(paper)}, INK = ${v3(INK_BLACK)}, FOG = ${v3(fog)};
+void main() {
+  vec2 uv = (vWorld.xz + S * 0.5) / S;
+  // The ink spreads into the fibres: the coverage read through a little wander, its edge broken and feathered.
+  vec2 wander = vec2(n2(vWorld.xz * 0.6), n2(vWorld.xz * 0.6 + 7.1)) - 0.5;
+  vec4 paint = texture(uColor, uv + wander * 0.0012);
+  float fib = n2(vec2(vWorld.x * 2.4, vWorld.z * 0.35)) - 0.5;
+  float w = clamp(fwidth(paint.a) * 0.8, 0.002, 0.5);
+  float edge = paint.a + fib * 0.16 + (n2(vWorld.xz * 0.25) - 0.5) * 0.12;
+  float a = smoothstep(0.5 - w - 0.06, 0.5 + w, edge);
+  // A pale bleed just outside the stroke (洇).
+  float bleed = smoothstep(0.12, 0.45, edge) * (1.0 - a) * 0.22;
+  vec3 pc = paint.rgb / max(paint.a, 0.05);
+  float l = pow(max(dot(pc, vec3(0.2126, 0.7152, 0.0722)), 0.0), 1.0 / 2.2);
+  // The cover's darks (against its own range) in distinct inks — pale, solid, scorched; its lights still leave a faint
+  // trace where the brush went.
+  float dark = 1.0 - clamp((l - ${lo.toFixed(3)}) / ${(hi - lo).toFixed(3)}, 0.0, 1.0);
+  float tone = 0.36 + smoothstep(0.2, 0.3, dark) * 0.2 + smoothstep(0.48, 0.56, dark) * 0.24 + smoothstep(0.74, 0.82, dark) * 0.2;
+  // Fresh ink is a shade darker (the wet head of the stroke shows where the brush is).
+  float tp = texture(uThick, uv).g;
+  float age = tp > 0.5 ? uT - (tp - 1.0) : 1e3;
+  float wet = exp(-max(age, 0.0) / 1.6);
+  tone = min(1.0, tone * (1.0 + 0.25 * wet)) * (0.86 + 0.24 * n2(vWorld.xz * 0.9));
+  float ink = max(tone * a, bleed * tone);
+  // Rice paper: warm, mottled, its fibres showing.
+  float fibre = smoothstep(0.62, 0.9, n2(vec2(vWorld.x * 30.0, vWorld.z * 1.3))) * 0.05;
+  vec3 ground = PAPER * (0.93 + 0.07 * n2(vWorld.xz * 0.05) - fibre);
+  // A breath of the cover's colour where the ink lies (淡彩).
+  vec3 wash = mix(vec3(1.0), clamp(pc * 1.6 / max(max(pc.r, max(pc.g, pc.b)), 0.05), 0.0, 1.0), 0.4);
+  vec3 col = mix(ground * mix(vec3(1.0), wash, clamp(ink * 1.6, 0.0, 1.0) * 0.55), INK, ink * 0.94);
+  float d = length(uCam - vWorld);
+  col = mix(FOG, col, exp(-d * mix(0.0024, 0.0005, uReveal)));
+  fragColor = vec4(col, 1.0);
+}`;
+}
+
+/** 墨: paper-coloured mist round the sheet, a little lighter overhead. */
+function inkSkyFrag(paper: THREE.Color): string {
+  const horizon = paper.clone().multiplyScalar(0.97), zenith = paper.clone().lerp(new THREE.Color(1, 1, 1), 0.25);
+  return /* glsl */ `
+precision highp float;
+in vec2 vNdc;
+uniform mat4 uInvVP;
+uniform vec3 uCam;
+out vec4 fragColor;
+const vec3 HORIZON = ${v3(horizon)}, ZENITH = ${v3(zenith)};
+void main() {
+  vec4 w = uInvVP * vec4(vNdc, 1.0, 1.0);
+  vec3 rd = normalize(w.xyz / w.w - uCam);
+  fragColor = vec4(mix(HORIZON, ZENITH, pow(max(rd.y, 0.0), 0.6)), 1.0);
+}`;
+}
+
 // ── The scene ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export class CanvasScene implements MvScene {
@@ -513,8 +598,10 @@ export class CanvasScene implements MvScene {
   private stamps: Stamp[];
   private targets: THREE.WebGLRenderTarget[];
   private passes: THREE.Scene[];
+  get offscreen(): THREE.Object3D[] { return this.passes; }
   private stampCam = new THREE.Camera();
-  private stampU = { uWindow: { value: new THREE.Vector2() }, uCover: { value: null as THREE.Texture | null } };
+  /** uBlur: a mip bias for reading the cover (ink paints its masses, not a photo's grain). */
+  private stampU = { uWindow: { value: new THREE.Vector2() }, uCover: { value: null as THREE.Texture | null }, uBlur: { value: 0 }, uBristle: { value: 0.1 } };
   /** The time the paint maps hold (−∞: empty). */
   private drawn = -Infinity;
   private t = 0;
@@ -522,16 +609,22 @@ export class CanvasScene implements MvScene {
   private skyU: Record<string, THREE.IUniform>;
   private brush: THREE.Mesh;
   private halo: THREE.Mesh;
-  private gates: LyricGates;
+  private blocks: LyricBlocks;
+  /** Lines stand over the canvas ahead, in turn high left and lower right. */
+  private stands = new Stands([[-0.14, 0.26], [0.14, 0.17]]);
   private soft: boolean;
+  /** 墨: ink on rice paper. */
+  private ink: boolean;
   private duration: number;
 
-  constructor(init: SceneInit, look: 'pulse' | 'ballad' = 'pulse', seed = 1) {
+  constructor(init: SceneInit, look: 'pulse' | 'ballad' | 'ink' = 'pulse', seed = 1) {
     const { palette, music } = init;
-    this.soft = look === 'ballad';
-    this.scene.background = palette.ink.clone().multiplyScalar(0.3);
+    this.soft = look !== 'pulse';
+    this.ink = look === 'ink';
+    const paper = ricePaper(palette);
+    this.scene.background = this.ink ? paper.clone() : palette.ink.clone().multiplyScalar(0.3);
     const sal = saliency(init.coverPixels, init.coverSize);
-    const planned = plan(music, init.lyrics.lines, sal, seed, this.soft);
+    const planned = plan(music, init.lyrics.lines, sal, seed, this.soft, this.ink ? 0.62 : 0.8);
     this.plan = planned.plan;
     this.stamps = stampsOf(this.plan, music, planned.lifts, seed, this.soft);
     this.duration = music.duration;
@@ -553,6 +646,8 @@ export class CanvasScene implements MvScene {
     quad.setAttribute('aC', new THREE.InstancedBufferAttribute(C, 2));
     quad.instanceCount = this.stamps.length;
     this.stampU.uCover.value = init.cover;
+    this.stampU.uBlur.value = this.ink ? 2.2 : 0;
+    this.stampU.uBristle.value = this.ink ? 0.4 : 0.1;
     const blend = [
       { equation: THREE.AddEquation, src: THREE.SrcAlphaFactor, dst: THREE.OneMinusSrcAlphaFactor, srcA: THREE.OneFactor, dstA: THREE.OneMinusSrcAlphaFactor },
       { equation: THREE.MaxEquation, src: THREE.OneFactor, dst: THREE.OneFactor, srcA: THREE.OneFactor, dstA: THREE.OneFactor },
@@ -580,7 +675,7 @@ export class CanvasScene implements MvScene {
     };
     const grid = new THREE.PlaneGeometry(S, S, 1, 1);
     grid.rotateX(-Math.PI / 2);
-    const canvas = new THREE.Mesh(grid, new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: CANVAS_VERT, fragmentShader: canvasFrag(palette, key), uniforms: this.u }));
+    const canvas = new THREE.Mesh(grid, new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: CANVAS_VERT, fragmentShader: this.ink ? inkCanvasFrag(paper, lumaRange(init.coverPixels)) : canvasFrag(palette, key), uniforms: this.u }));
     canvas.frustumCulled = false;
     this.scene.add(canvas);
 
@@ -588,7 +683,7 @@ export class CanvasScene implements MvScene {
     this.skyU = { uInvVP: { value: new THREE.Matrix4() }, uCam: { value: new THREE.Vector3() } };
     const tri = new THREE.BufferGeometry();
     tri.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
-    const sky = new THREE.Mesh(tri, new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: SKY_VERT, fragmentShader: skyFrag(palette), uniforms: this.skyU, depthTest: false, depthWrite: false }));
+    const sky = new THREE.Mesh(tri, new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: SKY_VERT, fragmentShader: this.ink ? inkSkyFrag(paper) : skyFrag(palette), uniforms: this.skyU, depthTest: false, depthWrite: false }));
     sky.frustumCulled = false;
     sky.renderOrder = -10;
     sky.onBeforeRender = (_r, _s, camera) => {
@@ -611,8 +706,9 @@ export class CanvasScene implements MvScene {
     this.halo.renderOrder = 5;
     this.scene.add(this.brush, this.halo);
 
-    this.gates = new LyricGates(palette, { style: this.soft ? 'poem' : 'hook', em: 2.3, maxW: 30, trans: { em: 0.95, vertical: false }, linger: 6 });
-    this.scene.add(this.gates.group);
+    // (On paper, light dust would not show: the words just go.)
+    this.blocks = new LyricBlocks(palette, music, { voice: voiceFor(look, init.seed), em: 2.3, maxW: this.soft ? 11 : 13, trans: 0.48, onLight: this.ink, dust: this.ink ? undefined : [0, 1.5, 0] });
+    this.scene.add(this.blocks.group);
 
     this.scene.onBeforeRender = renderer => this.paint(renderer);
     this.resize(init.aspect);
@@ -621,6 +717,7 @@ export class CanvasScene implements MvScene {
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
+    this.blocks.setAspect(aspect);
   }
 
   keepUp(t: number, renderer: THREE.WebGLRenderer): void {
@@ -741,7 +838,8 @@ export class CanvasScene implements MvScene {
     this.halo.scale.setScalar(5 + kick * 3 + b.w * 0.06);
     (this.halo.material as THREE.ShaderMaterial).uniforms.uI.value = 0.4 + kick * 0.5;
     const r = this.revealAt(t, shot);
-    this.brush.visible = this.halo.visible = r < 0.98;
+    // (On paper there is no point of light: the wet head of the stroke shows the brush.)
+    this.brush.visible = this.halo.visible = r < 0.98 && !this.ink;
 
     const u = this.u;
     (u.uCam.value as THREE.Vector3).copy(cam.position);
@@ -751,25 +849,18 @@ export class CanvasScene implements MvScene {
     u.uReveal.value = r;
     u.uGlow.value = (loud ? 0.6 : 0.2) + 0.4 * music.env('rms', t);
 
-    // The words: signs in the air ahead, travelling with the view while they are sung and left where they are once
-    // sung (the camera comes on into them as the next arrive), a line up or down by turns.
-    const p = new THREE.Vector3(), q = new THREE.Quaternion();
-    const at = (time: number, lift: number, root: THREE.Object3D) => {
-      this.pose(time, music, shot, p, q);
-      const fw = new THREE.Vector3(0, 0, -1).applyQuaternion(q), up = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
-      root.position.copy(p).addScaledVector(fw, 24).addScaledVector(up, lift);
-      root.quaternion.copy(q);
-    };
-    this.gates.update(ctx.lyrics, t, sec.energy, (c, time, root) => {
-      at(Math.min(time, c.end), c.ordinal % 2 ? 4.6 : 7.0, root);
-      return smooth((time - c.start + 0.12) / 0.25) * (1 - smooth((time - Math.min(c.next - 0.05, c.end + 3)) / 0.2));
-    }, (state, time, root) => {
-      at(Math.min(time, state.line.end), 2.6, root);
-      return 1 - smooth((time - state.line.end - 0.3) / 0.5);
+    // The words: each line one block standing over the canvas ahead, where the camera following the brush will have
+    // it in view while it is sung (lyricBlock.ts); it comes up to it as the line ends.
+    const view = { reach: 24, far: 34, fov: cam.fov, aspect: cam.aspect, em: this.soft ? 0.064 : 0.068 };
+    const pose = (time: number, pp: THREE.Vector3, qq: THREE.Quaternion) => this.pose(time, music, shot, pp, qq);
+    this.blocks.update(ctx.lyrics, t, sec.energy, (st, time, root, leave, size) => {
+      const s = this.stands.get(shot.start, st, leave, pose, 2.3, view, size);
+      s.apply(time, root);
+      return smooth((s.depth(time) - 6) / 5);
     });
 
-    ctx.fx.bloom = 0.25;
-    ctx.fx.vignette = 0.55;
-    ctx.fx.grain = 0.03;
+    ctx.fx.bloom = this.ink ? 0.04 : 0.25;
+    ctx.fx.vignette = this.ink ? 0.25 : 0.55;
+    ctx.fx.grain = this.ink ? 0.035 : 0.03;
   }
 }

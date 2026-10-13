@@ -2,7 +2,7 @@
 // 效果是第一要求"; docs/TREATMENT.md, 歌词在空间里). Each plate gives the words a place of their own instead of a card
 // riding the lens:
 //   LyricGates — the sung words, a few at a time, as signs down a tunnel that the camera flies through
-//   LyricOrbit — the line set round a circle: flat on the rings, or a band standing round the crystal; it turns a
+//   LyricOrbit — the line set round a circle: flat on the rings, or a band standing round the armillary; it turns a
 //                notch as each word is sung, so the word being sung is where the camera looks
 //   LyricLayer — the line drawn into a texture that the plate's own shader prints on its surface (the triangle
 //                wall: the words flip with the triangles and burst apart with them)
@@ -15,7 +15,7 @@ import type { LyricLine } from '../types.ts';
 import type { Palette } from '../render/palette.ts';
 import { tokenize } from '../lyrics/parse.ts';
 import { LyricRig, paintWord, type RigStyle } from './lyricRig.ts';
-import { clamp01, outExpo, smooth } from './types.ts';
+import { clamp01, outExpo, smooth, snap } from './types.ts';
 
 type TextMesh = THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
 
@@ -121,13 +121,18 @@ function runs(chars: string[]): number[][] {
 }
 
 const chunkCache = new WeakMap<LyricTrack, Chunk[]>();
-export function chunksOf(lyrics: LyricTrack): Chunk[] {
-  let c = chunkCache.get(lyrics);
+const lineCache = new WeakMap<LyricTrack, Chunk[]>();
+/** The song's chunks; `whole`: one per line, all its words (GateOptions.whole). */
+export function chunksOf(lyrics: LyricTrack, whole = false): Chunk[] {
+  const cache = whole ? lineCache : chunkCache;
+  let c = cache.get(lyrics);
   if (!c) {
     let n = 0;
-    const all = lyrics.lines.flatMap((l, i) => chunkLine(l, i));
+    const all = whole
+      ? lyrics.lines.flatMap((l, i) => (l.words.length ? [{ line: i, words: l.words.map((_, j) => j), start: l.words[0].start, end: l.words[l.words.length - 1].end }] : []))
+      : lyrics.lines.flatMap((l, i) => chunkLine(l, i));
     c = all.map((x, i) => ({ ...x, ordinal: n++, next: all[i + 1]?.start ?? Infinity }));
-    chunkCache.set(lyrics, c);
+    cache.set(lyrics, c);
   }
   return c;
 }
@@ -168,6 +173,21 @@ export interface GateOptions {
   trans?: { em: number; vertical: boolean; arc?: number };
   /** How long after its last word a chunk may still be about (the plate's `gate` says when it has gone). */
   linger?: number;
+  /** The frame behind is light (the ink plates' paper): dark type, in the cover's ink, on a white glow. */
+  onLight?: boolean;
+  /**
+   * One sign per line, all its words, instead of a few words each (a plate where signs pile up rather than fly past:
+   * the kaleidoscope's slow push held eight arcs at once). An arc then never runs round more than 150°: a long line
+   * is set smaller.
+   */
+  whole?: boolean;
+  /** The translation banner's face (the song's lyric voice), bold sans when not given. */
+  transFace?: Face;
+  /**
+   * Hidden behind what is nearer, like the plate's own things, instead of drawn over everything: signs on boards that
+   * stand in front of one another (the neon street's), where a far sign's words lay over a near board.
+   */
+  depth?: boolean;
 }
 
 /** A glyph of a sign: a whole word in a row (pivot at its left), or one character on an arc (pivot at its middle). */
@@ -194,13 +214,16 @@ export class LyricGates {
 
   private material(m: TextMesh): TextMesh {
     m.material.depthWrite = false;
-    m.material.depthTest = false;
+    m.material.depthTest = !!this.opts.depth;
     m.renderOrder = 20;
     return m;
   }
 
+  /** The baked halo: dark round light type, or white round dark type on a light frame. */
+  private get halo(): string { return this.opts.onLight ? this.palette.css.ink : 'dark'; }
+
   private buildSign(c: Chunk, line: LyricLine): Sign {
-    const o = this.opts, face = o.face ?? (o.style === 'poem' ? 'serif' : 'display');
+    const o = this.opts, face = o.face ?? (o.style === 'poem' ? 'serif' : 'condensed'), halo = this.halo;
     const root = new THREE.Group();
     const cjk = hasCjk(line.text);
     const gap = cjk ? o.em * 0.08 : o.em * 0.32;
@@ -212,19 +235,20 @@ export class LyricGates {
       c.words.forEach((wi, j) => {
         if (j) len += gap;
         for (const ch of Array.from(line.words[wi].text)) {
-          const mesh = this.material(textMesh(ch, face, o.em, { center: true, px: 160 })), adv = mesh.userData.width as number;
+          const mesh = this.material(textMesh(ch, face, o.em, { center: true, px: 160, halo })), adv = mesh.userData.width as number;
           chars.push({ mesh, word: wi, s: len + adv / 2 });
           len += adv;
         }
       });
+      const fit = o.whole ? Math.min(1, (o.arc * THREE.MathUtils.degToRad(150)) / Math.max(1e-3, len)) : 1;
       for (const ch of chars) {
-        const th = Math.PI / 2 + (len / 2 - ch.s) / o.arc;
-        ch.mesh.userData.baseScale = 1;
+        const th = Math.PI / 2 + ((len / 2 - ch.s) * fit) / o.arc;
+        ch.mesh.userData.baseScale = fit;
         root.add(ch.mesh);
         glyphs.push({ mesh: ch.mesh, word: ch.word, x: o.arc * Math.cos(th), y: o.arc * Math.sin(th), rot: th - Math.PI / 2, w: 0, centred: true });
       }
     } else {
-      const meshes = c.words.map(i => this.material(textMesh(line.words[i].text, face, o.em, { px: 180 })));
+      const meshes = c.words.map(i => this.material(textMesh(line.words[i].text, face, o.em, { px: 180, halo })));
       const widths = meshes.map(m => m.userData.width as number);
       const total = widths.reduce((a, b) => a + b, 0) + gap * (meshes.length - 1);
       const s = Math.min(1, o.maxW / Math.max(1e-3, total));
@@ -248,7 +272,7 @@ export class LyricGates {
       let len = 0;
       for (const ch of Array.from(text)) {
         if (!ch.trim()) { len += o.em * 0.35; continue; }
-        const mesh = this.material(textMesh(ch, 'bold', o.em, { center: true, px: 112 })), adv = mesh.userData.width as number;
+        const mesh = this.material(textMesh(ch, this.opts.transFace ?? 'bold', o.em, { center: true, px: 112, halo: this.halo })), adv = mesh.userData.width as number;
         laid.push({ mesh, s: len + adv / 2 });
         len += adv;
       }
@@ -264,7 +288,7 @@ export class LyricGates {
       let y = 0;
       for (const ch of Array.from(text.trim())) {
         if (/[\s\p{P}]/u.test(ch)) { y -= o.em * 0.55; continue; }
-        const mesh = this.material(textMesh(ch, 'bold', o.em, { center: true, px: 112 }));
+        const mesh = this.material(textMesh(ch, this.opts.transFace ?? 'bold', o.em, { center: true, px: 112, halo: this.halo }));
         root.add(mesh);
         chars.push({ mesh, x: 0, y });
         y -= o.em * 1.14;
@@ -275,7 +299,7 @@ export class LyricGates {
       root.userData.size = [o.em * 1.2, -y];
     } else {
       const parts = hasCjk(text) ? Array.from(text) : tokenize(text);
-      const meshes = parts.map(p => (p.trim() ? this.material(textMesh(p, 'bold', o.em, { px: 112 })) : null));
+      const meshes = parts.map(p => (p.trim() ? this.material(textMesh(p, this.opts.transFace ?? 'bold', o.em, { px: 112, halo: this.halo })) : null));
       const widths = meshes.map(m => (m ? (m.userData.width as number) + (hasCjk(text) ? 0 : o.em * 0.3) : o.em * 0.35));
       const total = widths.reduce((a, b) => a + b, 0);
       let x = -total / 2;
@@ -289,7 +313,7 @@ export class LyricGates {
   update(lyrics: LyricTrack, t: number, energy: number,
     gate: (c: Chunk, t: number, root: THREE.Object3D) => number,
     banner?: (state: LineState, t: number, root: THREE.Object3D) => number): void {
-    const chunks = chunksOf(lyrics);
+    const chunks = chunksOf(lyrics, this.opts.whole);
     const starts = this.starts ??= Float64Array.from(chunks, c => c.start);
     const linger = this.opts.linger ?? 2;
     const live = new Set<number>(), states = new Map<number, LineState>();
@@ -309,7 +333,7 @@ export class LyricGates {
       if (!sign.root.visible) continue;
       const st = states.get(c.line) ?? states.set(c.line, lyrics.state(c.line, t)).get(c.line)!;
       for (const g of sign.glyphs) {
-        const look = paintWord(st.words[g.word], g.word, this.opts.style, this.palette, energy, 0, this.color);
+        const look = paintWord(st.words[g.word], g.word, this.opts.style, this.palette, energy, 0, this.color, this.opts.onLight);
         g.mesh.visible = !!look;
         if (!look) continue;
         // Hook words slam in from a little bigger and nearer, growing about their middle.
@@ -341,7 +365,8 @@ export class LyricGates {
           const k = revealAt(s, i, n);
           g.mesh.visible = k > 0;
           g.mesh.position.set(g.x, g.y - (1 - k) * this.opts.trans!.em * 0.4, 0);
-          g.mesh.material.color.copy(paper).multiplyScalar(0.85);
+          if (this.opts.onLight) g.mesh.material.color.setRGB(1, 1, 1);
+          else g.mesh.material.color.copy(paper).multiplyScalar(0.85);
           g.mesh.material.opacity = k * fade * 0.92;
         });
       }
@@ -364,6 +389,8 @@ export interface OrbitOptions {
   face?: Face;
   /** Translation: flat, round the bottom of a circle of this radius, read upright; band, a row under the words. */
   trans?: { em: number; radius: number };
+  /** The translation's face (the song's lyric voice), bold sans when not given. */
+  transFace?: Face;
 }
 
 interface OrbitGlyph { mesh: TextMesh; s: number }
@@ -394,7 +421,7 @@ export class LyricOrbit {
   }
 
   private build(state: LineState): OrbitLine {
-    const o = this.opts, face = o.face ?? (o.style === 'poem' ? 'serif' : 'display');
+    const o = this.opts, face = o.face ?? (o.style === 'poem' ? 'serif' : 'condensed');
     const root = new THREE.Group();
     const glyphs: OrbitGlyph[] = [], word: number[] = [], wordS: number[] = [];
     let s = 0;
@@ -417,7 +444,7 @@ export class LyricOrbit {
       const text = state.line.translation;
       for (const ch of Array.from(text)) {
         if (!ch.trim()) { transLen += o.trans.em * 0.35; continue; }
-        const mesh = this.glyph(ch, o.trans.em, 'bold', 96), adv = mesh.userData.width as number;
+        const mesh = this.glyph(ch, o.trans.em, o.transFace ?? 'bold', 96), adv = mesh.userData.width as number;
         root.add(mesh);
         trans.push({ mesh, s: transLen + adv / 2 });
         transLen += adv;
@@ -464,7 +491,7 @@ export class LyricOrbit {
     for (const st of states) {
       const b = this.lines.get(st.index) ?? this.lines.set(st.index, this.build(st)).get(st.index)!;
       // A leaving line turns on, the way the sung words went, by a quarter circle as it fades.
-      const away = outExpo(st.exit) * Math.PI * 0.5;
+      const away = snap(st.exit) * Math.PI * 0.5;
       const turn = this.turn(b, st, anchorAt) + (flat ? away : -away);
       b.glyphs.forEach((g, gi) => {
         const wi = b.word[gi];
@@ -538,6 +565,8 @@ export class LyricLayer {
     this.rig = new LyricRig(palette, style);
     this.scene.add(this.rig.group);
     this.token.userData.lyrics = true;
+    // (Printed: drawing the plate apart from its words keeps these with it — src/render/shots.ts, withoutLyrics.)
+    this.token.userData.printed = true;
   }
 
   /**

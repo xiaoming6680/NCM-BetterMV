@@ -5,8 +5,9 @@
 // then snaps to its next place on the grid; a marker ticks along the rule on each beat.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { clamp01, lerp, outExpo, rng } from './types.ts';
-import { textMesh, hasCjk } from '../render/text.ts';
+import { clamp01, lerp, outExpo, rng, snap } from './types.ts';
+import { textMesh, hasCjk, type Face } from '../render/text.ts';
+import { VOICES, voiceFor } from './lyricBlock.ts';
 import type { LineState } from '../director/lyrics.ts';
 import type { SectionLabel } from '../types.ts';
 
@@ -132,7 +133,7 @@ export class Poster implements MvScene {
     const rule = flat(this.fg, 0.5);
     this.rect(W - 2 * M, 0.02, rule, 0, -H / 2 + M * 0.8, 0.02);
     this.tick = this.rect(H * 0.03, H * 0.03, flat(this.sig), -W / 2 + M, -H / 2 + M * 0.8, 0.03);
-    this.label(`${LABELS[shot.section.label]} · ${Math.round(this.init.music.at(shot.start + 0.01).bpm)} BPM`, H * 0.028, W / 2 - M, H / 2 - M * 0.7, 'right');
+    this.label(`${LABELS[shot.section.label]}\u3000${Math.round(this.init.music.shownBpm(shot.start + 0.01))} BPM`, H * 0.028, W / 2 - M, H / 2 - M * 0.7, 'right');
   }
 
   private layoutLine(state: LineState): Line {
@@ -144,8 +145,11 @@ export class Poster implements MvScene {
     const cjk = hasCjk(line.text);
     const words: Word[] = [];
     const variant = shot.variant;
+    // The words in the song's lyric voice (lyricBlock.ts VOICES): pulse and rap in its condensed capitals, a ballad in
+    // its serif.
+    const face: Face = this.look === 'ballad' ? VOICES[voiceFor('ballad', this.init.seed)].faces[0] : 'condensed';
     const mk = (text: string, h: number) => {
-      const m = textMesh(text, 'display', h, { px: 200, halo: 'none' }) as unknown as Mesh;
+      const m = textMesh(text, face, h, { px: 200, halo: 'none' }) as unknown as Mesh;
       m.material.toneMapped = false;
       return m;
     };
@@ -227,7 +231,7 @@ export class Poster implements MvScene {
     if (this.block && this.blockSpots.length) {
       const spots = this.blockSpots, n = spots.length;
       const a = spots[info.bar % n], b = spots[(info.bar + n - 1) % n];
-      const e = outExpo(clamp01(info.barPhase / 0.12));
+      const e = snap(info.barPhase / 0.12);
       const kick = this.look === 'ballad' ? 0 : music.pulse('kick', t, 0.1);
       this.block.position.x = lerp(b.x, a.x, e);
       this.block.position.y = lerp(b.y, a.y, e);
@@ -254,7 +258,7 @@ export class Poster implements MvScene {
       const l = this.lines.get(st.index) ?? this.lines.set(st.index, this.layoutLine(st)).get(st.index)!;
       // A leaving line scrolls off the top of the page, translation and all, like turning a page.
       const fade = (1 - st.exit) * (1 - st.exit);
-      l.root.position.y = outExpo(st.exit) * H * 0.6;
+      l.root.position.y = snap(st.exit) * H * 0.6;
       st.words.forEach((ws, i) => {
         const w = l.words[i];
         if (!w) return;

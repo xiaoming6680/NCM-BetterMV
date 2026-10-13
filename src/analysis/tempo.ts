@@ -3,7 +3,7 @@
 // consistent evidence. Windows with little rhythmic evidence (quiet, arrhythmic) get a small weight, so the path
 // keeps the tempo of its neighbours there instead of drifting to the prior. The tempogram is computed once; the
 // path is cheap and can be re-run with another prior (e.g. to follow a BPM hint to another octave).
-import { chunked, type Slicer } from './util.ts';
+import { chunked, quantile, type Slicer } from './util.ts';
 
 export interface Tempogram {
   /** Number of windows, tempo states and frames. */
@@ -192,10 +192,12 @@ export function pathTempo(tg: Tempogram, curve: TempoCurve): number {
 /**
  * Factor to apply to the path tempo `bpm`. A BPM hint (e.g. NetEase's song wiki, usually right but rounded) picks the
  * octave: the power of two that brings `bpm` within ±9 % of it. With the tempogram, a hint at 3∶2 or 2∶3 of an octave
- * of `bpm` is followed too when the tempogram supports the hinted tempo at least as well as `bpm` itself. And whatever
- * the hint, a path whose ¾ and 3⁄2 are both better supported than itself sits on a dotted pulse (the kicks of a drum &
- * bass break, a beat and a half apart): the better supported of the two is the song's beat. Otherwise 1 (a hint that
- * matches no relative of the tempo is ignored).
+ * of `bpm` is followed too unless the tempogram clearly backs `bpm` instead: the hinted tempo's best octave needs
+ * HINT_RELATIVE of the support of `bpm`'s best octave. (Syncopated kicks, a beat and a half apart in drum & bass and
+ * half-time future bass, give the dotted tempo a strong peak of its own: these songs' wiki BPM was right where the
+ * path was not.) And whatever the hint, a path whose ¾ (or 3⁄2) has DOTTED of the support of the path's best octave
+ * sits on such a dotted pulse: the better supported of the two is the song's beat. Otherwise 1 (a hint that matches
+ * no relative of the tempo is ignored).
  */
 export function tempoFactor(bpm: number, hint: number | undefined, tg?: Tempogram): number {
   if (!(bpm > 0)) return 1;
@@ -207,13 +209,27 @@ export function tempoFactor(bpm: number, hint: number | undefined, tg?: Tempogra
         const r3 = Math.log2(hint / (bpm * f)), k3 = Math.round(r3);
         if (Math.abs(r3 - k3) > 0.125 || Math.abs(k3) > 1) continue;
         const factor = f * Math.pow(2, k3);
-        if (tempoSupport(tg, bpm * factor) >= tempoSupport(tg, bpm)) return factor;
+        if (octaveSupport(tg, bpm * factor) >= HINT_RELATIVE * octaveSupport(tg, bpm)) return factor;
       }
     }
   }
   if (!tg) return 1;
-  const s = tempoSupport(tg, bpm), s34 = tempoSupport(tg, 0.75 * bpm), s32 = tempoSupport(tg, 1.5 * bpm);
-  return s34 >= s && s32 >= s ? (s34 >= s32 ? 0.75 : 1.5) : 1;
+  const s = octaveSupport(tg, bpm), s34 = tempoSupport(tg, 0.75 * bpm), s32 = tempoSupport(tg, 1.5 * bpm);
+  return Math.max(s34, s32) >= DOTTED * s ? (s34 >= s32 ? 0.75 : 1.5) : 1;
+}
+
+/** Share of the support of the path's tempo family that a 3∶2 relative from the hint needs (see tempoFactor). */
+export const HINT_RELATIVE = 0.5;
+/**
+ * Share of the support of the path's tempo family at which its ¾ or 3⁄2 marks the path as a dotted pulse. On 194
+ * songs with a cited BPM, paths on the song's beat reached at most 0.50 (one at 0.74, its sources split between the
+ * path and its 3⁄2); dotted paths mostly 0.61–1.3.
+ */
+const DOTTED = 0.6;
+
+/** Best tempogram support among `bpm`, its half and its double. */
+function octaveSupport(tg: Tempogram, bpm: number): number {
+  return Math.max(tempoSupport(tg, 0.5 * bpm), tempoSupport(tg, bpm), tempoSupport(tg, 2 * bpm));
 }
 
 /** Mean tempogram salience (0..1) at `bpm` (±1.5 %), weighted by window confidence. */
@@ -234,4 +250,52 @@ export function tempoSupport(tg: Tempogram, bpm: number): number {
     wsum += confidence[m];
   }
   return wsum > 0 ? sum / wsum : 0;
+}
+
+/** A grid slower than this (BPM) is cited at twice its tempo (see namedTempo). */
+const NAMED_LOW = 81;
+/** Up to this grid tempo, snares on every beat mark a half-time grid (see namedTempo). */
+const NAMED_HIGH = 98;
+
+/**
+ * The tempo as it is usually cited and shown, from the grid's dominant tempo `bpm`: `bpm` or twice it. NetEase's wiki
+ * BPM, which the grid follows to its octave, is often half the cited one (drum & bass 86 where 174 is cited). Against
+ * the BPM cited for 197 songs of the NetEase cache (tools/truth/tempo.json: rhythm-game charts, Beatport, Spotify-
+ * derived sites):
+ * - a grid under NAMED_LOW is cited at double: 41 songs against 6 (sources split between the two, beatless game
+ *   scores, single low-confidence sources);
+ * - up to NAMED_HIGH, in 4/4, snares that are not on a kick on both the odd and the even beats of the bar (drum &
+ *   bass's snare on every beat of its half-time grid) mean double too: 12 songs against 1. A backbeat on 2 and 4
+ *   alone (Stressed Out at 85, I Like Me Better at 92) keeps the grid's tempo. Beats count by loudness (from 18 dB
+ *   under the loud level), so an intro or a breakdown weighs little; a beat has a snare within 60 ms of it.
+ */
+export function namedTempo(
+  bpm: number, beats: ArrayLike<number>, beatInBar: ArrayLike<number>, meter: number,
+  kicks: ArrayLike<readonly [number, number]>, snares: ArrayLike<readonly [number, number]>, levelDb: Float32Array, fps: number,
+): number {
+  if (!(bpm > 0) || beats.length < 16) return bpm;
+  if (bpm < NAMED_LOW) return 2 * bpm;
+  if (bpm > NAMED_HIGH || meter !== 4) return bpm;
+  // Snare hits with no kick within 35 ms (a bright kick's attack also passes the snare gate).
+  const free: number[] = [];
+  for (let i = 0, k = 0; i < snares.length; i++) {
+    const t = snares[i][0];
+    while (k < kicks.length && kicks[k][0] < t - 0.035) k++;
+    if (!(k < kicks.length && kicks[k][0] <= t + 0.035)) free.push(t);
+  }
+  const near = (t: number) => {
+    let lo = 0, hi = free.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (free[m] < t - 0.06) lo = m + 1; else hi = m; }
+    return lo < free.length && free[lo] <= t + 0.06 ? 1 : 0;
+  };
+  const ref = quantile(levelDb, 0.95);
+  let odd = 0, even = 0, wo = 0, we = 0;
+  for (let i = 0; i + 1 < beats.length; i++) {
+    const f = Math.min(levelDb.length - 1, Math.max(0, Math.round(beats[i] * fps)));
+    const w = Math.min(1, Math.max(0, (levelDb[f] - (ref - 18)) / 12));
+    if (w <= 0) continue;
+    if (beatInBar[i] % 2) { odd += w * near(beats[i]); wo += w; } else { even += w * near(beats[i]); we += w; }
+  }
+  const a = odd / (wo || 1), b = even / (we || 1), lo = Math.min(a, b);
+  return lo >= 0.11 && Math.max(a, b) <= 3 * lo ? 2 * bpm : bpm;
 }

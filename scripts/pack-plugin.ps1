@@ -21,7 +21,7 @@ try {
         @{ From = (Join-Path $projectRoot 'LICENSE'); Name = 'LICENSE' },
         @{ From = (Join-Path $projectRoot 'public\fonts\OFL.txt'); Name = 'fonts/OFL.txt' }
     )
-    foreach ($font in Get-ChildItem -LiteralPath (Join-Path $projectRoot 'public\fonts') -Filter '*.ttf') {
+    foreach ($font in @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'public\fonts') -Filter '*.ttf') + @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'public\fonts') -Filter '*.woff2')) {
         $entries += @{ From = $font.FullName; Name = 'fonts/' + $font.Name }
     }
     foreach ($sketch in Get-ChildItem -LiteralPath (Join-Path $projectRoot 'public\previews') -Filter '*.webp') {

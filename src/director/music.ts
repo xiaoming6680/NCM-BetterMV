@@ -22,10 +22,13 @@ export interface BeatInfo {
   bar: number;
   /** Phase within the current bar, 0..1. */
   barPhase: number;
+  /** 60 / the length of this beat of the grid: for timing. The number to show is `Music.shownBpm`. */
   bpm: number;
 }
 
 type HitKind = keyof Analysis['hits'];
+/** How long a hit's pulse takes to come up (seconds). */
+const ATTACK = 0.03;
 
 export class Music {
   readonly beats: Float64Array;
@@ -97,6 +100,31 @@ export class Music {
     };
   }
 
+  /** Per beat, the tempo to show (see shownBpm); made on first use. */
+  private shown?: Float32Array;
+
+  /**
+   * The tempo to show at t (the HUD, a plate's label), in named BPM: the song's tempo while the grid keeps within 3 %
+   * of it, else the local tempo (the median of the 8 beat intervals around t). One beat's interval jitters by a few
+   * per cent where the grid is the tracker's rather than a locked one; shown as it was, the number changed every beat.
+   */
+  shownBpm(t: number): number {
+    if (!this.shown) {
+      const b = this.beats, n = b.length, grid = this.a.bpm || 120, named = this.a.namedBpm || grid, scale = named / grid;
+      const out = new Float32Array(Math.max(1, n - 1)).fill(named);
+      const iv: number[] = [];
+      for (let i = 0; i + 1 < n; i++) {
+        iv.length = 0;
+        for (let j = Math.max(0, i - 4); j < Math.min(n - 1, i + 4); j++) iv.push(b[j + 1] - b[j]);
+        iv.sort((x, y) => x - y);
+        const local = 60 / iv[iv.length >> 1];
+        out[i] = Math.abs(local / grid - 1) <= 0.03 ? named : local * scale;
+      }
+      this.shown = out;
+    }
+    return this.shown[Math.max(0, Math.min(this.shown.length - 1, Math.floor(this.beatPos(t))))];
+  }
+
   /** Envelope value with linear interpolation. */
   env(name: keyof Omit<Envelopes, 'fps'>, t: number): number {
     const e = this.a.env, arr = e[name];
@@ -107,14 +135,23 @@ export class Music {
     return arr[i] + (arr[i + 1] - arr[i]) * (x - i);
   }
 
-  /** Strength of the latest hit of a kind, decaying exponentially (seconds). */
+  /**
+   * Strength of the latest hit of a kind, decaying exponentially (seconds). It comes up over 30 ms rather than in one
+   * frame, and the hit before carries on decaying underneath, so nothing driven by it (a zoom, a swell, a light)
+   * jumps: a punch on the beat, not a jolt (the user: “动画曲线不好”).
+   */
   pulse(kind: HitKind, t: number, decay = 0.16): number {
     const times = this.hitTimes.get(kind);
     if (!times || !times.length) return 0;
     const i = lastIndex(times, t);
     if (i < 0) return 0;
-    const hit: Hit = this.a.hits[kind][i];
-    return hit[1] * Math.exp(-(t - hit[0]) / decay);
+    const at = (j: number): number => {
+      const hit: Hit = this.a.hits[kind][j], age = t - hit[0];
+      if (age >= ATTACK) return hit[1] * Math.exp(-(age - ATTACK) / decay);
+      const x = age / ATTACK;
+      return hit[1] * x * x * (3 - 2 * x);
+    };
+    return i > 0 ? Math.max(at(i), at(i - 1)) : at(i);
   }
 
   /** Hits of a kind inside [t0, t1). */

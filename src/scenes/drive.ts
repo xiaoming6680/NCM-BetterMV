@@ -8,16 +8,17 @@
 //  · Worlds: each four-bar phrase the tube becomes another place — keycap well, rifled barrel, hexagonal hangar,
 //    road, pixel mine (walls of the cover's pixels), triangle, a strobe of shapes — met at a place down the tube,
 //    so the camera flies into the next world on the phrase's downbeat.
-//  · Long speed streaks just outside the tube, barrel distortion, the song's crystal (with the cover inside it)
+//  · Long speed streaks just outside the tube, barrel distortion, the song's armillary (with the cover in its core)
 //    glowing at the far end, and at the start of the section a white shockwave blown out towards the camera.
 //  · The words are signs hung in the tube that the camera flies through (LyricGates).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, inOutCubic, lerp, outExpo, rng, smooth } from './types.ts';
+import { clamp01, inOutCubic, lerp, outExpo, rng, smooth, snap as snapTo, surge, surgeRate } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
 import { LyricGates, poseInTube } from './lyricSpace.ts';
+import { voiceOpts } from './lyricBlock.ts';
 import { lastIndex } from '../director/music.ts';
-import { Crystal } from '../sigil/crystal.ts';
+import { Armillary } from '../sigil/armillary.ts';
 
 const R = 2.3; // frame radius
 const S = 0.45; // spacing between frames along the tube
@@ -106,7 +107,7 @@ export class Drive implements MvScene {
   readonly camera = new THREE.PerspectiveCamera(FOV, 16 / 9, 0.05, 400);
   private lines = new LineBatch(22000);
   private bg: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
-  private crystal: Crystal;
+  private arm: Armillary;
   private gates: LyricGates;
   private kicks: Float64Array;
   private snares: Float64Array;
@@ -176,11 +177,11 @@ export class Drive implements MvScene {
     }));
     this.bg.frustumCulled = false;
     this.bg.renderOrder = -10;
-    // The song's crystal at the far end of the tube: where the flight is heading, never reached.
-    this.crystal = new Crystal(init.crystal, palette, init.cover);
-    this.crystal.group.renderOrder = -5;
-    this.scene.add(this.bg, this.crystal.group, this.lines.mesh);
-    this.gates = new LyricGates(palette, { style: 'hook', em: 1.15, maxW: R * 2.1, trans: { em: 0.34, vertical: false } });
+    // The song's armillary at the far end of the tube: where the flight is heading, never reached.
+    this.arm = new Armillary(init.armillary, palette, init.cover, init.title);
+    this.arm.group.renderOrder = -5;
+    this.scene.add(this.bg, this.arm.group, this.lines.mesh);
+    this.gates = new LyricGates(palette, { style: 'hook', em: 1.15, maxW: R * 2.1, trans: { em: 0.34, vertical: false }, ...voiceOpts('pulse', init.seed) });
     this.scene.add(this.gates.group);
     this.resize(init.aspect);
   }
@@ -209,7 +210,7 @@ export class Drive implements MvScene {
   private travel(t: number, from: number, perBeat: number): number {
     const m = this.init.music;
     let s = perBeat * (m.beatPos(t) - m.beatPos(from));
-    for (let i = lastIndex(this.kicks, t); i >= 0 && this.kicks[i] >= from; i--) s += SURGE * TAU * (1 - Math.exp(-(t - this.kicks[i]) / TAU));
+    for (let i = lastIndex(this.kicks, t); i >= 0 && this.kicks[i] >= from; i--) s += SURGE * TAU * surge(t - this.kicks[i], TAU * 0.4);
     return s;
   }
 
@@ -217,7 +218,7 @@ export class Drive implements MvScene {
   private strobe(t: number): Outline {
     const beats = this.init.music.beatPos(t), b = Math.floor(beats);
     const one = (q: number): Outline => OUTLINE[(['well', 'rifling', 'triangle', 'hangar'] as const)[((q % 4) + 4) % 4]];
-    return blend(one(b - 1), one(b), outExpo(clamp01((beats - b) / 0.25)));
+    return blend(one(b - 1), one(b), snapTo((beats - b) / 0.25));
   }
 
   /** The world of a phrase of a section (each later drop starts further along the cycle). */
@@ -247,7 +248,7 @@ export class Drive implements MvScene {
     // the tube reverses its turning every eight bars without jumping back.
     let snap = 0, phi = 0;
     for (let i = lastIndex(this.snares, t); i >= 0 && this.snares[i] >= section.start; i--) {
-      const e = outExpo(clamp01((t - this.snares[i]) / 0.08));
+      const e = snapTo((t - this.snares[i]) / 0.08);
       snap += e;
       phi += 0.2 * e * this.snareTurn[i];
     }
@@ -260,9 +261,10 @@ export class Drive implements MvScene {
     cam.position.copy(cb.c);
     cam.up.copy(cb.u);
     cam.lookAt(center(sCam + 7, this.tmp));
-    let roll = 0.03 * Math.sin(u * 2.1) + snareP * 0.05;
-    if (shot.variant === 'roll') roll += (t - shot.start) * 0.5 * sign;
-    cam.rotateZ(roll);
+    // The roll camera keeps turning, half a radian a second: the signs turn with it (below) and read level — hung
+    // in the tube they were upside down six seconds into the shot.
+    const spin = shot.variant === 'roll' ? (t - shot.start) * 0.5 * sign : 0;
+    cam.rotateZ(0.03 * Math.sin(u * 2.1) + snareP * 0.05 + spin);
     cam.fov = FOV + 12 * Math.exp(-u / 0.12) + 10 * kick;
     cam.updateProjectionMatrix();
     cam.updateMatrixWorld();
@@ -436,7 +438,7 @@ export class Drive implements MvScene {
     // Speed streaks on a shell just outside the tube (they fill the lens' edges), stretched by the speed.
     const beat = 60 / Math.max(40, info.bpm);
     let speed = perBeat / beat;
-    for (let i = lk; i >= 0 && t - this.kicks[i] < 1; i--) speed += SURGE * Math.exp(-(t - this.kicks[i]) / TAU);
+    for (let i = lk; i >= 0 && t - this.kicks[i] < 1; i--) speed += SURGE * TAU * surgeRate(t - this.kicks[i], TAU * 0.4);
     const stretch = clamp(speed / 30, 0.2, 2.2);
     const RS = 0.25, NA = 56, k0 = Math.floor(sCam / RS);
     const A = new THREE.Vector3(), Q = new THREE.Vector3();
@@ -471,18 +473,20 @@ export class Drive implements MvScene {
         }
       }
     }
-    // The crystal far down the tube, in the haze, turning; its facets flash on the kicks.
+    // The armillary far down the tube, in the haze, turning: clicking round on the beats, the meridian lit round with
+    // the bar, its core lifting on the kicks.
     const end = this.basis(sCam + 26, this.bB);
-    this.crystal.group.position.copy(end.c);
-    this.crystal.group.scale.setScalar(R * 0.7);
-    this.crystal.set({ turn: t * 0.6, tilt: 0.3, flash: kick, burst: 0, alpha: 0.7 + 0.3 * kickSlow });
-    this.crystal.group.updateMatrixWorld();
-    this.crystal.lines(L, 1.1, 0.8);
+    this.arm.group.position.copy(end.c);
+    this.arm.group.scale.setScalar(R * 0.6);
+    this.arm.set({ turn: t * 0.3, beat: info.pos, bar: info.barPhase, whirl: 0, open: 1, align: 0, recede: 0, merge: 0, pulse: kick, alpha: 0.7 + 0.3 * kickSlow });
+    this.arm.lines(L, 1.1, 0.8, this.camera.position);
     L.commit(this.resolution, this.pixelRatio);
 
     ctx.fx.bloom = 0.5 + energy * 0.1 + kick * 0.12;
     ctx.fx.ca = kick * 0.4 + 0.6 * Math.exp(-u / 0.15);
     ctx.fx.barrel = BARREL + 0.08 * kick;
+    // (The camera stands still and the tube rushes at it: the lens blurs the frames as if the camera flew.)
+    ctx.fx.travel = speed;
     ctx.fx.vignette = 0.4;
 
     // The words: each chunk a sign hung under the top of the tube, alternately a little left and right. It strikes on
@@ -496,14 +500,14 @@ export class Drive implements MvScene {
       const s = sOf(Math.min(tt, hold)) + GATE, d = s - sCam;
       if (d < 0.3) return 0;
       const b = this.basis(s, this.bB);
-      poseInTube(root, b.c, b.r, b.u, b.t, (c.ordinal % 2 ? 0.3 : -0.3), R * 0.42, 0.35 * K * (d / S));
+      poseInTube(root, b.c, b.r, b.u, b.t, (c.ordinal % 2 ? 0.3 : -0.3), R * 0.42, 0.35 * K * (d / S) + spin);
       return smooth((d - 0.6) / 2.4) * Math.exp(-d / 40) * (1 - smooth((tt - hold) / 0.22));
     }, (st, tt, root) => {
       const s = sOf(Math.min(tt, lyrics.leaveAt(st.index))) + GATE * 0.8, d = s - sCam;
       if (d < 0.3) return 0;
       const b = this.basis(s, this.bB), side = st.index % 2 ? 1 : -1, [w, h] = root.userData.size as [number, number];
-      if (root.userData.vertical) poseInTube(root, b.c, b.r, b.u, b.t, side * R * 0.68, 0.1, 0.35 * K * (d / S), side * 0.6);
-      else poseInTube(root, b.c, b.r, b.u, b.t, 0, -R * 0.55, 0.35 * K * (d / S));
+      if (root.userData.vertical) poseInTube(root, b.c, b.r, b.u, b.t, side * R * 0.68, 0.1, 0.35 * K * (d / S) + spin, side * 0.6);
+      else poseInTube(root, b.c, b.r, b.u, b.t, 0, -R * 0.55, 0.35 * K * (d / S) + spin);
       root.scale.setScalar(Math.min(1, (root.userData.vertical ? 3.4 : 3.8) / Math.max(w, h)));
       return smooth((d - 0.8) / 2.4);
     });

@@ -10,6 +10,7 @@ import { Shatter } from '../scenes/shatter.ts';
 import { Diorama } from '../scenes/diorama.ts';
 import { Bokeh } from '../scenes/bokeh.ts';
 import { Tunnel } from '../scenes/tunnel.ts';
+import { VOICES, voiceFor } from '../scenes/lyricBlock.ts';
 import { Drive } from '../scenes/drive.ts';
 import { Kaleido } from '../scenes/kaleido.ts';
 import { Flip } from '../scenes/flip.ts';
@@ -20,7 +21,7 @@ import { Halftone } from '../scenes/halftone.ts';
 import { Particles } from '../scenes/particles.ts';
 import { TypeWall } from '../scenes/typewall.ts';
 import { Ink } from '../scenes/ink.ts';
-import { CrystalScene } from '../scenes/crystal.ts';
+import { ArmillaryScene } from '../scenes/armillary.ts';
 import { CardsScene } from '../scenes/cards.ts';
 import { DebugScene } from '../scenes/debug.ts';
 import { SubdivideScene } from '../scenes/subdivide.ts';
@@ -28,11 +29,22 @@ import { AlignScene } from '../scenes/align.ts';
 import { ScopeScene } from '../scenes/scope.ts';
 import { Vinyl } from '../scenes/vinyl.ts';
 import { Clouds } from '../scenes/clouds.ts';
-import { City } from '../scenes/city.ts';
-import { Aurora } from '../scenes/aurora.ts';
+import { City, cityPrograms } from '../scenes/city.ts';
+import { Aurora, auroraPrograms } from '../scenes/aurora.ts';
 import { CanvasScene } from '../scenes/canvas.ts';
 import { Pillars } from '../scenes/pillars.ts';
-import { crystalSpec } from '../sigil/crystal.ts';
+import { Ripple } from '../scenes/ripple.ts';
+import { Channel } from '../scenes/channel.ts';
+import { Orb } from '../scenes/orb.ts';
+import { Menger } from '../scenes/menger.ts';
+import { Sierpinski } from '../scenes/sierpinski.ts';
+import { Cantor } from '../scenes/cantor.ts';
+import { PaperCut } from '../scenes/papercut.ts';
+import { RainScene } from '../scenes/rain.ts';
+import { LanternScene } from '../scenes/lanterns.ts';
+import { NeonScene } from '../scenes/neon.ts';
+import { FractalPlate } from '../scenes/fractal.ts';
+import { armillarySpec } from '../sigil/armillary.ts';
 import type { MvScene, SceneId, SceneInit, Shot } from '../scenes/types.ts';
 import type { Style } from '../style/style.ts';
 import type { PreparedSong } from './prepare.ts';
@@ -91,14 +103,20 @@ export class MvPlayer {
     this.engine = new Engine(container, pixelRatio);
     if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
     this.hud = new Hud(container);
+    // The slowest programs (seconds for the city's ground under D3D) start compiling now, off the page's thread, while
+    // the first song is still being read and analysed; the plates then find them ready (their palette is in uniforms).
+    const camera = new THREE.PerspectiveCamera();
+    for (const o of [...cityPrograms(), ...auroraPrograms()]) void this.engine.compile(o, camera);
+    void this.engine.compilePost();
   }
 
   /**
    * `off`: plates and looks the user turned off in the settings. `only` (development): every shot on this plate,
    * cycling through the given camera setups; `forceLook` (development) puts every section but the drops in that look.
-   * `lyricDelay`: seconds this song's words show later (negative: earlier), the user's per-song setting.
+   * `lyricDelay`: seconds this song's words show later (negative: earlier), the user's per-song setting. `retake`
+   * (development): rewrites the planned shots before the scenes are built (a film's own cuts, film/reel.ts).
    */
-  load(song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId> = new Set(), only?: { scene: SceneId; variants: string[] }, forceLook?: LookId | 'none', lyricDelay = 0, seed?: number): void {
+  load(song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId> = new Set(), only?: { scene: SceneId; variants: string[] }, forceLook?: LookId | 'none', lyricDelay = 0, seed?: number, retake?: (shots: Shot[], music: Music) => Shot[]): void {
     if (this.seedFor !== song.id || seed !== undefined) {
       this.seed = seed ?? (Math.random() * 4294967296) >>> 0;
       this.seedFor = song.id;
@@ -107,6 +125,7 @@ export class MvPlayer {
     this.song = song;
     this.style = style;
     this.engine.setPalette(song.palette.ink, song.palette.signal);
+    this.engine.setFinish(song.palette, style.finish);
     this.engine.setCover(song.cover);
     const music = this.music = new Music(song.analysis);
     this.hud.glyph = style.glyph;
@@ -116,31 +135,39 @@ export class MvPlayer {
     const lyrics = new LyricTrack(lines);
     const init: SceneInit = {
       cover: song.cover, coverPixels: song.coverPixels, coverSize: song.coverSize, palette: song.palette,
-      music, lyrics, aspect: this.engine.aspect, title: song.name, artists: song.artists, stereo: song.stereo, xyMusic: song.xyMusic, crystal: crystalSpec(song.analysis, song.id), seed: this.seed,
+      music, lyrics, aspect: this.engine.aspect, title: song.name, artists: song.artists, stereo: song.stereo, xyMusic: song.xyMusic, armillary: armillarySpec(song.analysis, song.id), seed: this.seed,
     };
     // Pure music (or a song whose lyrics NetEase doesn't have) gets no word plates.
     let shots = planShots(music, style, this.seed, { graphic: song.palette.graphic, lyrics: song.lines.length > 0 }, off);
     if (only) shots.forEach((sh, i) => { sh.scene = only.scene; sh.variant = only.variants[i % only.variants.length]; });
     else if (song.xyMusic) shots = scopeOnly(shots);
+    if (retake) shots = retake(shots, music);
     const look = style.look;
+    // The plates with a version of their own on rice paper (the 墨 style); the rest draw ink as they draw a ballad.
+    const paper = style.id === 'ink' ? 'ink' : look;
     const make: Record<SceneId, () => MvScene> = {
       relief: () => new Relief(init), shatter: () => new Shatter(init), diorama: () => new Diorama(init), bokeh: () => new Bokeh(init),
       tunnel: () => new Tunnel(init, look), drive: () => new Drive(init), kaleido: () => new Kaleido(init, look), flip: () => new Flip(init, look),
-      rings: () => new Rings(init, look), poster: () => new Poster(init, look), ridges: () => new Ridges(init, look), halftone: () => new Halftone(init, look), particles: () => new Particles(init, look),
-      typewall: () => new TypeWall(init), ink: () => new Ink(init, song.name), crystal: () => new CrystalScene(init), cards: () => new CardsScene(init), debug: () => new DebugScene(init), subdivide: () => new SubdivideScene(init, look), align: () => new AlignScene(init), scope: () => new ScopeScene(init),
-      vinyl: () => new Vinyl(init, look), clouds: () => new Clouds(init, look), city: () => new City(init, look), aurora: () => new Aurora(init, look),
-      canvas: () => new CanvasScene(init, look, init.seed), pillars: () => new Pillars(init, look, init.seed),
+      rings: () => new Rings(init, look), poster: () => new Poster(init, look), ridges: () => new Ridges(init, paper), halftone: () => new Halftone(init, look), particles: () => new Particles(init, look),
+      typewall: () => new TypeWall(init), ink: () => new Ink(init, song.name), crystal: () => new ArmillaryScene(init), cards: () => new CardsScene(init), debug: () => new DebugScene(init), subdivide: () => new SubdivideScene(init, look), align: () => new AlignScene(init), scope: () => new ScopeScene(init),
+      vinyl: () => new Vinyl(init, look), clouds: () => new Clouds(init, paper), city: () => new City(init, look), aurora: () => new Aurora(init, look),
+      canvas: () => new CanvasScene(init, paper, init.seed), pillars: () => new Pillars(init, look, init.seed),
+      ripple: () => new Ripple(init, look), channel: () => new Channel(init, look), orb: () => new Orb(init, look),
+      menger: () => new Menger(init, look), sierpinski: () => new Sierpinski(init, look), cantor: () => new Cantor(init, look),
+      papercut: () => new PaperCut(init), rain: () => new RainScene(init), lanterns: () => new LanternScene(init), neon: () => new NeonScene(init),
     };
     for (const id of new Set(shots.map(s => s.scene))) this.scenes[id] = make[id]();
     const sections = song.analysis.sections;
     const looks = song.xyMusic || forceLook === 'none' ? [] : forceLook ? sections.map(s => (s.label === 'drop' ? null : forceLook)) : planLooks(sections, style, this.seed, off);
     this.engine.setLooks(song.palette, song.lines.map(l => l.text + (l.translation ?? '')).join(''));
-    this.director = new Director(style, shots, this.scenes, music, lyrics, song.palette, init.crystal, song.cover, !only && song.xyMusic, looks);
-    const badge = this.director.crystal;
-    this.hud.crystalLabel = badge ? `${badge.label} · ${badge.triangles}△` : '';
+    this.director = new Director(style, shots, this.scenes, music, lyrics, song.palette, init.armillary, song.cover, !only && song.xyMusic, looks);
+    this.hud.sigilLabel = this.director.sigil?.label ?? '';
     const last = lines[lines.length - 1];
     const opening = this.director.shots[0]?.scene !== 'cards';
-    this.director.overlay.setCredits(song.name ?? '', song.artists ?? [], lines[0]?.start ?? Infinity, last?.end ?? 0, song.duration, opening);
+    // The name in the leaned-on face of the song's lyric voice: pulse's condensed capitals, a ballad's serif, ink's
+    // Garamond and Kai.
+    const voice = VOICES[voiceFor(style.id === 'ink' ? 'ink' : look, this.seed)];
+    this.director.overlay.setCredits(song.name ?? '', song.artists ?? [], lines[0]?.start ?? Infinity, last?.end ?? 0, song.duration, opening, voice.faces[1], 0.11 * voice.scale);
     this.resize();
   }
 
@@ -169,13 +196,15 @@ export class MvPlayer {
     (this.scenes.halftone as Halftone | undefined)?.setViewport(canvas.width, canvas.height);
     (this.scenes.particles as Particles | undefined)?.setViewportHeight(canvas.height);
     (this.scenes.ink as Ink | undefined)?.setViewport(canvas.width, canvas.height);
-    (this.scenes.crystal as CrystalScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
+    (this.scenes.crystal as ArmillaryScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.cards as CardsScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.debug as DebugScene | undefined)?.setViewport(canvas.width, canvas.height);
     (this.scenes.align as AlignScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.scope as ScopeScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
+    (this.scenes.orb as Orb | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.clouds as Clouds | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.city as City | undefined)?.setViewport(canvas.width, canvas.height);
+    for (const s of Object.values(this.scenes)) if (s instanceof FractalPlate) s.setViewport(canvas.width, canvas.height, pr);
     this.director?.overlay.resize(this.engine.aspect);
     this.director?.overlay.setViewport(canvas.width, canvas.height, pr);
   }
@@ -188,7 +217,7 @@ export class MvPlayer {
     for (const s of Object.values(this.scenes)) s?.keepUp?.(t, this.engine.renderer);
     this.engine.render(scene.scene, scene.camera, fx, t, transition, this.director.overlay);
     const info = this.music!.at(t);
-    this.hud.update(shot, this.director.shots.indexOf(shot), this.director.shots.length, info.bar + 1, info.bpm);
+    this.hud.update(shot, this.director.shots.indexOf(shot), this.director.shots.length, info.bar + 1, this.music!.shownBpm(t));
     return shot;
   }
 
@@ -201,11 +230,21 @@ export class MvPlayer {
     const director = this.director, music = this.music, song = this.song;
     if (!director || !music || !song) return;
     const lyrics = new LyricTrack(this.lines), aspect = this.engine.aspect;
+    const posed: MvScene[] = [];
     for (const [id, scene] of Object.entries(this.scenes) as Array<[SceneId, MvScene]>) {
       const shot = director.shots.find(s => s.scene === id);
       if (!shot) continue;
       const t = Math.min(shot.start + 0.2, (shot.start + shot.end) / 2);
       scene.update({ t, dt: 1 / 60, music, lyrics, palette: song.palette, shot, shotT: t - shot.start, aspect, fx: defaultFx() });
+      posed.push(scene);
+    }
+    // Every plate's shaders compile together off the page's thread (Engine.compile), then each plate is drawn once.
+    await Promise.all([
+      ...posed.map(s => this.engine.compile(s.scene, s.camera, s.offscreen)),
+      this.engine.compile(director.overlay.scene, director.overlay.camera), this.engine.compilePost(),
+    ]);
+    if (cancelled() || this.director !== director) return;
+    for (const scene of posed) {
       this.engine.warm(scene.scene, scene.camera);
       await pause();
       if (cancelled() || this.director !== director) return;

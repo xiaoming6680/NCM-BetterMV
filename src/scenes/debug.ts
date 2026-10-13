@@ -8,19 +8,41 @@ import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { clamp01, lerp, outExpo, rng, smooth } from './types.ts';
 import { LyricRig } from './lyricRig.ts';
+import { voiceFaces } from './lyricBlock.ts';
+import { COLS, SpecRing, Spectrogram } from './viz.ts';
 
 const G = 160; // grid cells a side: 2·G² triangles
 const SIZE = 64; // world units a side
 export const VIEWS = ['着色', '线框', '法线', '深度', '重心坐标', '三角形编号', 'X 光', '蓝图'] as const;
+const NB = 64;
+const RING = 256;
+/** Seconds of the song's past from the peak out to the land's edge. */
+const SPAN = 3;
 
+// The land also moves with the song: out from the peak a point is further back in time (the sound flows down off the
+// summit and away), round the peak run the bands; where a band was loud its triangles rise, higher for a note or a hit
+// coming in. Not in the valley the low shots fly down (its floor stays where the camera expects it).
 const vertexShader = /* glsl */ `
   attribute vec3 aBary, aColor, aNormalF;
   attribute float aId;
+  uniform sampler2D tSpec;
+  uniform float uNow, uLift;
   varying vec3 vBary, vColor, vNormal, vWorld;
-  varying float vId;
+  varying float vId, vS;
   void main() {
     vBary = aBary; vColor = aColor; vNormal = aNormalF; vId = aId;
     vec4 w = modelMatrix * vec4(position, 1.0);
+    vec2 q = w.xz / ${(SIZE / 2).toFixed(1)};
+    float r = length(q);
+    float x = (abs(atan(q.y, q.x)) / 3.14159265 * ${(NB - 1).toFixed(1)} + 0.5) / ${NB.toFixed(1)};
+    float c = uNow - min(r, 1.42) / 1.42 * ${(SPAN * COLS).toFixed(1)};
+    #define SPEC(dc) texture2D(tSpec, vec2(x, (mod(c - (dc), ${RING.toFixed(1)}) + 0.5) / ${RING.toFixed(1)})).r
+    float s = SPEC(0.0), rise = max(0.0, s - 0.25 * (SPEC(8.0) + SPEC(16.0) + SPEC(24.0) + SPEC(32.0)) - 0.02);
+    float vx = w.x / ${SIZE.toFixed(1)} - 0.08 * sin((w.z / ${SIZE.toFixed(1)} + 0.5) * 9.0);
+    float valley = smoothstep(0.0, 1.0, abs(vx) / 0.14);
+    w.y += (1.4 * smoothstep(0.4, 1.0, s) + 2.2 * smoothstep(0.02, 0.35, rise)) * uLift * valley * (0.4 + 0.6 * smoothstep(0.0, 0.25, r));
+    // How lit this part of the land is: dark until the sound passes over it.
+    vS = mix(1.0, clamp(0.35 * smoothstep(0.45, 1.0, s) + 1.4 * smoothstep(0.02, 0.3, rise), 0.0, 1.0), step(0.001, uLift));
     vWorld = w.xyz;
     gl_Position = projectionMatrix * viewMatrix * w;
   }`;
@@ -30,11 +52,13 @@ const fragmentShader = /* glsl */ `
   uniform float uA, uB, uWipe, uFlash;
   uniform vec2 uRes;
   varying vec3 vBary, vColor, vNormal, vWorld;
-  varying float vId;
+  varying float vId, vS;
   float hash(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
-  float wire(float w) { vec3 d = fwidth(vBary); vec3 a = smoothstep(vec3(0.0), d * w, vBary); return 1.0 - min(min(a.x, a.y), a.z); }
+  // (Derivatives taken once at the top of main(): inside the wipe's per-pixel branch they would be undefined.)
+  vec3 gN, gD;
+  float wire(float w) { vec3 a = smoothstep(vec3(0.0), gD * w, vBary); return 1.0 - min(min(a.x, a.y), a.z); }
   vec3 view(float k) {
-    vec3 n = normalize(vNormal);
+    vec3 n = gN;
     float lit = 0.25 + 0.75 * max(dot(n, normalize(vec3(-0.4, 0.8, 0.35))), 0.0);
     float depth = clamp(length(vWorld - uCam) / 40.0, 0.0, 1.0);
     if (k < 0.5) return vColor * lit + uSignal * 0.04;
@@ -57,12 +81,18 @@ const fragmentShader = /* glsl */ `
     return uSignal * 0.16 + uInk * 0.5 + uPaper * (wire(1.0) * 0.85 + grid);
   }
   void main() {
+    // The face's normal as it stands now (the sound lifts it): from the screen-space slope of its world position.
+    gN = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
+    if (gN.y < 0.0) gN = -gN;
+    gD = fwidth(vBary);
     float y = gl_FragCoord.y / uRes.y;
     // The new view scans down from the top; a hairline in the signal colour on its front.
     float front = 1.0 - uWipe;
     vec3 col = y > front ? view(uB) : view(uA);
     col += uSignal * exp(-pow((y - front) * uRes.y / 1.6, 2.0)) * step(0.001, uWipe) * step(uWipe, 0.999) * 1.5;
     float fog = clamp(length(vWorld - uCam) / 46.0, 0.0, 1.0);
+    // Dark land, lit where the sound is passing over it (every view: the render views are of a world the song lights).
+    col = mix(uInk, col, 0.22 + 0.9 * vS);
     col = mix(col, uInk, fog * fog);
     gl_FragColor = vec4(col * (1.0 + uFlash * 0.15), 1.0);
   }`;
@@ -73,9 +103,13 @@ export class DebugScene implements MvScene {
   private material: THREE.ShaderMaterial;
   private heights: Float32Array;
   private rig: LyricRig;
+  private ring: SpecRing;
+  private hasSound: boolean;
 
   constructor(init: SceneInit) {
     const { palette } = init;
+    this.ring = new SpecRing(Spectrogram.of(init.stereo, init.music.duration + 8, NB, 30), RING);
+    this.hasSound = !!init.stereo;
     this.scene.background = palette.ink.clone();
     // Heights from the cover's brightness, blurred a little, lifted towards the middle so there is a peak to orbit.
     const px = init.coverPixels, cs = init.coverSize, N = G + 1;
@@ -143,6 +177,7 @@ export class DebugScene implements MvScene {
       uniforms: {
         uInk: { value: palette.ink.clone() }, uPaper: { value: palette.paper.clone() }, uSignal: { value: palette.signal.clone() }, uAccent: { value: palette.accent.clone() },
         uCam: { value: new THREE.Vector3() }, uA: { value: 0 }, uB: { value: 1 }, uWipe: { value: 0 }, uFlash: { value: 0 }, uRes: { value: new THREE.Vector2(1920, 1080) },
+        tSpec: { value: this.ring.texture }, uNow: { value: 0 }, uLift: { value: 0 },
       },
     });
     const land = new THREE.Mesh(geo, this.material);
@@ -150,6 +185,7 @@ export class DebugScene implements MvScene {
     this.scene.add(land);
 
     this.rig = new LyricRig(palette, 'hook');
+    this.rig.faces = voiceFaces('pulse', init.seed);
     this.rig.frame = { vh: 7, vw: 9 };
     this.scene.add(this.rig.group);
     this.resize(init.aspect);
@@ -162,6 +198,10 @@ export class DebugScene implements MvScene {
 
   setViewport(width: number, height: number): void {
     this.material.uniforms.uRes.value.set(width, height);
+  }
+
+  keepUp(t: number): void {
+    this.ring.spec.prefetch(t, 0.8);
   }
 
   /** The landscape's height at a world point (bilinear on the grid). */
@@ -213,6 +253,10 @@ export class DebugScene implements MvScene {
     const u = this.material.uniforms;
     u.uA.value = prev; u.uB.value = cur; u.uWipe.value = wipe;
     u.uFlash.value = music.pulse('kick', t, 0.1) * 0.6;
+    const now = t * COLS;
+    this.ring.sync(Math.floor(now - (SPAN + 0.7) * COLS) - 2, Math.floor(now) + 1);
+    u.uNow.value = now;
+    u.uLift.value = this.hasSound ? (shot.section.label === 'chorus' || shot.section.label === 'drop' ? 1 : 0.7) : 0;
 
     const cam = this.camera;
     switch (shot.variant) {

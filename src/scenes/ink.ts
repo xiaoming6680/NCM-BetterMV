@@ -11,6 +11,11 @@ import { clamp01, inOutCubic, lerp, rng, smooth } from './types.ts';
 import { LyricLayer } from './lyricSpace.ts';
 import { textTexture } from '../render/text.ts';
 
+/** The 墨 style's rice paper: the palette's paper warmed a touch (every plate drawn on paper in that style uses it). */
+export const ricePaper = (palette: { paper: THREE.Color }) => palette.paper.clone().lerp(new THREE.Color(0.93, 0.86, 0.72), 0.45);
+/** Its ink: a deep, slightly cool black. */
+export const INK_BLACK = new THREE.Color(0.035, 0.038, 0.045);
+
 const vertexShader = /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 const fragmentShader = /* glsl */ `
   uniform sampler2D uCover;
@@ -78,9 +83,7 @@ export class Ink implements MvScene {
 
   constructor(private init: SceneInit, title = '') {
     const { palette } = init;
-    // Paper is the palette's paper warmed a touch; ink a deep, slightly cool black.
-    const paper = palette.paper.clone().lerp(new THREE.Color(0.93, 0.86, 0.72), 0.45);
-    const ink = new THREE.Color(0.035, 0.038, 0.045);
+    const paper = ricePaper(palette), ink = INK_BLACK.clone();
     this.scene.background = paper.clone();
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
       vertexShader, fragmentShader, depthTest: false, depthWrite: false,

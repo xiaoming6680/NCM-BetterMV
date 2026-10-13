@@ -10,7 +10,7 @@ import { textMesh, hasCjk, VERTICAL_STEP, type Face } from '../render/text.ts';
 import { norm, type LyricTrack, type LineState, type WordState } from '../director/lyrics.ts';
 import { tokenize } from '../lyrics/parse.ts';
 import type { Palette } from '../render/palette.ts';
-import { clamp01, outBack, outExpo, rng } from './types.ts';
+import { clamp01, outBack, outExpo, rng, snap } from './types.ts';
 
 export type RigStyle = 'hook' | 'caption' | 'poem';
 export type Align = 'left' | 'center' | 'right';
@@ -36,9 +36,9 @@ interface Built {
   scrim?: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
 }
 
-const scrimVertex = /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+export const scrimVertex = /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 /** Darkest in the middle, fading out well before the edges (no box to see). */
-const scrimFragment = /* glsl */ `
+export const scrimFragment = /* glsl */ `
   uniform float uAlpha; uniform vec3 uColor; varying vec2 vUv;
   void main() {
     vec2 d = abs(vUv - 0.5) * 2.0;
@@ -102,7 +102,7 @@ interface Look {
 }
 
 const LOOKS: Record<RigStyle, Look> = {
-  hook: { face: 'display', transFace: 'bold', size: [0.078, 0.072], transSize: 0.028, maxW: 0.84, px: 200 },
+  hook: { face: 'condensed', transFace: 'bold', size: [0.078, 0.072], transSize: 0.028, maxW: 0.84, px: 200 },
   caption: { face: 'bold', transFace: 'light', size: [0.036, 0.036], transSize: 0.03, maxW: 0.8, px: 128 },
   poem: { face: 'serif', transFace: 'serifLight', size: [0.05, 0.044], transSize: 0.026, maxW: 0.46, px: 160 },
 };
@@ -140,6 +140,12 @@ export class LyricRig {
   };
   private built = new Map<number, Built>();
   private hooks: Set<string> | null = null;
+
+  /**
+   * The song's lyric voice (lyricBlock.ts, VOICES): the faces for the words and the translation, instead of the
+   * style's own; set before the first line is built.
+   */
+  faces: { main: Face; trans: Face } | null = null;
 
   constructor(private palette: Palette, private style: RigStyle, private show = { main: true, translation: true }) {
     this.group.renderOrder = 10;
@@ -203,8 +209,8 @@ export class LyricRig {
         // downwards, as in vertical Chinese. Either way it takes its own length of the column, so nothing overlaps.
         const latin = !hasCjk(text);
         const mesh = latin
-          ? textMesh(text, 'serif', h * 0.86, { center: true, px: 160, halo })
-          : textMesh(text, 'serif', h, { center: true, px: 160, halo, vertical: Array.from(text).length > 1 });
+          ? textMesh(text, this.faces?.main ?? 'serif', h * 0.86, { center: true, px: 160, halo })
+          : textMesh(text, this.faces?.main ?? 'serif', h, { center: true, px: 160, halo, vertical: Array.from(text).length > 1 });
         if (latin) mesh.rotation.z = -Math.PI / 2;
         const len = latin ? (mesh.userData.width as number) + step * 0.3 : step * Array.from(text).length;
         if (y < top && y - len < floor) { col++; y = top; }
@@ -219,7 +225,7 @@ export class LyricRig {
         let ty = vh * 0.3;
         for (const ch of Array.from(line.translation.replace(/\s+/g, ''))) {
           if (/[，。、！？；：,.!?;:"“”'‘’（）()]/.test(ch)) { ty -= th * 0.5; continue; }
-          const mesh = textMesh(ch, 'serifLight', th, { center: true, px: 96, halo });
+          const mesh = textMesh(ch, this.faces?.trans ?? 'serifLight', th, { center: true, px: 96, halo });
           const g = { mesh, x: tx, y: ty, spin: 0 };
           place(g);
           trans.push(g);
@@ -231,14 +237,14 @@ export class LyricRig {
       const maxW = vw * 0.24;
       const approx = line.text.length * vh * 0.04 * 0.5;
       const h = vh * 0.04 * Math.min(1, Math.sqrt((4 * maxW) / Math.max(1e-3, approx))), gap = h * 0.28, lineH = h * 1.3;
-      const meshes = line.words.map(w => textMesh(w.text, 'serif', h, { px: 160, halo }));
+      const meshes = line.words.map(w => textMesh(w.text, this.faces?.main ?? 'serif', h, { px: 160, halo }));
       const anchor = left ? -vw * 0.47 : vw * 0.47;
       this.rows(meshes, gap, maxW, lineH, vh * 0.14, left ? 'left' : 'right', anchor, () => 0.5).forEach((g, i) => { words[i] = g; place(g); });
       if (this.show.translation && line.translation) {
         const th = vh * 0.026;
         const bottom = Math.min(...words.filter(Boolean).map(w => w.y));
         const chars = hasCjk(line.translation) ? Array.from(line.translation) : tokenize(line.translation);
-        const tm = chars.map(c => (c.trim() ? textMesh(c, 'serifLight', th, { px: 96, halo }) : null));
+        const tm = chars.map(c => (c.trim() ? textMesh(c, this.faces?.trans ?? 'serifLight', th, { px: 96, halo }) : null));
         const widths = tm.map(m => (m ? (m.userData.width as number) : th * 0.35));
         const rowW = widths.reduce((a, b) => a + b, 0);
         let x = left ? anchor : anchor - rowW;
@@ -268,7 +274,7 @@ export class LyricRig {
     let lastRow: Built['lastRow'];
     if (this.show.main) {
       // Fit: shrink the type if the line would need more than three rows.
-      const probe = line.words.map(w => textMesh(w.text, look.face, h, { px: look.px }));
+      const probe = line.words.map(w => textMesh(w.text, this.faces?.main ?? look.face, h, { px: look.px }));
       const gapOf = (hh: number) => (cjk ? hh * 0.06 : hh * 0.3);
       const total = probe.reduce((a, m) => a + (m.userData.width as number), 0) + gapOf(h) * (probe.length - 1);
       const maxW = vw * look.maxW;
@@ -296,7 +302,7 @@ export class LyricRig {
     if (this.show.translation && line.translation) {
       const th = vh * look.transSize;
       const chars = hasCjk(line.translation) ? Array.from(line.translation) : tokenize(line.translation);
-      const meshes = chars.map(c => (c.trim() ? textMesh(c, look.transFace, th, { px: 96 }) : null));
+      const meshes = chars.map(c => (c.trim() ? textMesh(c, this.faces?.trans ?? look.transFace, th, { px: 96 }) : null));
       const widths = meshes.map(m => (m ? (m.userData.width as number) * 0.98 : th * 0.35));
       const rowW = widths.reduce((a, b) => a + b, 0);
       let x = anchorX - rowW / 2;
@@ -421,7 +427,7 @@ export class LyricRig {
       g.mesh.material.color.copy(c);
       g.mesh.material.opacity = look.opacity * fade;
       // A leaving line rises out of the way of the entering one.
-      const away = outExpo(exit) * rise;
+      const away = snap(exit) * rise;
       if (style === 'poem') {
         // Quiet: settles in from a touch above and warms slightly while sung; leaves by fading upwards.
         g.mesh.position.set(g.x, g.y + (1 - k) * 0.1 * unit + away, 0);
@@ -447,7 +453,7 @@ export class LyricRig {
       const k = clamp01((state.translationProgress - at + 1 / Math.max(1, n)) * n * (style === 'poem' ? 0.8 : fadeLen));
       g.mesh.visible = k > 0 && exit < 1;
       if (!g.mesh.visible) return;
-      g.mesh.position.set(g.x, g.y - (1 - outExpo(k)) * 0.15 * unit + outExpo(exit) * rise, style === 'poem' ? 0 : exit * 1.5 * unit);
+      g.mesh.position.set(g.x, g.y - (1 - outExpo(k)) * 0.15 * unit + snap(exit) * rise, style === 'poem' ? 0 : exit * 1.5 * unit);
       if (style === 'poem' && this.onLight) g.mesh.material.color.setRGB(1, 1, 1);
       else g.mesh.material.color.copy(paper).multiplyScalar(style === 'poem' ? 0.72 : 0.8);
       g.mesh.material.opacity = outExpo(k) * (1 - exit) * 0.9 * fade;

@@ -10,7 +10,9 @@ import * as THREE from 'three';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { clamp01, inOutCubic, lerp, rng, smooth } from './types.ts';
-import { LyricGates } from './lyricSpace.ts';
+import { LyricBlocks, Stands, voiceFor } from './lyricBlock.ts';
+import { passMesh } from '../render/engine.ts';
+import { INK_BLACK, ricePaper } from './ink.ts';
 
 const SHAPE = 96, DETAIL = 32;
 /** The cloud slab (m). */
@@ -72,10 +74,18 @@ const NOISE = /* glsl */ `
 
 const QUAD_VERT = /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 
+/** The two noise volumes: the same for every song, so baked once per renderer and kept (4 MB). */
+const volumes = new WeakMap<THREE.WebGLRenderer, [THREE.Data3DTexture, THREE.Data3DTexture]>();
+
+/** The material the volumes are baked with (shared, so it can be compiled ahead with the plate). */
+let noise: THREE.ShaderMaterial | null = null;
+const noiseMaterial = () => noise ??= new THREE.ShaderMaterial({ vertexShader: QUAD_VERT, fragmentShader: NOISE, uniforms: { uRes: { value: 0 }, uTiles: { value: 0 }, uMode: { value: 0 } } });
+
 function bakeVolume(renderer: THREE.WebGLRenderer, res: number, mode: number): THREE.Data3DTexture {
   const tiles = Math.ceil(Math.sqrt(res)), rows = Math.ceil(res / tiles);
   const rt = new THREE.WebGLRenderTarget(res * tiles, res * rows, { type: THREE.UnsignedByteType, depthBuffer: false });
-  const mat = new THREE.ShaderMaterial({ vertexShader: QUAD_VERT, fragmentShader: NOISE, uniforms: { uRes: { value: res }, uTiles: { value: tiles }, uMode: { value: mode } } });
+  const mat = noiseMaterial();
+  mat.uniforms.uRes.value = res; mat.uniforms.uTiles.value = tiles; mat.uniforms.uMode.value = mode;
   const quad = new FullScreenQuad(mat);
   const prev = renderer.getRenderTarget();
   renderer.setRenderTarget(rt);
@@ -83,7 +93,7 @@ function bakeVolume(renderer: THREE.WebGLRenderer, res: number, mode: number): T
   const atlas = new Uint8Array(rt.width * rt.height * 4);
   renderer.readRenderTargetPixels(rt, 0, 0, rt.width, rt.height, atlas);
   renderer.setRenderTarget(prev);
-  rt.dispose(); mat.dispose(); quad.dispose();
+  rt.dispose(); quad.dispose();
   const vol = new Uint8Array(res * res * res * 4);
   for (let z = 0; z < res; z++) {
     const tx = (z % tiles) * res, ty = Math.floor(z / tiles) * res;
@@ -205,11 +215,64 @@ const SKY = /* glsl */ `
   uniform mat4 uInvVP;
   uniform vec3 uCam, uSunDir, uZenith, uHorizon, uGlow, uBelow;
   uniform float uSunR, uKick;
+  // 墨: paper, the wash in the clouds' shadows, the ink of the far peaks, the seal-red sun; uInk switches it on.
+  uniform float uInk, uSeed;
+  uniform vec3 uPaperC, uShadow, uMount, uSeal;
   varying vec2 vUv;
+  float h1(float x) { return fract(sin(x * 127.1 + uSeed) * 43758.5453); }
+  float n1(float x) { float i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f); return mix(h1(i), h1(i + 1.0), f); }
+  float h2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float n2(vec2 p) {
+    vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(h2(i), h2(i + vec2(1, 0)), u.x), mix(h2(i + vec2(0, 1)), h2(i + vec2(1, 1)), u.x), u.y);
+  }
+  /** A range of peaks along the horizon: its crest's elevation at this azimuth (pointed summits, crags). */
+  float crest(float az, float k) {
+    float x = az * (2.6 + 1.6 * k) + k * 13.7, i = floor(x), best = 0.0;
+    // One peak somewhere in each cell, of its own height and steepness (now and then a tall one, a 主峰); the crest is
+    // the highest of the nearby ones, with crags along it.
+    for (int j = -1; j <= 1; j++) {
+      float c = i + float(j);
+      float px = c + 0.2 + 0.6 * h1(c + k * 31.0), r = h1(c * 1.7 + k * 17.0);
+      float ph = 0.25 + 0.75 * r * r + (r > 0.8 ? 0.9 : 0.0);
+      best = max(best, ph * exp(-abs(x - px) * (1.6 + 2.0 * h1(c * 2.3 + k))));
+    }
+    return 0.006 + 0.11 * best * (1.0 - 0.3 * k) + (0.012 * best + 0.003) * (n1(x * 9.0) - 0.5);
+  }
   void main() {
     vec4 a = uInvVP * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
     vec3 d = normalize(a.xyz / a.w - uCam);
     float e = d.y;
+    if (uInk > 0.5) {
+      // Paper sky, a shade lighter overhead; peaks in ink along the horizon, far ones paler, their feet in mist.
+      vec3 c = mix(uPaperC * 0.97, uPaperC * 1.03, smoothstep(0.0, 0.5, e));
+      float az = atan(d.x, -d.z);
+      for (int k = 2; k >= 0; k--) {
+        float fk = float(k);
+        float below = (crest(az, fk) - e) / 0.05;
+        if (below > 0.0) {
+          float tone = mix(0.85, 0.28, fk / 2.0) * (1.0 - smoothstep(0.0, mix(0.9, 0.5, fk / 2.0), below));
+          tone *= 0.75 + 0.4 * n2(vec2(az * 60.0, e * 30.0));
+          c = mix(c, uMount, clamp(tone, 0.0, 1.0));
+        }
+      }
+      // The sun: a seal-red disc low over the cloud sea, the cover pressed into it, its foot lost in the haze.
+      float ang = acos(clamp(dot(d, uSunDir), -1.0, 1.0));
+      if (ang < uSunR * 1.05) {
+        vec3 right = normalize(cross(uSunDir, vec3(0.0, 1.0, 0.0))), up = cross(right, uSunDir);
+        vec2 q = vec2(dot(d, right), dot(d, up)) / sin(uSunR);
+        float disc = 1.0 - smoothstep(0.96, 1.0, length(q));
+        float cl = dot(texture2D(uCover, q * 0.5 + 0.5).rgb, vec3(0.2126, 0.7152, 0.0722));
+        float haze = smoothstep(-0.2, 0.5, q.y * 0.5 + 0.5 + (e - uSunDir.y) * 2.0);
+        c = mix(c, uSeal * (1.12 - 0.5 * clamp(1.0 - cl, 0.0, 1.0)), disc * mix(0.15, 0.85, haze));
+      }
+      // The clouds: their lit tops left as paper, their shadows a wash of ink.
+      vec4 cs = texture2D(tClouds, vUv);
+      float lum = dot(cs.rgb / max(cs.a, 1e-3), vec3(0.2126, 0.7152, 0.0722));
+      vec3 cloud = mix(uShadow, uPaperC * 1.02, smoothstep(0.08, 0.9, lum));
+      gl_FragColor = vec4(mix(c, cloud, clamp(cs.a * 1.1, 0.0, 1.0)), 1.0);
+      return;
+    }
     vec3 c = mix(uHorizon, uZenith, smoothstep(-0.01, 0.42, e));
     c = mix(c, uBelow, smoothstep(0.0, -0.12, e));
     float s = max(dot(d, uSunDir), 0.0);
@@ -242,18 +305,22 @@ export class Clouds implements MvScene {
   private rt = new THREE.WebGLRenderTarget(2, 2, { type: THREE.HalfFloatType, depthBuffer: false });
   private march: THREE.ShaderMaterial;
   private marchQuad: FullScreenQuad;
+  readonly offscreen: THREE.Object3D[];
   private sky: THREE.ShaderMaterial;
   private invVP = new THREE.Matrix4();
   private sunDir: THREE.Vector3;
   private speed: number;
-  private gates: LyricGates;
+  private blocks: LyricBlocks;
+  /** Consecutive lines step across the sky (left, right, middle), so one being passed never sits on the next. */
+  private stands = new Stands([[-0.2, 0.16], [0.2, 0.03], [0, -0.1]]);
   private scale = 0.5;
   private size = new THREE.Vector2(1920, 1080);
   private shot: Shot | null = null;
 
-  constructor(private init: SceneInit, private look: 'pulse' | 'ballad' = 'pulse') {
+  constructor(private init: SceneInit, private look: 'pulse' | 'ballad' | 'ink' = 'pulse') {
     const { palette } = init;
-    this.speed = look === 'ballad' ? 85 : 160;
+    this.speed = look === 'pulse' ? 160 : 85;
+    const ink = look === 'ink';
     // The sun low ahead, a little to one side (the camera flies towards −z).
     const side = (rng(Math.round(init.music.duration * 1000))() < 0.5 ? -1 : 1) * 0.22;
     this.sunDir = new THREE.Vector3(side, Math.sin(THREE.MathUtils.degToRad(1.6)), -1).normalize();
@@ -267,6 +334,14 @@ export class Clouds implements MvScene {
     const glow = warm.clone().multiplyScalar(0.9);
     const ambTop = zenith.clone().multiplyScalar(1.6).add(new THREE.Color(0.012, 0.018, 0.045));
     const ambBot = palette.accent.clone().multiplyScalar(0.04).add(new THREE.Color(0.02, 0.016, 0.028));
+    // 墨: the clouds are lit plainly (their light only says where the paper stays white), into a paper haze.
+    const paper = ricePaper(palette);
+    if (ink) {
+      sun.setRGB(1, 1, 1);
+      ambTop.setRGB(0.42, 0.42, 0.42);
+      ambBot.setRGB(0.16, 0.16, 0.16);
+      horizon.copy(paper);
+    }
     this.march = new THREE.ShaderMaterial({
       vertexShader: QUAD_VERT, fragmentShader: MARCH, depthTest: false, depthWrite: false,
       uniforms: {
@@ -276,14 +351,19 @@ export class Clouds implements MvScene {
       },
     });
     this.marchQuad = new FullScreenQuad(this.march);
+    this.offscreen = [passMesh(this.march), passMesh(noiseMaterial())];
     this.sky = new THREE.ShaderMaterial({
       vertexShader: SKY_VERT, fragmentShader: SKY, depthTest: false, depthWrite: false,
       uniforms: {
         tClouds: { value: this.rt.texture }, uCover: { value: init.cover }, uInvVP: { value: this.invVP }, uCam: { value: new THREE.Vector3() },
         uSunDir: { value: this.sunDir }, uZenith: { value: lin(zenith) }, uHorizon: { value: lin(horizon) }, uGlow: { value: lin(glow) },
         uBelow: { value: lin(palette.ink.clone().multiplyScalar(0.6)) }, uSunR: { value: THREE.MathUtils.degToRad(6.5) }, uKick: { value: 0 },
+        uInk: { value: ink ? 1 : 0 }, uSeed: { value: rng(Math.round(init.music.duration * 31))() * 100 },
+        uPaperC: { value: lin(paper) }, uShadow: { value: lin(paper.clone().lerp(INK_BLACK, 0.5).lerp(palette.accent, 0.08)) },
+        uMount: { value: lin(INK_BLACK.clone().lerp(palette.accent, 0.12)) }, uSeal: { value: lin(new THREE.Color(0.6, 0.07, 0.045)) },
       },
     });
+    if (ink) this.scene.background = paper.clone();
     const backdrop = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.sky);
     backdrop.frustumCulled = false;
     backdrop.renderOrder = -10;
@@ -291,14 +371,16 @@ export class Clouds implements MvScene {
     // The clouds march before each draw of the scene, for the camera it is drawn with.
     this.scene.onBeforeRender = (renderer, _scene, camera) => this.render(renderer, camera as THREE.PerspectiveCamera);
 
-    this.gates = new LyricGates(palette, { style: look === 'ballad' ? 'poem' : 'hook', em: 13, maxW: 190, trans: { em: 6, vertical: false }, linger: 3 });
-    this.scene.add(this.gates.group);
+    // (On paper, light dust would not show: the words just go.)
+    this.blocks = new LyricBlocks(palette, init.music, { voice: voiceFor(look, init.seed), em: 13, maxW: look === 'pulse' ? 13 : 11, trans: 0.48, onLight: ink, scrim: ink ? undefined : 0.4, dust: ink ? undefined : [0, 1.5, 0] });
+    this.scene.add(this.blocks.group);
     this.resize(init.aspect);
   }
 
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
+    this.blocks.setAspect(aspect);
   }
 
   /** The march's resolution: a share of the canvas (half at high quality). */
@@ -310,8 +392,9 @@ export class Clouds implements MvScene {
 
   private render(renderer: THREE.WebGLRenderer, camera: THREE.PerspectiveCamera): void {
     if (!this.shape) {
-      this.shape = bakeVolume(renderer, SHAPE, 0);
-      this.detail = bakeVolume(renderer, DETAIL, 1);
+      let v = volumes.get(renderer);
+      if (!v) volumes.set(renderer, v = [bakeVolume(renderer, SHAPE, 0), bakeVolume(renderer, DETAIL, 1)]);
+      [this.shape, this.detail] = v;
       this.march.uniforms.uShape.value = this.shape;
       this.march.uniforms.uDetail.value = this.detail;
     }
@@ -362,7 +445,7 @@ export class Clouds implements MvScene {
 
   update(ctx: FrameCtx): void {
     const { t, music, shot } = ctx;
-    const soft = this.look === 'ballad';
+    const soft = this.look !== 'pulse';
     const kick = soft ? 0 : music.pulse('kick', t, 0.2);
     this.shot = shot;
     const pose = this.pose(t, shot, { pos: new THREE.Vector3(), quat: new THREE.Quaternion() });
@@ -379,30 +462,21 @@ export class Clouds implements MvScene {
     mu.uSteps.value = this.scale >= 0.55 ? 40 : 48;
     this.sky.uniforms.uKick.value = kick;
 
-    // The words: a sign 170 m ahead while it is sung (riding with the camera), left where it was when the chunk ends.
-    const ahead = 170;
-    // Consecutive signs step across the sky (left, right, middle), so one being left behind never sits on the next.
-    const LANES: Array<[number, number]> = [[-30, 28], [30, 4], [0, -18]];
-    const at = (time: number, dist: number, drop: number, lane: number, root: THREE.Object3D) => {
-      const p = this.pose(time, shot, { pos: new THREE.Vector3(), quat: new THREE.Quaternion() });
-      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(p.quat), up = new THREE.Vector3(0, 1, 0).applyQuaternion(p.quat);
-      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(p.quat), [lx, ly] = LANES[lane % LANES.length];
-      root.position.copy(p.pos).addScaledVector(fwd, dist).addScaledVector(up, ly - drop).addScaledVector(right, lx);
-      root.quaternion.copy(p.quat);
-      return root.position.clone().sub(this.camera.position).dot(new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion));
-    };
-    this.gates.update(ctx.lyrics, t, shot.section.energy, (c, time, root) => {
-      const depth = at(Math.min(time, c.end), ahead, 0, c.ordinal, root);
-      const appear = smooth((time - c.start + 0.12) / 0.25);
-      return appear * smooth((depth - 45) / 80);
-    }, (state, time, root) => {
-      // The translation under the middle lane, staying with the line.
-      const depth = at(Math.min(time, state.line.end), ahead, 26, 2, root);
-      return smooth((depth - 45) / 80);
+    // The words: each line one block standing in the sky ahead (lyricBlock.ts). The flight is fast: a long line is
+    // carried ahead until it is within `far`, then stays, and the camera comes up to it as the line ends and flies on
+    // past it.
+    const view = { reach: 170, far: 240, fov: this.camera.fov, aspect: this.camera.aspect, em: 0.076 };
+    const posed = { pos: new THREE.Vector3(), quat: new THREE.Quaternion() };
+    const at = (time: number, pp: THREE.Vector3, qq: THREE.Quaternion) => { this.pose(time, shot, posed); pp.copy(posed.pos); qq.copy(posed.quat); };
+    this.blocks.update(ctx.lyrics, t, shot.section.energy, (st, time, root, leave, size) => {
+      const s = this.stands.get(shot.start, st, leave, at, 13, view, size);
+      s.apply(time, root);
+      return smooth((s.depth(time) - 45) / 80);
     });
 
-    ctx.fx.bloom = soft ? 0.4 : 0.42;
-    ctx.fx.vignette = 0.45;
+    const ink = this.look === 'ink';
+    ctx.fx.bloom = ink ? 0.04 : soft ? 0.4 : 0.42;
+    ctx.fx.vignette = ink ? 0.25 : 0.45;
     ctx.fx.grain = 0.035;
     ctx.fx.risoPositive = 1;
   }

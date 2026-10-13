@@ -271,6 +271,8 @@ export interface SectionInput {
   fps: number;
   lyrics?: LyricLine[];
   hits?: { kick: Hit[]; snare: Hit[] };
+  /** NetEase's chorus mark, seconds (AnalyzeOptions.chorusHint). */
+  chorus?: [number, number];
   /** Band power per frame at `fps`: below 150 Hz (the bass and kick) and above 4 kHz (hats, air). */
   low?: Float32Array;
   high?: Float32Array;
@@ -389,7 +391,7 @@ export function findSections(inp: SectionInput): Section[] {
   const bass = spans.map(([a, b]) => (inp.low ? mean(lowC, a, b) - lowRef : 0));
   // The same for the treble above 4 kHz (hats, cymbals).
   const treble = spans.map(([a, b]) => (inp.high ? mean(highC, a, b) - highRef : 0));
-  labelSections(secs, spans, d, info, sim, lyr.length > 0, perc, bass, treble);
+  labelSections(secs, spans, d, info, sim, lyr.length > 0, perc, bass, treble, inp.chorus);
   (globalThis as { __bmvSectionInfo?: (d: unknown) => void }).__bmvSectionInfo?.(secs.map((s, k) => ({ start: s.start, label: s.label, e: s.energy, cover: info[k].cover, lead: info[k].leadCover, hook: info[k].hook, rep: info[k].rep, perc: perc[k], bass: bass[k] })));
   assignGroups(secs, info, sim);
   return secs;
@@ -486,6 +488,14 @@ function repeatCues(cuts: number[], nov: Float64Array, lyrics: LyricLine[], bars
   for (const c of cuts) isCut[c] = 1;
   const barLen = (j: number) => (j + 1 < nb ? bars.time[j + 1] - bars.time[j] : bars.end - bars.time[j]);
   let out: Float64Array | null = null;
+  /** The cue at the bar nearest `at` (within 0.3 bar, not a boundary already) carried over from boundary c. */
+  const mark = (at: number, c: number) => {
+    const j = lowerBound(bars.time, at);
+    const near = j > 0 && (j >= nb || at - bars.time[j - 1] < bars.time[j] - at) ? j - 1 : j;
+    if (near <= 0 || near >= nb || isCut[near] || Math.abs(bars.time[near] - at) > 0.3 * barLen(near)) return;
+    if (!out) out = new Float64Array(nb + 1);
+    out[near] = Math.max(out[near], Math.min(REPEAT_CUE, 0.6 * nov[c]));
+  };
   for (const c of cuts) {
     const t = bars.time[c], L = barLen(c);
     let q = 0;
@@ -498,14 +508,35 @@ function repeatCues(cuts: number[], nov: Float64Array, lyrics: LyricLine[], bars
       if (r !== q && sung[r].k === sung[q].k && firstOfRun(r) && nextOther(r) === next && Math.abs(sung[r].s - sung[q].s) >= chantSpan) partners.push(r);
     }
     if (!partners.length || partners.length > 2) continue;
-    for (const r of partners) {
-      const at = sung[r].s + (t - sung[q].s);
-      const j = lowerBound(bars.time, at);
-      const near = j > 0 && (j >= nb || at - bars.time[j - 1] < bars.time[j] - at) ? j - 1 : j;
-      if (near <= 0 || near >= nb || isCut[near] || Math.abs(bars.time[near] - at) > 0.3 * barLen(near)) continue;
-      if (!out) out = new Float64Array(nb + 1);
-      out[near] = Math.max(out[near], Math.min(REPEAT_CUE, 0.6 * nov[c]));
+    for (const r of partners) mark(sung[r].s + (t - sung[q].s), c);
+  }
+  // The same for where a block ends: a boundary right after the last line of a block (that line and the one with other
+  // words before it) that comes back once or twice a chant span away; the bar at the same point after each other copy
+  // gets the cue. (The second chorus runs into a bridge with new lines where the first ran into a verse, and the cut
+  // there was missed: a 16-bar section of chorus and bridge read as a verse.)
+  const lastOfRun = (i: number) => i + 1 >= sung.length || sung[i + 1].k !== sung[i].k;
+  const prevOther = (i: number) => {
+    let j = i - 1;
+    while (j >= 0 && sung[j].k === sung[i].k) j--;
+    return j >= 0 ? sung[j].k : '';
+  };
+  for (const c of cuts) {
+    const t = bars.time[c], L = barLen(c);
+    // The last line before the boundary, and no line starting between it and a quarter bar before the boundary.
+    let p = -1;
+    for (let i = 0; i < sung.length && sung[i].s < t - 0.25 * L; i++) p = i;
+    if (p < 0 || !lastOfRun(p) || t - sung[p].s > 2 * L) continue;
+    const before = prevOther(p);
+    if (!before) continue;
+    // (A copy that goes on with lines of the block — the hook again, into a post-chorus — has not ended there.)
+    const block = new Set<string>();
+    for (let i = Math.max(0, p - 5); i <= p; i++) block.add(sung[i].k);
+    const partners: number[] = [];
+    for (let r = 0; r < sung.length; r++) {
+      if (r !== p && sung[r].k === sung[p].k && lastOfRun(r) && prevOther(r) === before && Math.abs(sung[r].s - sung[p].s) >= chantSpan) partners.push(r);
     }
+    if (!partners.length || partners.length > 2) continue;
+    for (const r of partners) if (r + 1 >= sung.length || !block.has(sung[r + 1].k)) mark(sung[r].s + (t - sung[p].s), c);
   }
   return out;
 }
@@ -669,6 +700,7 @@ function labelSections(
   perc: number[],
   bass: number[],
   treble: number[],
+  hint?: [number, number],
 ): void {
   const n = secs.length;
   const E = secs.map(s => s.energy);
@@ -732,11 +764,18 @@ function labelSections(
     else if (buildUp) labels[k] = 'build';
     // (Loud and driven with only hook chops over it is a drop, handled below.)
     else if (s.vocal && (li.hook >= 0.5 || (li.rep >= 0.75 && !leadIn(k))) && (high[k] || (E[k] >= 1.1 * pe && E[k] >= verseE) || E[k] >= 1.1 * verseE) && !(high[k] && drivenAt(k) && li.leadCover < 0.35)) labels[k] = 'chorus';
+    // Sung through almost wholly in the song's hook lines (each sung three times or more): the chorus, however quiet —
+    // a rap chorus is often quieter than the verses around it. And a block of four lines or more, every one sung again
+    // elsewhere, not much quieter than the verses: the vocal chorus of a song whose climax is an instrumental drop
+    // (melodic bass sings it softer than the verse, over half the beat).
+    else if (k > 0 && s.vocal && li.leadCover >= 0.4 && ((li.hook >= 0.75 && li.rep >= 0.9 && spans[k][1] - spans[k][0] >= 2) ||
+      (li.rep >= 0.9 && li.lines.size >= 4 && E[k] >= 0.65 * verseE && !leadIn(k)))) labels[k] = 'chorus';
     else if (high[k]) {
       const driven = drivenAt(k);
       if (hasLyrics) {
-        // Barely sung but loud: a drop, even when the few lines in it are the hook (vocal chops).
-        if (li.leadCover < 0.35) labels[k] = driven ? 'drop' : li.hook >= 0.5 ? 'chorus' : k > 0 && k + 1 < n ? 'bridge' : 'verse';
+        // Barely sung but loud: a drop, even when the few lines in it are the hook (vocal chops); without the drums
+        // driving it, the hook played instead of sung (a synth lead as loud as the drops: the instrumental chorus).
+        if (li.leadCover < 0.35) labels[k] = driven ? 'drop' : li.hook >= 0.5 || E[k] >= 0.9 ? 'chorus' : k > 0 && k + 1 < n ? 'bridge' : 'verse';
         else if (li.hook >= 0.5) labels[k] = 'chorus';
         else labels[k] = 'verse';
       } else {
@@ -837,6 +876,36 @@ function labelSections(
       if (!soft && !tag) break;
       // (Right after an unsung drop, a short tag is the drop running out, not yet the outro.)
       labels[k] = tag && !soft && k === lastBig + 1 && labels[lastBig] === 'drop' ? 'drop' : 'outro';
+    }
+  }
+  // NetEase's chorus mark: where none of the choruses and drops found lies on a quarter of it, the section most inside
+  // it (two bars or more, sung or not quiet) is the chorus — the drop when it is loud, driven and hardly sung. (Only
+  // then: the mark starts early and may take in a verse, and the sections found are right more often than not.)
+  if (hint && hint[1] > hint[0]) {
+    const [h0, h1] = hint, hl = h1 - h0;
+    const over = (k: number) => Math.max(0, Math.min(secs[k].end, h1) - Math.max(secs[k].start, h0));
+    let found = 0;
+    for (let k = 0; k < n; k++) if (labels[k] === 'chorus' || labels[k] === 'drop') found += over(k);
+    if (found < 0.25 * hl) {
+      let best = -1;
+      for (let k = 0; k < n; k++) if (spans[k][1] - spans[k][0] >= 2 && (best < 0 || over(k) > over(best))) best = k;
+      if (best >= 0 && over(best) >= 0.3 * hl && (secs[best].vocal || E[best] >= 0.5)) {
+        labels[best] = high[best] && drivenAt(best) && info[best].leadCover < 0.35 ? 'drop' : 'chorus';
+      }
+    }
+  }
+  // Sung mostly (60 % of its lines, two at least) in the lines of the choruses and not much quieter than they are: a
+  // chorus too — the second half of a chorus that drops the bass, or a copy the energy rules above missed.
+  const chorusLines = new Set<string>();
+  let chorusE = 0, chorusN = 0;
+  labels.forEach((l, k) => { if (l === 'chorus') { info[k].lines.forEach(x => chorusLines.add(x)); chorusE += E[k]; chorusN++; } });
+  if (chorusN) {
+    chorusE /= chorusN;
+    for (let k = 1; k < n; k++) {
+      if ((labels[k] !== 'verse' && labels[k] !== 'pre' && labels[k] !== 'bridge') || !secs[k].vocal || info[k].leadCover < 0.3 || info[k].lines.size < 2) continue;
+      let inChorus = 0;
+      info[k].lines.forEach(x => { if (chorusLines.has(x)) inChorus++; });
+      if (inChorus >= 0.6 * info[k].lines.size && E[k] >= 0.6 * chorusE) labels[k] = 'chorus';
     }
   }
   secs.forEach((s, k) => (s.label = labels[k] || 'verse'));

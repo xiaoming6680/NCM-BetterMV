@@ -6,18 +6,30 @@
 // again as it falls apart, on round until the shot ends.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, lerp, outExpo, rng, smooth } from './types.ts';
+import { clamp01, lerp, outExpo, rng, smooth, snap } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
 import { LyricRig } from './lyricRig.ts';
+import { voiceFaces } from './lyricBlock.ts';
+import { COLS as SPEC_COLS, Spectrogram } from './viz.ts';
 
-const COLS = 6, ROWS = 6, HALF = 2; // the cover 4 × 4 units, 72 triangles
+const COLS = 14, ROWS = 14, HALF = 2; // the cover 4 × 4 units, 392 triangles
 const EYE = 6; // the magic camera: (0, 0, EYE) looking at the origin
+const NB = 64;
 
+// The shards also play the song: across the cover, left to right, run the bands from the bass to the treble, and each
+// shard slides along its own line of sight from the magic camera as its band gets louder, lighting up as it goes. A
+// move along the line of sight changes nothing from the magic angle — there the cover still closes pixel for pixel —
+// but from anywhere else the cloud of shards is a spectrum analyser in depth.
 export class AlignScene implements MvScene {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(40, 16 / 9, 0.05, 100);
+  /** Each shard where it is now (from base and depth) and its triangle on the cover, depth and band. */
   private pieces: Array<[THREE.Vector3, THREE.Vector3, THREE.Vector3]> = [];
-  private lines = new LineBatch(2000);
+  private bases: Array<{ tri: Array<[number, number]>; s: number; band: number }> = [];
+  private geo: THREE.BufferGeometry;
+  private spec: Spectrogram;
+  private level = new Float32Array(NB);
+  private lines = new LineBatch(3000);
   private rig: LyricRig;
   private resolution = new THREE.Vector2(1920, 1080);
   private pixelRatio = 1;
@@ -28,8 +40,8 @@ export class AlignScene implements MvScene {
     const { palette } = init;
     this.scene.background = palette.ink.clone();
     const random = rng(0x7a1e);
-    const eye = new THREE.Vector3(0, 0, EYE);
-    const pos: number[] = [], uv: number[] = [];
+    this.spec = Spectrogram.of(init.stereo, init.music.duration + 8, NB, 30);
+    const uv: number[] = [];
     for (let j = 0; j < ROWS; j++) for (let i = 0; i < COLS; i++) {
       const x0 = -HALF + (i / COLS) * 2 * HALF, x1 = -HALF + ((i + 1) / COLS) * 2 * HALF;
       const y0 = -HALF + (j / ROWS) * 2 * HALF, y1 = -HALF + ((j + 1) / ROWS) * 2 * HALF;
@@ -39,18 +51,18 @@ export class AlignScene implements MvScene {
       for (const tri of quads) {
         // Its depth: pulled towards the eye or pushed away, scaled so it covers the same part of the eye's view.
         const s = lerp(0.35, 1.75, random());
-        const pts = tri.map(([x, y]) => new THREE.Vector3(x, y, 0).sub(eye).multiplyScalar(s).add(eye)) as [THREE.Vector3, THREE.Vector3, THREE.Vector3];
-        this.pieces.push(pts);
-        for (let k = 0; k < 3; k++) {
-          pos.push(pts[k].x, pts[k].y, pts[k].z);
-          uv.push((tri[k][0] + HALF) / (2 * HALF), (tri[k][1] + HALF) / (2 * HALF));
-        }
+        const cx = (tri[0][0] + tri[1][0] + tri[2][0]) / 3;
+        this.bases.push({ tri, s, band: Math.min(NB - 1, Math.floor(((cx + HALF) / (2 * HALF)) * NB)) });
+        this.pieces.push([new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()]);
+        for (let k = 0; k < 3; k++) uv.push((tri[k][0] + HALF) / (2 * HALF), (tri[k][1] + HALF) / (2 * HALF));
       }
     }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    const g = this.geo = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(this.bases.length * 9), 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(this.bases.length * 9).fill(1), 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-    const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map: init.cover, side: THREE.DoubleSide, toneMapped: true }));
+    this.place(new Float32Array(NB));
+    const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map: init.cover, side: THREE.DoubleSide, toneMapped: true, vertexColors: true }));
     mesh.frustumCulled = false;
     // The words are cut up like the cover: each word moved along the line of sight from the magic camera to a depth of
     // its own and scaled to match, so from that one angle it is where it belongs. A word comes in from deep off its
@@ -58,6 +70,7 @@ export class AlignScene implements MvScene {
     // place with the cover when the camera whips onto the angle, and stays there as the camera drifts off (left
     // scattered, the line would read as jumbled words once the view leaves the angle).
     this.rig = new LyricRig(palette, 'hook');
+    this.rig.faces = voiceFaces('pulse', init.seed);
     const vh = 2 * EYE * Math.tan(THREE.MathUtils.degToRad(20));
     this.rig.frame = { vh, vw: vh * 1.6 };
     this.rig.place = root => { root.position.set(0, 0, 0.02); };
@@ -81,6 +94,38 @@ export class AlignScene implements MvScene {
     this.pixelRatio = pixelRatio;
   }
 
+  keepUp(t: number): void {
+    this.spec.prefetch(t, 0.8);
+  }
+
+  /** Each band's peak of the last 0.15 s, falling away over it (a pure function of t), stretched to 0..1. */
+  private levels(t: number): Float32Array {
+    const c0 = Math.floor(t * SPEC_COLS), out = this.level.fill(0);
+    if (!this.init.stereo) return out;
+    for (let k = 0; k < 9; k++) {
+      const col = this.spec.column(c0 - k);
+      for (let b = 0; b < NB; b++) out[b] = Math.max(out[b], col[b] - k * 0.03);
+    }
+    for (let b = 0; b < NB; b++) out[b] = clamp01((out[b] - 0.4) / 0.55);
+    return out;
+  }
+
+  /** Every shard slid along its line of sight from the magic eye by its band's level, and lit by it. */
+  private place(level: Float32Array): void {
+    const pos = this.geo.getAttribute('position') as THREE.BufferAttribute, col = this.geo.getAttribute('color') as THREE.BufferAttribute;
+    const on = this.init.stereo ? 1 : 0;
+    this.bases.forEach((b, i) => {
+      const v = level[b.band], s = b.s * (1 + 0.32 * v * on), light = on ? 0.55 + 0.75 * v : 1;
+      for (let k = 0; k < 3; k++) {
+        const [x, y] = b.tri[k];
+        this.pieces[i][k].set(x * s, y * s, EYE - EYE * s);
+        pos.setXYZ(i * 3 + k, x * s, y * s, EYE - EYE * s);
+        col.setXYZ(i * 3 + k, light, light, light);
+      }
+    });
+    pos.needsUpdate = col.needsUpdate = true;
+  }
+
   update(ctx: FrameCtx): void {
     const { t, music, shot } = ctx;
     const random = rng(shot.seed);
@@ -97,7 +142,7 @@ export class AlignScene implements MvScene {
       const drift = (t - shot.start) * 0.08 * side;
       th = th0 + drift; ph = ph0;
     } else if (t < tm) {
-      const e = outExpo((t - (tm - whip)) / whip), before = th0 + (tm - whip - shot.start) * 0.08 * side;
+      const e = snap((t - (tm - whip)) / whip), before = th0 + (tm - whip - shot.start) * 0.08 * side;
       th = lerp(before, 0, e); ph = lerp(ph0, 0, e);
     } else {
       // …and keeps drifting once it is off (it used to stop dead there, the frame frozen for the rest of the shot).
@@ -118,10 +163,13 @@ export class AlignScene implements MvScene {
     L.clear();
     // The seams fade as the view comes round to the angle, so at it the cover reads whole.
     const aligned = 1 - clamp01(Math.hypot(th, ph) / 0.35);
-    const seamI = 0.04 + 0.5 * (1 - aligned);
-    for (const [a, b, c] of this.pieces) for (const [p, q] of [[a, b], [b, c], [c, a]]) {
-      L.seg(p.x, p.y, p.z, q.x, q.y, q.z, 1, paper.r * seamI, paper.g * seamI, paper.b * seamI);
-    }
+    const level = this.levels(t);
+    this.place(level);
+    this.pieces.forEach(([a, b, c], i) => {
+      // (A loud shard's seams burn brighter; at the angle they all fade so the cover reads whole.)
+      const seamI = (0.04 + 0.5 * (1 - aligned)) * (0.5 + 1.2 * level[this.bases[i].band]);
+      for (const [p, q] of [[a, b], [b, c], [c, a]]) L.seg(p.x, p.y, p.z, q.x, q.y, q.z, 1, paper.r * seamI, paper.g * seamI, paper.b * seamI);
+    });
     const frame = t >= tm ? clamp01((t - tm) / 0.25) : 0;
     if (frame > 0) {
       const r = HALF * 1.06, I = 1.6 * (0.5 + closed);

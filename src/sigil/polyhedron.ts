@@ -1,7 +1,7 @@
-// Polyhedra for the song's crystal: the five Platonic seeds and a few of Conway's operators (kis, dual, ambo,
-// truncate, gyro), after George Hart's notation (polyhedronisme). A polyhedron is its vertices and its faces as
-// vertex rings, counter-clockwise seen from outside. Seeds and every operator's result are convex (or star-shaped
-// about the origin, for kis spikes), which the orientation fix relies on.
+// Polyhedra (made for the song's crystal, now the subdivide plate's seeds): the five Platonic seeds and a few of
+// Conway's operators (kis, dual, ambo, truncate, gyro), after George Hart's notation (polyhedronisme). A polyhedron
+// is its vertices and its faces as vertex rings, counter-clockwise seen from outside. Seeds and every operator's
+// result are convex (or star-shaped about the origin, for kis spikes), which the orientation fix relies on.
 
 export type Vec = [number, number, number];
 export interface Poly { name: string; v: Vec[]; f: number[][] }

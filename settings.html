@@ -9,10 +9,19 @@
     .panel { flex: 1 1 640px; padding: 20px 24px; border-radius: 8px; }
     .light { background: #fff; color: #333; }
     .dark { background: #1f1f23; color: #e8e8e8; }
+    /* BetterNCM on NetEase's dark skin, as it really is: the dark ground is painted by a layer that is not the page's
+       ancestor, the page's container hands down no colour (black), only the host's own words beside it are light. */
+    .bncm { position: relative; flex: 1 1 100%; display: flex; gap: 24px; padding: 20px 24px; }
+    .bncm-ground { position: absolute; inset: 0; border-radius: 8px; background: #1f1f23; }
+    .bncm-list { position: relative; flex: none; width: 160px; color: #fff; line-height: 2.6; font: 15px/2.6 sans-serif; }
+    .bncm-page { position: relative; flex: 1; }
   </style>
 </head>
 <body>
-  <main><div class="panel light" id="light"></div><div class="panel dark" id="dark"></div></main>
+  <main>
+    <div class="panel light" id="light"></div><div class="panel dark" id="dark"></div>
+    <div class="bncm"><div class="bncm-ground"></div><div class="bncm-list">PluginMarket<br>BetterDownload<br>BetterMV<br>RevivedSource</div><div class="bncm-page" id="bncm"></div></div>
+  </main>
   <script type="module" src="/src/dev/settings.ts"></script>
 </body>
 </html>

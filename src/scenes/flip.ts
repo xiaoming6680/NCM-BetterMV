@@ -10,18 +10,25 @@ import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, inOutCubic, lerp, rng } from './types.ts';
 import { LyricLayer } from './lyricSpace.ts';
+import { voiceFaces } from './lyricBlock.ts';
+import { COLS as SPEC_COLS, Spectrogram } from './viz.ts';
 
 const COLS = 34, ROWS = 20; // larger than the frame, so an angled camera never sees the edge
 const VIEW_W = 23.8; // board units across the frame, camera straight on at its usual distance
+/** Spectrum bands across the board, mirrored out from the middle column (the bass) to both sides (the treble). */
+const NB = 64;
 
+// The board is a graphic equaliser too: each column of tiles is a band, and up from the bottom of the frame the tiles
+// its level reaches are lit and stand a little proud — bars of the cover's own tiles, the bass in the middle.
 const vertexShader = /* glsl */ `
   attribute vec2 aTile;
   attribute float aRand;
   uniform vec2 uGrid, uView, uOrigin;
-  uniform float uBeat, uPeriod, uSpread, uTurn, uWidth, uLift, uBack, uPattern, uAngle, uReach, uKick, uAlt;
+  uniform float uBeat, uPeriod, uSpread, uTurn, uWidth, uLift, uBack, uPattern, uAngle, uReach, uKick, uAlt, uEq;
+  uniform sampler2D tSpec;
   varying vec3 vN, vWorld;
   varying vec2 vBoard;
-  varying float vFace, vImg;
+  varying float vFace, vImg, vBar;
   mat3 rot(vec3 a, float t) {
     float s = sin(t), c = cos(t), o = 1.0 - c;
     return mat3(o*a.x*a.x + c, o*a.x*a.y + a.z*s, o*a.z*a.x - a.y*s,
@@ -68,7 +75,12 @@ const vertexShader = /* glsl */ `
     vec3 A = vec3(axis, 0.0);
     mat3 R = rot(A, ang);
     float grow = 1.0 + 0.06 * lift / max(uLift, 1e-3);
-    vec3 world = vec3(cell, lift + uKick * 0.16 * (0.3 + aRand)) + R * position * grow;
+    // The equaliser: this column's band, and whether its level reaches this tile (rows up from the frame's bottom).
+    float level = texture2D(tSpec, vec2((min(abs(c.x) * 2.0, 1.0) * ${(NB - 1).toFixed(1)} + 0.5) / ${NB.toFixed(1)}, 0.5)).r;
+    float up = c.y + 0.5;
+    vBar = smoothstep(up - 0.02, up + 0.02, level * 0.95) * uEq;
+    float top = vBar * (1.0 - smoothstep(up + 0.02, up + 0.08, level * 0.95));
+    vec3 world = vec3(cell, lift + uKick * 0.16 * (0.3 + aRand) * (1.0 - uEq) + vBar * 0.35 + top * 0.25) + R * position * grow;
     // After an odd number of turns the back faces the camera, mirrored across the axis: sample it unmirrored.
     vFace = normal.z;
     vec2 q = position.xy;
@@ -89,10 +101,10 @@ const fragmentShader = /* glsl */ `
   uniform float uLyricOn;
   uniform vec3 uSignal, uInk, uPaper;
   uniform vec2 uDetail;
-  uniform float uScale;
+  uniform float uScale, uEq;
   varying vec3 vN, vWorld;
   varying vec2 vBoard;
-  varying float vFace, vImg;
+  varying float vFace, vImg, vBar;
   vec2 coverUv(vec2 b) { vec2 u = 0.5 + b * uScale; return 1.0 - abs(1.0 - mod(u, 2.0)); } // mirrored past the edges
   vec3 picture(float k) {
     if (k < 0.5) return texture2D(uCover, coverUv(vBoard)).rgb;
@@ -117,7 +129,9 @@ const fragmentShader = /* glsl */ `
       vec4 w = texture2D(uLyric, q);
       col = col * (1.0 - w.a) + w.rgb;
     }
-    gl_FragColor = vec4(col * shade + uPaper * glint * 0.35, 1.0);
+    // Tiles in a bar lit, the rest of the board let down.
+    col *= mix(1.0, mix(0.45, 1.15, vBar), uEq);
+    gl_FragColor = vec4(col * shade + uPaper * glint * 0.35 + uSignal * vBar * 0.12, 1.0);
   }`;
 
 // Behind the board: the cover, very dim, so a lifted tile opens onto depth rather than a black hole.
@@ -137,9 +151,16 @@ export class Flip implements MvScene {
   private material: THREE.ShaderMaterial;
   private recess: THREE.ShaderMaterial;
   private layer: LyricLayer;
+  private spec: Spectrogram;
+  private specData = new Uint8Array(NB);
+  private specTex = new THREE.DataTexture(this.specData, NB, 1, THREE.RedFormat, THREE.UnsignedByteType);
 
   constructor(private init: SceneInit, private look: 'pulse' | 'ballad' = 'pulse') {
     const { palette } = init;
+    // (The same spectrogram the other plates read: one FFT per column for the whole MV.)
+    this.spec = Spectrogram.of(init.stereo, init.music.duration + 8, NB, 30);
+    this.specTex.minFilter = this.specTex.magFilter = THREE.LinearFilter;
+    this.specTex.needsUpdate = true;
     this.scene.background = palette.ink.clone();
     const box = new THREE.BoxGeometry(0.97, 0.97, 0.05);
     const g = new THREE.InstancedBufferGeometry();
@@ -159,6 +180,7 @@ export class Flip implements MvScene {
         uDetail: { value: new THREE.Vector2(0.5, 0.5) }, uScale: { value: 1 / VIEW_W },
         uBeat: { value: 0 }, uPeriod: { value: 2 }, uSpread: { value: 1 }, uTurn: { value: 0.3 }, uWidth: { value: 0.3 }, uLift: { value: 1 }, uBack: { value: 1.2 },
         uPattern: { value: 0 }, uAngle: { value: 0 }, uReach: { value: 10 }, uKick: { value: 0 }, uAlt: { value: 0 },
+        tSpec: { value: this.specTex }, uEq: { value: init.stereo ? (look === 'ballad' ? 0.6 : 1) : 0 },
         uLyric: { value: null }, uLyricRect: { value: new THREE.Vector4(0, 0, VIEW_W, VIEW_W * 9 / 16) }, uLyricOn: { value: 0 },
       },
     });
@@ -173,6 +195,7 @@ export class Flip implements MvScene {
     back.position.z = -0.45;
     this.scene.add(back);
     this.layer = new LyricLayer(palette, look === 'ballad' ? 'poem' : 'hook');
+    this.layer.rig.faces = voiceFaces(look, init.seed);
     this.material.uniforms.uLyric.value = this.layer.target.texture;
     this.scene.add(this.layer.token);
     this.scene.onBeforeRender = renderer => {
@@ -187,10 +210,29 @@ export class Flip implements MvScene {
     this.camera.updateProjectionMatrix();
   }
 
+  keepUp(t: number): void {
+    this.spec.prefetch(t, 0.8);
+  }
+
+  /**
+   * The equaliser's levels at t: each band's peak of the last quarter second, falling away over it (a pure function
+   * of t), stretched so a quiet passage barely lifts the first row and a loud one reaches most of the way up.
+   */
+  private levels(t: number): void {
+    const c0 = Math.floor(t * SPEC_COLS), out = this.specData;
+    for (let b = 0; b < NB; b++) {
+      let v = 0;
+      for (let k = 0; k < 15; k += 1) v = Math.max(v, this.spec.column(c0 - k)[b] - k * 0.025);
+      out[b] = Math.round(Math.min(1, Math.max(0, (v - 0.4) / 0.6)) * 255);
+    }
+    this.specTex.needsUpdate = true;
+  }
+
   update(ctx: FrameCtx): void {
     const { t, music, shot } = ctx;
     const u = this.material.uniforms;
     const soft = this.look === 'ballad', burst = !soft && shot.variant === 'burst';
+    this.levels(t);
     const random = rng(shot.seed);
     // Straight on, the frame shows VIEW_W board units across (fewer on a wider screen, so the edge stays out).
     const dist = 25 * Math.min(1, (16 / 9) / ctx.aspect);

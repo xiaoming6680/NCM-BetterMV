@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, inOutCubic, lerp, rng, smooth } from './types.ts';
 import { LyricOrbit } from './lyricSpace.ts';
+import { voiceOpts } from './lyricBlock.ts';
 import { lastIndex } from '../director/music.ts';
 
 const R = 4;
@@ -147,7 +148,7 @@ export class Vinyl implements MvScene {
     this.arm.position.z = 0.32;
     this.scene.add(pivot, ring, this.arm);
 
-    this.orbit = new LyricOrbit(palette, { style: look === 'ballad' ? 'poem' : 'hook', em: 0.42, radius: R * LABEL + 0.55, mode: 'flat', trans: { em: 0.22, radius: R * LABEL + 0.3 } });
+    this.orbit = new LyricOrbit(palette, { style: look === 'ballad' ? 'poem' : 'hook', em: 0.42, radius: R * LABEL + 0.55, mode: 'flat', trans: { em: 0.22, radius: R * LABEL + 0.3 }, ...voiceOpts(look, init.seed) });
     this.orbit.group.position.z = 0.04;
     this.scene.add(this.orbit.group);
     this.resize(init.aspect);

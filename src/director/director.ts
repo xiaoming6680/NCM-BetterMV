@@ -10,8 +10,9 @@ import { clamp01, rng, smooth } from '../scenes/types.ts';
 import type { Palette } from '../render/palette.ts';
 import { defaultFx, type Fx } from '../render/engine.ts';
 import { THROUGH_CUT, TransitionKind, type Transition } from '../render/shots.ts';
+import { PLATE_LENS } from '../render/lens.ts';
 import { MgOverlay } from './overlay.ts';
-import { Crystal, type CrystalSpec } from '../sigil/crystal.ts';
+import { Armillary, type ArmillarySpec } from '../sigil/armillary.ts';
 import { SECTION_LABELS, type LyricLine, type Section } from '../types.ts';
 import { norm } from './lyrics.ts';
 import { STYLES, type Plate, type SongTraits, type Style } from '../style/style.ts';
@@ -39,7 +40,9 @@ function cutTimes(music: Music, style: Style, section: Section, next: Section | 
   return cuts;
 }
 
-const TAKE_TURNS = new Set(['verse', 'chorus', 'break', 'bridge']);
+// (Drops too: they take turns opening on the push tunnel and the spectrum tube, so a song with two drops doesn't
+// climax in the same tunnel twice; the user: “高潮段不应该只有推进”.)
+const TAKE_TURNS = new Set(['verse', 'chorus', 'break', 'bridge', 'drop']);
 
 /**
  * The plates a section may use once the ones the user turned off (the settings page) are taken out. A section left
@@ -63,7 +66,7 @@ function allowed(pool: Plate[], off: ReadonlySet<string>, sections: Section[], i
   return [...list.slice(k), ...list.slice(0, k)];
 }
 
-/** `off`: plates the user turned off in the settings (the crystal's and the opening's own shots included). */
+/** `off`: plates the user turned off in the settings (the armillary's and the opening's own shots included). */
 export function planShots(music: Music, style: Style, songSeed: number, song: SongTraits, off: ReadonlySet<string> = new Set()): Shot[] {
   const shots: Shot[] = [];
   const sections = music.a.sections;
@@ -75,23 +78,29 @@ export function planShots(music: Music, style: Style, songSeed: number, song: So
     const pool = allowed(style.pool(section, song), off, sections, sectionIndex, style, song);
     const cuts = cutTimes(music, style, section, sections[sectionIndex + 1]);
     const random = rng((songSeed ^ (sectionIndex * 2654435761)) >>> 0);
-    // Verses, breaks and bridges take turns opening on their first two plates; the others always open on their
-    // signature (the chorus wall, the drop's push, the build's tunnel…).
+    // Verses, choruses, breaks, bridges and drops take turns opening on their first two plates (the drop's push tunnel
+    // and spectrum tube…); the others always open on their signature (the build's tunnel…).
     const nth = seen.get(section.label) ?? 0;
     seen.set(section.label, nth + 1);
     const hero = pool[TAKE_TURNS.has(section.label) ? nth % Math.min(2, pool.length) : 0];
     let plate = hero;
+    // Plates shown in this section so far: a section goes round its whole pool before it shows one twice (the drop's
+    // push tunnel, the least used across the song since only drops have it, used to come back mid-drop for another
+    // four bars — 40 % of every drop).
+    const here = new Map<string, number>([[hero.scene, 1]]);
     for (let i = 0; i + 1 < cuts.length; i++) {
       if (cuts[i + 1] - cuts[i] < 0.12) continue;
       // Shots shorter than a bar (the end of a build) keep the plate and only change the camera.
       const short = cuts[i + 1] - cuts[i] < barLen(cuts[i]) * 0.9;
       if (i === 0) plate = hero; // a section opens on its hero plate
       else if (!short) {
-        // The least-used plate that isn't the one just shown; ties broken by the seeded shuffle.
+        // The plate least used in this section, then in the song, that isn't the one just shown; ties broken by the
+        // seeded shuffle.
         const order = pool.map(p => ({ p, r: random() }))
           .filter(o => pool.length === 1 || o.p.scene !== prevScene)
-          .sort((a, b) => (used.get(a.p.scene) ?? 0) - (used.get(b.p.scene) ?? 0) || a.r - b.r);
+          .sort((a, b) => (here.get(a.p.scene) ?? 0) - (here.get(b.p.scene) ?? 0) || (used.get(a.p.scene) ?? 0) - (used.get(b.p.scene) ?? 0) || a.r - b.r);
         plate = order.length ? order[0].p : pool[0];
+        here.set(plate.scene, (here.get(plate.scene) ?? 0) + 1);
       }
       const variants = plate.variants;
       let variant = variants[Math.floor(random() * variants.length)];
@@ -103,10 +112,10 @@ export function planShots(music: Music, style: Style, songSeed: number, song: So
     }
   });
   joinRuns(shots, barLen);
-  // Most plays end on the canvas rising over the cover this song has painted; the others on the crystal gathering.
-  // (Not under ink: a painting in colour on a dark canvas would end a piece on rice paper in another world.)
-  const finale = style.id !== 'ink' && !off.has('canvas') && rng((songSeed ^ 0xf1a1e) >>> 0)() < 0.6;
-  if (!off.has('crystal')) placeCrystal(shots, music, style, songSeed, !finale);
+  // Most plays end on the canvas rising over the cover this song has painted; the others on the armillary closing up
+  // (under ink the canvas is a brush writing the cover on rice paper, and there is no armillary).
+  const finale = !off.has('canvas') && rng((songSeed ^ 0xf1a1e) >>> 0)() < 0.6;
+  if (!off.has('crystal')) placeArmillary(shots, music, style, songSeed, !finale);
   if (finale) placeFinale(shots, music, songSeed);
   return off.has('cards') ? shots : placeOpening(shots, music, songSeed);
 }
@@ -158,11 +167,12 @@ function placeOpening(shots: Shot[], music: Music, songSeed: number): Shot[] {
 }
 
 /**
- * The song's crystal gets two shots of its own: the last bar before each drop (bullet time round it, in the styles
- * that punch into drops), and the song's last bars (its shards gathering; not in ink, whose paper it would black out).
+ * The song's armillary gets two shots of its own (scene id 'crystal', the figure it replaced): the last bar or two
+ * before each drop (bullet time round it, then the push down its rings, in the styles that punch into drops), and
+ * the song's last bars (its rings closing up; not in ink, whose paper it would black out).
  */
-/** Puts a shot of its own over [from, to), trimming the shots it overlaps. */
-function carve(shots: Shot[], music: Music, scene: SceneId, from: number, to: number, sectionIndex: number, variant: string, songSeed: number): void {
+/** Puts a shot of its own over [from, to), trimming the shots it overlaps. (Also the films' cuts, film/reel.ts.) */
+export function carve(shots: Shot[], music: Music, scene: SceneId, from: number, to: number, sectionIndex: number, variant: string, songSeed: number): void {
   if (to - from < 0.8) return;
   const out: Shot[] = [];
   for (const s of shots) {
@@ -191,24 +201,26 @@ function placeFinale(shots: Shot[], music: Music, songSeed: number): void {
   carve(shots, music, 'canvas', from, end, si, variants[Math.floor(rng((songSeed ^ 0xca5) >>> 0)() * variants.length)], songSeed);
 }
 
-/** `ending`: the crystal also gathers over the last bars (not when the canvas closes the song). */
-function placeCrystal(shots: Shot[], music: Music, style: Style, songSeed: number, ending = true): Shot[] {
+/** `ending`: the armillary also closes up over the last bars (not when the canvas closes the song). */
+function placeArmillary(shots: Shot[], music: Music, style: Style, songSeed: number, ending = true): Shot[] {
   const sections = music.a.sections, downs = music.downbeats;
-  const crystal = (from: number, to: number, sectionIndex: number, variant: string) => carve(shots, music, 'crystal', from, to, sectionIndex, variant, songSeed);
+  const armillary = (from: number, to: number, sectionIndex: number, variant: string) => carve(shots, music, 'crystal', from, to, sectionIndex, variant, songSeed);
   if (style.transitions.dropPunch) {
     sections.forEach((s, i) => {
       const next = sections[i + 1];
       if (!next || next.label !== 'drop' || s.label === 'drop') return;
       const last = lastIndex(downs, s.end - 0.1);
       if (last < 0 || downs[last] <= s.start + 0.1) return; // a section of one bar keeps its own
-      crystal(downs[last], s.end, i, 'orbit');
+      // The run-in (line up, step back, push in) takes two bars, unless one bar is already long.
+      const two = last > 0 && downs[last - 1] > s.start + 0.1 && s.end - downs[last] < 3;
+      armillary(downs[two ? last - 1 : last], s.end, i, 'orbit');
     });
   }
   if (ending && style.id !== 'ink' && sections.length) {
     const end = sections[sections.length - 1].end, bars = downs.length >= 5 ? 4 : 2;
     const from = downs[Math.max(0, lastIndex(downs, end - 0.1) - bars + 1)];
     const si = Math.max(0, sections.findIndex(s => from >= s.start && from < s.end));
-    if (from !== undefined && end - from > 2) crystal(from, end, si, 'gather');
+    if (from !== undefined && end - from > 2) armillary(from, end, si, 'gather');
   }
   return shots;
 }
@@ -268,14 +280,15 @@ export function planLooks(sections: Section[], style: Style, songSeed: number, o
     seen.set(s.label, nth + 1);
     let options: LookId[] = [], chance = 0;
     switch (s.label) {
-      case 'intro': options = ['hibit', 'ascii']; chance = i === 0 ? 0.45 : 0; break;
+      case 'intro': options = ['hibit', 'ascii', 'vhs']; chance = i === 0 ? 0.45 : 0; break;
       case 'verse': options = ['riso', 'hibit']; chance = nth >= 1 ? 0.85 : 0; break;
       case 'chorus': options = ['hibit', 'riso']; chance = nth >= 1 ? 0.6 : 0; break;
-      case 'bridge': case 'break': options = ['ascii', 'riso']; chance = 0.85; break;
+      case 'bridge': case 'break': options = ['ascii', 'riso', 'vhs']; chance = 0.85; break;
       case 'build': case 'pre': options = ['ascii']; chance = nth >= 1 ? 0.5 : 0; break;
-      case 'outro': options = ['riso']; chance = 0.35; break;
+      case 'outro': options = ['riso', 'vhs']; chance = 0.35; break;
     }
-    if (ballad) { options = options.filter(o => o === 'riso'); chance *= 0.7; }
+    // (A ballad: only the print and the tape, the tape for its openings, bridges and endings.)
+    if (ballad) { options = options.filter(o => o === 'riso' || o === 'vhs'); chance *= 0.7; }
     options = options.filter(o => !off.has(o) && o !== prev && (count.get(o) ?? 0) < 2);
     const roll = random(), pick = random();
     const look = options.length && roll < chance ? options[Math.floor(pick * options.length)] : null;
@@ -293,6 +306,23 @@ export function planLooks(sections: Section[], style: Style, songSeed: number, o
  */
 const NO_CHARACTERS: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'halftone', 'shatter', 'ink', 'clouds', 'bokeh']);
 
+/**
+ * Where the picture goes to letterbox (2.39:1 bars in the cover's ink, under the overlay): the opening and the end of
+ * a song, and its pauses — a ballad's bridge, the other styles' breaks. Neighbouring sections run together.
+ */
+function letterboxed(music: Music, style: Style): Array<[number, number]> {
+  // (Ink first: it is drawn with the ballad look too, and used to fall into the ballad's bridges.)
+  const labels = style.id === 'ink' ? ['intro', 'outro'] : style.look === 'ballad' ? ['intro', 'bridge', 'outro'] : ['intro', 'break', 'outro'];
+  const out: Array<[number, number]> = [];
+  for (const s of music.a.sections) {
+    if (!labels.includes(s.label)) continue;
+    const last = out[out.length - 1];
+    if (last && Math.abs(last[1] - s.start) < 0.05) last[1] = s.end;
+    else out.push([s.start, s.end]);
+  }
+  return out;
+}
+
 /** Plates that show the cover itself large (its white is the picture's white; the canvas paints it). */
 const COVER_PLATES: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'shatter', 'align', 'canvas']);
 
@@ -307,6 +337,8 @@ const MOTION: Record<SceneId, TransitionKind[]> = {
   poster: [whip], typewall: [whip], halftone: [whip, zoom], ridges: [whip, zoom], diorama: [whip, zoom], ink: [TransitionKind.ink],
   crystal: [zoom, spin], cards: [zoom], debug: [whip, zoom], scope: [zoom, whip], subdivide: [spin, zoom], align: [whip, spin],
   vinyl: [spin, zoom], clouds: [zoom], city: [zoom], aurora: [zoom], canvas: [zoom], pillars: [spin, zoom],
+  ripple: [spin, zoom], channel: [zoom], orb: [spin, zoom],
+  menger: [zoom], sierpinski: [zoom], cantor: [zoom], papercut: [spin, zoom], rain: [TransitionKind.matte, zoom], lanterns: [zoom], neon: [zoom, whip],
 };
 const SOFT: TransitionKind[] = [zoom, TransitionKind.matte, TransitionKind.iris, spin];
 
@@ -321,8 +353,8 @@ export class Director {
   private starts: Float64Array;
   private cuts: Cut[];
   readonly overlay: MgOverlay;
-  /** The song's crystal as the overlay's badge (its notation goes on the HUD). */
-  readonly crystal: Crystal | null;
+  /** The song's armillary as the overlay's badge (its notation goes on the HUD). */
+  readonly sigil: Armillary | null;
   constructor(
     readonly style: Style,
     readonly shots: Shot[],
@@ -330,7 +362,7 @@ export class Director {
     readonly music: Music,
     readonly lyrics: LyricTrack,
     readonly palette: Palette,
-    crystal?: CrystalSpec,
+    sigil?: ArmillarySpec,
     cover?: THREE.Texture,
     /**
      * Nothing over the plates' own picture: no flashes, punches, glitches or whips at the cuts, no blackout before a
@@ -342,15 +374,20 @@ export class Director {
     readonly looks: Array<LookId | null> = [],
   ) {
     this.starts = Float64Array.from(shots, s => s.start);
+    // Each plate's lens (depth of field, motion blur), read by the engine's ShotPass off its scene.
+    for (const [id, s] of Object.entries(scenes)) if (s) s.scene.userData.lens = PLATE_LENS[id as SceneId];
     this.cuts = this.planCuts();
-    this.crystal = crystal && cover ? new Crystal(crystal, palette, cover) : null;
-    this.overlay = new MgOverlay(palette, style, music, this.crystal);
+    this.sigil = sigil && cover ? new Armillary(sigil, palette, cover) : null;
+    this.overlay = new MgOverlay(palette, style, music, this.sigil);
     this.overlay.quiet = pure;
     this.snares = Float64Array.from(music.a.hits.snare.filter(h => h[1] > 0.6), h => h[0]);
     this.stutters = findStutters(lyrics.lines);
+    this.boxes = pure ? [] : letterboxed(music, style);
   }
 
   private snares: Float64Array;
+  /** Stretches of the song in letterbox (letterboxed). */
+  private boxes: Array<[number, number]>;
   private stutters: Array<[number, number, number]>;
   /** The stutter whose first moment the engine holds for its flashbacks (−1: none). */
   private remembered = -1;
@@ -458,10 +495,11 @@ export class Director {
     const scene = this.scenes[shot.scene]!;
     const { transitions: tr, fx: base } = this.style;
     const fx = Object.assign(defaultFx(), base);
+    fx.cut = shot.start;
     const since = t - shot.start;
     const beat = 60 / Math.max(40, this.music.at(t).bpm);
     const next = this.music.a.sections[shot.sectionIndex + 1];
-    // (The crystal's bullet time takes the blackout's place.)
+    // (The armillary's bullet time takes the blackout's place.)
     const beforeDrop = tr.dropPunch && next && next.label === 'drop' && next.start - t < beat * 0.5 && shot.scene !== 'crystal';
     const cut = this.cuts[i];
 
@@ -470,7 +508,9 @@ export class Director {
     } else if (prev && prev.section !== shot.section && shot.section.energy > prev.section.energy + 0.1) {
       const jump = Math.min(1, (shot.section.energy - prev.section.energy) * 2.2);
       // (The user: “有些时候的闪光效果太重了” — a lift of light, not a white-out.)
-      if (tr.flash && jump > 0.3) fx.flash = 0.32 * Math.exp(-since / 0.07) * jump;
+      // An impact frame (three frames of the cover's ink and signal colour, swapped every other section) marks the
+      // entry: a change of colour and shape, not of light.
+      if (tr.flash && jump > 0.3 && since < 0.05) { fx.impact = 1; fx.impactInvert = shot.sectionIndex % 2; }
       if (tr.dropPunch && shot.section.label === 'drop') fx.zoom = Math.exp(-since / 0.35) * 0.9;
     } else if (tr.glitch && prev && shot.section.energy > 0.55 && since < 0.12 && !cut.kind && !(shot.run && shot.run.start < shot.start)) {
       // (Not on the cuts inside a run: a glitch on every beat is a twitch of its own.)
@@ -519,12 +559,19 @@ export class Director {
       fx.fade = Math.max(fx.fade, outOf, into);
     }
     if (beforeDrop && !this.pure) fx.fade = 1;
+    for (const [a, b] of this.boxes) {
+      if (t < a || t >= b) continue;
+      // The bars slide in over a bar and out over a bar (not at the very start or end of the song).
+      const ramp = Math.min(beat * this.music.meter, (b - a) / 4);
+      const din = a <= 0.1 ? 1 : smooth((t - a) / ramp), dout = b >= this.music.a.duration - 0.1 ? 1 : smooth((b - t) / ramp);
+      fx.letterbox = Math.min(din, dout);
+    }
     // A plate on paper: trails and the duotone would grey its darks, and the overlay's glowing lines would vanish.
     const bg = scene.scene.background;
     const light = bg instanceof THREE.Color && bg.r * 0.2126 + bg.g * 0.7152 + bg.b * 0.0722 > 0.45;
     // A light cover shown whole (tiles, shards, the aligned cover) is mostly near-white: held a step down and
     // without most of the glow it stays a picture instead of washing out (the user: “过曝+歌词看不清”).
-    if (this.palette.light && COVER_PLATES.has(shot.scene)) { fx.exposure *= 0.72; fx.bloom *= 0.12; fx.flash *= 0.5; fx.vignette = Math.max(fx.vignette, 0.55); }
+    if (this.palette.light && COVER_PLATES.has(shot.scene) && this.style.id !== 'ink') { fx.exposure *= 0.72; fx.bloom *= 0.12; fx.flash *= 0.5; fx.vignette = Math.max(fx.vignette, 0.55); }
     if (!light && !this.pure) this.grade(t, shot, fx, beat);
     if (!this.pure) this.flashback(t, fx);
     if (!this.pure && !light) this.applyLook(shot, fx);
@@ -533,16 +580,17 @@ export class Director {
   }
 
   /**
-   * The section's look on this shot. Not on the opening cards or the crystal (they are the song's own marks), nor on
+   * The section's look on this shot. Not on the opening cards or the armillary (they are the song's own marks), nor on
    * the canvas (a medium of its own: printed over, its bare weave turned to a field of noise). Some
    * plates are on the tube without the characters (NO_CHARACTERS).
    * Trails, the duotone and the negative fight the media (a print has no glow), so they are left out under one.
    */
   private applyLook(shot: Shot, fx: Fx): void {
-    const look = this.looks[shot.sectionIndex];
+    const look = shot.look ?? this.looks[shot.sectionIndex];
     if (!look || shot.scene === 'cards' || shot.scene === 'crystal' || shot.scene === 'canvas') return;
     if (look === 'riso') { fx.riso = 1; fx.bloom *= 0.5; }
     else if (look === 'hibit') { fx.hibit = 1; }
+    else if (look === 'vhs') { fx.vhs = 1; }
     else { fx.crt = 1; if (!NO_CHARACTERS.has(shot.scene)) fx.ascii = 1; }
     fx.echo = Math.min(fx.echo, look === 'hibit' ? 0.5 : 0);
     fx.duotone = 0;
@@ -550,6 +598,8 @@ export class Director {
     fx.scan = 0;
     fx.grain = look === 'riso' ? 0 : fx.grain;
     fx.vignette = look === 'riso' ? 0 : fx.vignette;
+    // A print or a screen is not film (the look keeps the plain picture's grain where it has any).
+    fx.film = 0;
   }
 
   /**
@@ -578,8 +628,12 @@ export class Director {
         // A mirror would turn the words backwards: only while no line is on screen.
         const mirrorShot = shot.scene !== 'drive' && shot.scene !== 'tunnel' && random() < 0.3;
         if (mirrorShot && this.lyrics.visible(t).length === 0) fx.mirror = random() < 0.5 ? 3 : 1;
-        // Resolve out of big pixels on the drop's first beat.
-        if (intoSec < beat) fx.pixel = Math.max(fx.pixel, 48 * Math.pow(1 - intoSec / beat, 2));
+        // Resolve out of big pixels on the drop's first beat — not after the armillary's push, which lands the drop
+        // with a clean cut on its kick, and not while a line is being sung over it (like the mirror: the pixels turned
+        // the words into blocks; decided once for the beat, so it never switches off halfway).
+        const pushedIn = this.shots.some(s => s.scene === 'crystal' && s.variant === 'orbit' && Math.abs(s.end - sec.start) < 0.05);
+        const sungOver = this.lyrics.visible(sec.start + beat * 0.5).some(s => s.exit < 0.5);
+        if (intoSec < beat && !pushedIn && !sungOver) fx.pixel = Math.max(fx.pixel, 48 * Math.pow(1 - intoSec / beat, 2));
         // A quarter negative on the first strong snare of each four-bar phrase, in the second half (once, not a strobe;
         // half a negative turned the whole frame flat grey for a few frames).
         if (intoSec > (sec.end - sec.start) / 2) {

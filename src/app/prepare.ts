@@ -18,6 +18,8 @@ export interface SongInput {
   audio: ArrayBuffer;
   lyric: NeteaseLyric | null;
   wiki?: SongWiki;
+  /** NetEase's chorus mark, seconds (src/plugin/source.ts fetchChorus): the analysis' chorus hint. */
+  chorus?: [number, number];
   cover: HTMLImageElement;
 }
 
@@ -45,8 +47,10 @@ export interface PreparedSong {
 export type Stage = 'decode' | 'analyse';
 
 export interface PrepareOptions {
-  /** Gives the page a breath between analysis slices (animation frame in the plugin, setTimeout when hidden). */
+  /** Gives the page a breath between slices of the work (yieldToPage; whenIdle for a song prepared in the background). */
   pause: () => Promise<void>;
+  /** Milliseconds of analysis between pauses (default 8; less in the background, beside a playing MV). */
+  sliceMs?: number;
   onProgress?: (stage: Stage, progress: number) => void;
   /** Stops early when the song changed meanwhile. */
   cancelled?: () => boolean;
@@ -58,19 +62,44 @@ export interface PrepareOptions {
 
 export class Cancelled extends Error {}
 
+const channel = typeof MessageChannel === 'undefined' ? null : new MessageChannel();
+const waiting: Array<() => void> = [];
+if (channel) channel.port1.onmessage = () => waiting.shift()?.();
+/**
+ * A pause for PrepareOptions.pause that lets the page handle its input and draw (between tasks) without waiting for
+ * the next frame: waiting for one after each 8 ms slice of the analysis left the thread idle half the time, and
+ * stopped it while NetEase was minimised. (Not setTimeout: nested, it waits at least 4 ms.)
+ */
+export const yieldToPage = (): Promise<void> => new Promise(resolve => {
+  if (!channel) { setTimeout(resolve, 0); return; }
+  waiting.push(resolve);
+  channel.port2.postMessage(0);
+});
+
+/**
+ * A pause for work in the background while an MV plays (the next song prepared ahead): resumes when the page is idle
+ * after a frame, so the slices fit in the time the frames leave over (at the latest after half a second).
+ */
+export const whenIdle = (): Promise<void> => new Promise(resolve => {
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(() => resolve(), { timeout: 500 });
+  else setTimeout(resolve, 16);
+});
+
 export const WAVE_RATE = 22050;
 /** Oscilloscope music keeps its channels at this rate (its pictures are drawn up to several kHz); other songs at WAVE_RATE. */
 const XY_RATE = 44100;
 
-async function decodeMono(buffer: ArrayBuffer, rate = 22050): Promise<{ samples: Float32Array; duration: number }> {
-  const ctx = new OfflineAudioContext(1, 1, rate);
-  const audio = await ctx.decodeAudioData(buffer);
-  const out = new Float32Array(audio.length);
-  for (let c = 0; c < audio.numberOfChannels; c++) {
+/** The song at `rate`: the mix of its channels, its first two (a mono file gives the same signal twice), its length. */
+async function decode(buffer: ArrayBuffer, rate: number): Promise<{ mono: Float32Array; left: Float32Array; right: Float32Array; duration: number }> {
+  const audio = await new OfflineAudioContext(1, 1, rate).decodeAudioData(buffer);
+  // (The channel count in a local: read off the AudioBuffer inside the loop, it made this ten times slower.)
+  const mono = new Float32Array(audio.length), n = audio.numberOfChannels;
+  for (let c = 0; c < n; c++) {
     const ch = audio.getChannelData(c);
-    for (let i = 0; i < out.length; i++) out[i] += ch[i] / audio.numberOfChannels;
+    for (let i = 0; i < mono.length; i++) mono[i] += ch[i] / n;
   }
-  return { samples: out, duration: audio.duration };
+  const left = audio.getChannelData(0);
+  return { mono, left, right: audio.numberOfChannels > 1 ? audio.getChannelData(1) : left, duration: audio.duration };
 }
 
 /** Both channels at `rate` (a mono file gives the same signal twice). */
@@ -83,12 +112,22 @@ async function decodeStereo(buffer: ArrayBuffer, rate: number): Promise<{ left: 
 /** 16-bit channels scaled together to their peak, every `step`-th pair of samples averaged in (step 1 or 2). */
 function toStereo(left: Float32Array, right: Float32Array, rate: number, step: number): Stereo {
   let peak = 1e-6;
-  for (let i = 0; i < left.length; i++) peak = Math.max(peak, Math.abs(left[i]), Math.abs(right[i]));
+  for (let i = 0; i < left.length; i++) {
+    const a = Math.abs(left[i]), b = Math.abs(right[i]);
+    if (a > peak) peak = a;
+    if (b > peak) peak = b;
+  }
   const n = Math.floor(left.length / step), l = new Int16Array(n), r = new Int16Array(n), k = 32767 / peak / step;
-  for (let i = 0; i < n; i++) {
-    let a = 0, b = 0;
-    for (let j = 0; j < step; j++) { a += left[i * step + j]; b += right[i * step + j]; }
-    l[i] = Math.round(a * k); r[i] = Math.round(b * k);
+  // Math.round for |x| ≤ 32767 as floor(x + 0.5) by truncating a positive number (Math.round took 0.1 s a song here).
+  const round = (x: number) => ((x + 32768.5) | 0) - 32768;
+  if (step === 1) {
+    for (let i = 0; i < n; i++) { l[i] = round(left[i] * k); r[i] = round(right[i] * k); }
+  } else {
+    for (let i = 0; i < n; i++) {
+      let a = 0, b = 0;
+      for (let j = 0; j < step; j++) { a += left[i * step + j]; b += right[i * step + j]; }
+      l[i] = round(a * k); r[i] = round(b * k);
+    }
   }
   return { rate: rate / step, left: l, right: r };
 }
@@ -97,14 +136,16 @@ export async function prepareSong(input: SongInput, opts: PrepareOptions): Promi
   const t0 = performance.now();
   const check = () => { if (opts.cancelled?.()) throw new Cancelled(); };
   opts.onProgress?.('decode', 0);
-  const { samples, duration } = await decodeMono(input.audio.slice(0));
+  const { mono: samples, left, right, duration } = await decode(input.audio.slice(0), WAVE_RATE);
+  check();
+  await opts.pause();
   check();
   const lines = input.lyric ? parseNeteaseLyric(input.lyric, duration) : [];
   if (opts.refineLines && lines.length) await opts.refineLines(lines, duration);
   let analysis: Analysis;
   if (opts.analysis) analysis = await opts.analysis(lines);
   else {
-    const steps = analyzeSteps(samples, 22050, { lyrics: lines, bpmHint: input.wiki?.bpm });
+    const steps = analyzeSteps(samples, WAVE_RATE, { lyrics: lines, bpmHint: input.wiki?.bpm, chorusHint: input.chorus, sliceMs: opts.sliceMs });
     for (;;) {
       const r = steps.next();
       if (r.done) { analysis = r.value; break; }
@@ -122,11 +163,17 @@ export async function prepareSong(input: SongInput, opts: PrepareOptions): Promi
   const c2 = cv.getContext('2d', { willReadFrequently: true })!;
   c2.drawImage(input.cover, 0, 0, coverSize, coverSize);
   const coverPixels = c2.getImageData(0, 0, coverSize, coverSize).data;
-  // The channels kept for the oscilloscope (decoded again in stereo; the analysis above keeps its mono path).
-  const both = await decodeStereo(input.audio.slice(0), XY_RATE);
+  await opts.pause();
   check();
-  const xy = xyMusic(both.left, both.right, XY_RATE).xy;
-  const stereo = toStereo(both.left, both.right, XY_RATE, xy ? 1 : XY_RATE / WAVE_RATE);
+  // The channels kept for the oscilloscope come from the same decode. Only a song whose channels differ about as much
+  // as an oscilloscope piece's (xyMusic's first test; rare) is decoded again at XY_RATE for the full test and its pictures.
+  let xy = false, stereo: Stereo;
+  if (xyMusic(left, right, WAVE_RATE).side > 0.3) {
+    const both = await decodeStereo(input.audio.slice(0), XY_RATE);
+    check();
+    xy = xyMusic(both.left, both.right, XY_RATE).xy;
+    stereo = toStereo(both.left, both.right, XY_RATE, xy ? 1 : XY_RATE / WAVE_RATE);
+  } else stereo = toStereo(left, right, WAVE_RATE, 1);
   const cover = new THREE.Texture(input.cover);
   cover.colorSpace = THREE.SRGBColorSpace;
   cover.anisotropy = 8;

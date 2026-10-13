@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, inOutCubic, lerp, rng, smooth } from './types.ts';
 import { LyricRig } from './lyricRig.ts';
+import { voiceFaces } from './lyricBlock.ts';
 import { rgbToLab } from '../render/palette.ts';
 
 const G = 120;
@@ -110,6 +111,7 @@ export class Bokeh implements MvScene {
     points.frustumCulled = false;
     this.scene.add(points);
     this.rig = new LyricRig(palette, 'poem');
+    this.rig.faces = voiceFaces('ballad', init.seed);
     this.rig.frame = { vh: 7, vw: 11 };
     this.rig.focusable = true;
     this.scene.add(this.rig.group);

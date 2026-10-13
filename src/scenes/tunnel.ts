@@ -9,9 +9,10 @@
 // each line a hanging scroll to one side of the path that the camera glides past (the rig's world mode).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, lerp, rng, smooth } from './types.ts';
+import { clamp01, lerp, rng, smooth, punch } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
 import { LyricRig } from './lyricRig.ts';
+import { voiceFaces, voiceOpts } from './lyricBlock.ts';
 import { LyricGates, poseInTube } from './lyricSpace.ts';
 import { lastIndex } from '../director/music.ts';
 
@@ -98,8 +99,9 @@ export class Tunnel implements MvScene {
     this.scene.add(this.exit);
 
     this.rig = new LyricRig(palette, 'poem');
+    this.rig.faces = voiceFaces('ballad', init.seed);
     this.rig.frame = { vh: 5.6, vw: 9 };
-    this.gates = new LyricGates(palette, { style: 'hook', em: 0.7, maxW: 3.3, trans: { em: 0.24, vertical: false }, linger: 5 });
+    this.gates = new LyricGates(palette, { style: 'hook', em: 0.7, maxW: 3.3, trans: { em: 0.24, vertical: false }, linger: 5, ...voiceOpts('pulse', init.seed) });
     this.scene.add(this.soft ? this.rig.group : this.gates.group);
     this.resize(init.aspect);
   }
@@ -154,7 +156,7 @@ export class Tunnel implements MvScene {
 
     // Twist (rad per frame) and a whole-tunnel turn.
     const lastKickT = (() => { const i = lastIndex(this.kicks, t); return i >= 0 ? this.kicks[i] : -99; })();
-    let K = this.soft ? 0.004 + 0.006 * Math.sin(info.pos * Math.PI / 16) : 0.005 + 0.01 * energy + 0.012 * Math.exp(-(t - lastKickT) / 0.35) + 0.035 * build * build;
+    let K = this.soft ? 0.004 + 0.006 * Math.sin(info.pos * Math.PI / 16) : 0.005 + 0.01 * energy + 0.012 * punch(t - lastKickT, 0.35, 0.04) + 0.035 * build * build;
     K += 0.06 * whip * whip;
     const phi = (this.soft ? 0.05 : 0.12) * t - 1.6 * Math.pow(whip, 2.5);
 
@@ -166,11 +168,10 @@ export class Tunnel implements MvScene {
     if (shot.variant === 'wall') cam.position.addScaledVector(cb.r, 1.1 * sign).addScaledVector(cb.u, 0.5);
     cam.up.copy(cb.u);
     cam.lookAt(center(sCam + 7, new THREE.Vector3()));
-    let roll = 0.025 * Math.sin(t * 0.9);
-    if (shot.variant === 'roll') roll += (t - shot.start) * (this.soft ? 0.15 : 0.6) * sign;
-    roll += 0.5 * Math.pow(whip, 3);
-    cam.rotateZ(roll);
-    cam.fov = FOV + 8 * whip * whip + build * 8 - (info.inBar < 1 && !this.soft ? Math.exp(-info.inBar * 6) * 3 : 0);
+    // The roll camera keeps turning: the words turn with it (below) and read level instead of going round with the tunnel.
+    const spin = shot.variant === 'roll' ? (t - shot.start) * (this.soft ? 0.15 : 0.6) * sign : 0;
+    cam.rotateZ(0.025 * Math.sin(t * 0.9) + spin + 0.5 * Math.pow(whip, 3));
+    cam.fov = FOV + 8 * whip * whip + build * 8 - (info.inBar < 1 && !this.soft ? punch(info.inBar, 1 / 6, 0.12) * 3 : 0);
     cam.updateProjectionMatrix();
     cam.updateMatrixWorld();
 
@@ -299,7 +300,7 @@ export class Tunnel implements MvScene {
     if (this.soft) {
       this.rig.place = (root, st) => {
         const s = this.travel(st.line.start - 0.5, drive) + SCROLL, d = s - sCam, side = st.index % 2 ? 1 : -1, b = this.basis(s);
-        poseInTube(root, b.c, b.r, b.u, b.t, side * 0.85, 0.1, 0, side * 0.35);
+        poseInTube(root, b.c, b.r, b.u, b.t, side * 0.85, 0.1, spin, side * 0.35);
         return smooth((d - 0.6) / 1.6);
       };
       this.rig.onLight = false;
@@ -309,15 +310,15 @@ export class Tunnel implements MvScene {
         const s = this.travel(Math.min(tt, c.end), drive) + GATE, d = s - sCam;
         if (d < 0.25) return 0;
         const b = this.basis(s);
-        poseInTube(root, b.c, b.r, b.u, b.t, c.ordinal % 2 ? 0.28 : -0.28, -R * 0.12, 0.25 * K * (d / S));
+        poseInTube(root, b.c, b.r, b.u, b.t, c.ordinal % 2 ? 0.28 : -0.28, -R * 0.12, 0.25 * K * (d / S) + spin);
         // Once the next sign strikes, this one (nearer, so bigger) gives way rather than lie across it.
         return smooth((d - 0.3) / 1.2) * Math.exp(-d / 14) * (1 - smooth((tt - c.next + 0.08) / 0.25));
       }, (st, tt, root) => {
         const s = this.travel(Math.min(tt, lyrics.leaveAt(st.index)), drive) + GATE * 0.9, d = s - sCam;
         if (d < 0.25) return 0;
         const b = this.basis(s), side = st.index % 2 ? 1 : -1, [w, h] = root.userData.size as [number, number];
-        if (root.userData.vertical) poseInTube(root, b.c, b.r, b.u, b.t, side * 1.05, -0.35, 0.25 * K * (d / S), side * 0.5);
-        else poseInTube(root, b.c, b.r, b.u, b.t, 0, -R * 0.42, 0.25 * K * (d / S));
+        if (root.userData.vertical) poseInTube(root, b.c, b.r, b.u, b.t, side * 1.05, -0.35, 0.25 * K * (d / S) + spin, side * 0.5);
+        else poseInTube(root, b.c, b.r, b.u, b.t, 0, -R * 0.42, 0.25 * K * (d / S) + spin);
         root.scale.setScalar(Math.min(1, (root.userData.vertical ? 2.2 : 3.2) / Math.max(w, h)));
         return smooth((d - 0.5) / 1.6);
       });

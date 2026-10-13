@@ -75,6 +75,8 @@ function densAt(x: number, z: number): number {
 interface Building { x: number; z: number; w: number; d: number; h: number; y0: number; H: number; rot: number; seed: number; crown: number }
 
 /** The buildings round the downtowns: towers in the busy districts, mid-rises in a ring round each centre. */
+/** The same city for every song: generated once (~0.25 s) and kept. */
+let built: Building[] | null = null;
 function generate(): Building[] {
   const out: Building[] = [];
   const rnd = rng(1234);
@@ -137,7 +139,7 @@ function generate(): Building[] {
   return out;
 }
 
-const VERT = /* glsl */ `
+export const TOWER_VERT = /* glsl */ `
 precision highp float;
 in vec3 position;
 in vec3 normal;
@@ -163,7 +165,7 @@ void main() {
 }`;
 
 /** The facades; `glsl` brings the city's shared code (the atmosphere, the light colours, the surges). */
-const frag = (glsl: string) => /* glsl */ `
+export const towerFrag = (glsl: string) => /* glsl */ `
 precision highp float;
 precision highp int;
 in vec3 vW;
@@ -273,20 +275,22 @@ void main() {
   vI = 45.0 * blink * (size * size) / (ps * ps) * uLights * exp(-distance(uCam, wp) * 6e-5 * uHaze);
 }`;
 
-const lfrag = (signal: THREE.Color) => /* glsl */ `
+/** The aviation lights, in the cover's signal colour (uBeacon). */
+const LFRAG = /* glsl */ `
 precision highp float;
 in float vI;
+uniform vec3 uBeacon;
 out vec4 fragColor;
 void main() {
   vec2 d = gl_PointCoord - 0.5;
-  fragColor = vec4(vec3(${signal.r.toFixed(4)}, ${signal.g.toFixed(4)}, ${signal.b.toFixed(4)}) * vI * exp(-dot(d, d) * 14.0), 1.0);
+  fragColor = vec4(uBeacon * vI * exp(-dot(d, d) * 14.0), 1.0);
 }`;
 
 export class Towers {
   readonly group = new THREE.Group();
-  constructor(glsl: string, uniforms: Record<string, THREE.IUniform>, signal: THREE.Color) {
+  constructor(glsl: string, uniforms: Record<string, THREE.IUniform>) {
     const box = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
-    const bs = generate();
+    const bs = built ??= generate();
     const g = new THREE.InstancedBufferGeometry();
     g.index = box.index;
     g.setAttribute('position', box.getAttribute('position'));
@@ -298,7 +302,7 @@ export class Towers {
     g.setAttribute('iC', new THREE.InstancedBufferAttribute(C, 4));
     g.instanceCount = bs.length;
     // Drawn before the street carpet, writing depth, so the carpet's costly shading is skipped behind them.
-    const mesh = new THREE.Mesh(g, new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: VERT, fragmentShader: frag(glsl), uniforms, side: THREE.FrontSide }));
+    const mesh = new THREE.Mesh(g, new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: TOWER_VERT, fragmentShader: towerFrag(glsl), uniforms, side: THREE.FrontSide }));
     mesh.frustumCulled = false;
     mesh.renderOrder = -9;
     this.group.add(mesh);
@@ -317,7 +321,7 @@ export class Towers {
     lg.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
     lg.setAttribute('phase', new THREE.Float32BufferAttribute(ph, 1));
     const lights = new THREE.Points(lg, new THREE.RawShaderMaterial({
-      glslVersion: THREE.GLSL3, vertexShader: LVERT, fragmentShader: lfrag(signal), uniforms,
+      glslVersion: THREE.GLSL3, vertexShader: LVERT, fragmentShader: LFRAG, uniforms,
       blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
     }));
     lights.frustumCulled = false;

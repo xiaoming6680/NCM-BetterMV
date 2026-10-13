@@ -1,4 +1,5 @@
-// Dev page: the plugin's settings page as BetterNCM shows it, on a light and on a dark panel; with ?mv, the MV page
+// Dev page: the plugin's settings page as BetterNCM shows it, on a light and on a dark panel and as on BetterNCM's dark
+// skin (a ground that is not the page's ancestor, no colour handed down); with ?mv, the MV page
 // (a sketch standing in for the picture) and its controls, over a made-up play list (?long: names that don't fit;
 // ?demo: the picture the README and the releases show — the plugin's push tunnel, the original demo cover, made-up
 // tracks, the play list open). `plugin` is stood in for (settings kept in localStorage); the scene sketches come from
@@ -52,7 +53,7 @@ if (params.has('mv')) {
     onPlayAt: i => playAt(i),
     onDragWindow: log('drag'), onResizeWindow: log('resize'), onMinimize: log('minimize'),
     onToggleMaximize: () => { state.max = !state.max; overlay.maximized = state.max; },
-    settings: () => settingsView(config, c => console.log('config', JSON.stringify(c)), sketch, true, { id: 1, name: '示例歌曲' }),
+    settings: () => settingsView(config, c => console.log('config', JSON.stringify(c)), sketch, true, { id: 1, name: '示例歌曲' }, { reroll: log('reroll') }),
   });
   const playAt = (i: number) => {
     state.at = (i + tracks.length) % tracks.length;
@@ -83,7 +84,7 @@ if (params.has('mv')) {
   }
   (window as any).overlay = overlay;
 } else {
-  for (const id of ['light', 'dark']) {
+  for (const id of ['light', 'dark', 'bncm']) {
     const config = loadConfig();
     document.getElementById(id)!.append(settingsView(config, c => console.log('config', JSON.stringify(c)), sketch));
   }

@@ -4,12 +4,14 @@
 // ?off=drive,tunnel turns plates (or looks) off as the settings page does · ?look=riso|hibit|ascii puts every section
 // but the drops in that look, ?look=none none · ?demo keeps the song's timing but shows an original
 // cover and made-up words (for the settings page's scene sketches, tools/render-previews.ts) · ?audio=/devdata/x.flac
-// takes the audio from that file instead (a song NetEase hasn't finished caching).
+// takes the audio from that file instead (a song NetEase hasn't finished caching) · ?nochorus analyses without NetEase's
+// chorus mark (the analysis' chorus hint).
 // Keys: Space play/pause · ←/→ ±5 s · S back to the sample start · H hide the UI · D debug line · click the bar to seek.
 import { loadFonts } from '../render/text.ts';
 import { parseWiki } from '../meta/wiki.ts';
-import { prepareSong, styleFor } from '../app/prepare.ts';
+import { prepareSong, styleFor, yieldToPage } from '../app/prepare.ts';
 import { applyAlignment, jobKey, jobLines, needsAlignment, pcm16k } from '../plugin/aligner.ts';
+import { parseChorus } from '../plugin/source.ts';
 import { MvPlayer } from '../app/player.ts';
 import type { StyleId } from '../style/style.ts';
 import type { SceneId } from '../scenes/types.ts';
@@ -39,7 +41,6 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
-const nextTick = () => new Promise<void>(r => setTimeout(r, 0));
 
 const demo = params.has('demo');
 const DEMO_LINES = ['光从山的背面升起', '我们沿着隧道一直跑', '每一拍都是新的开始', '把夜色折成三角形', '远处的声音亮起来', '别停下 跟着节拍走', '世界在这一刻展开', '听见心跳的回声', '风把星星吹成线', '直到天亮也不回头'];
@@ -60,10 +61,12 @@ const fmt = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).p
 async function main() {
   const cover = overlay();
   cover.textContent = '加载中…';
-  const [, detail, wikiDoc, lyricDoc, audioBuf, img] = await Promise.all([
+  const [, detail, wikiDoc, chorusDoc, lyricDoc, audioBuf, img] = await Promise.all([
     loadFonts('/fonts/'),
     fetch(`/ncm/detail/${songId}`).then(r => r.json()),
     fetch(`/ncm/wiki/${songId}`).then(r => r.json()).catch(() => null),
+    // (?nochorus: the analysis without NetEase's chorus mark.)
+    params.has('nochorus') ? null : fetch(`/ncm/chorus/${songId}`).then(r => r.json()).catch(() => null),
     fetch(`/ncm/lyric/${songId}`).then(r => r.json()),
     fetch(params.get('audio') ?? `/ncm/audio/${songId}`).then(r => { if (!r.ok) throw new Error('这首歌不在网易云缓存里（先在网易云里完整播放一遍）'); return r.arrayBuffer(); }),
     loadImage(demo ? '/tools/previews/demo-cover.jpg' : `/ncm/cover/${songId}`),
@@ -74,10 +77,10 @@ async function main() {
   const useReference = songId === CLARITY && params.get('analysis') === 'reference';
   const song = await prepareSong(
     demo
-      ? { id: songId, name: '示例', artists: ['BetterMV'], audio: audioBuf, lyric: demoLyric(lyricDoc), wiki: wikiDoc ? parseWiki(wikiDoc) : undefined, cover: img }
-      : { id: songId, name: detail?.name, artists: detail?.artists, audio: audioBuf, lyric: lyricDoc, wiki: wikiDoc ? parseWiki(wikiDoc) : undefined, cover: img },
+      ? { id: songId, name: '示例', artists: ['BetterMV'], audio: audioBuf, lyric: demoLyric(lyricDoc), wiki: wikiDoc ? parseWiki(wikiDoc) : undefined, chorus: parseChorus(chorusDoc, songId), cover: img }
+      : { id: songId, name: detail?.name, artists: detail?.artists, audio: audioBuf, lyric: lyricDoc, wiki: wikiDoc ? parseWiki(wikiDoc) : undefined, chorus: parseChorus(chorusDoc, songId), cover: img },
     {
-      pause: nextTick,
+      pause: yieldToPage,
       onProgress: (stage, p) => { cover.textContent = stage === 'decode' ? '解码中…' : '分析中… ' + Math.round(p * 100) + '%'; },
       analysis: useReference ? async lines => fromReference(await fetch('/reference/audio.json').then(r => r.json()), lines) : undefined,
       // ?align: word times from the aligner pack, through the dev server (the plugin's job, lines and rules).
@@ -94,12 +97,16 @@ async function main() {
   );
   const style = styleFor(song, (params.get('style') as StyleId) || 'auto');
   const player = new MvPlayer(stage);
+  // ?film=0: without the finish (FinishShader), for before / after comparisons.
+  if (params.get('film') != null) player.engine.filmScale = Number(params.get('film'));
+  // ?lens=0: without depth of field and motion blur (src/render/lens.ts).
+  if (params.get('lens') != null) player.engine.lensScale = Number(params.get('lens'));
   // ?plate=ridges&variants=front,low: every shot on one plate (for reviewing a plate).
   const plate = params.get('plate') as SceneId | null;
   const off = new Set((params.get('off') || '').split(',').filter(Boolean) as SceneId[]);
   player.load(song, style, off, plate ? { scene: plate, variants: (params.get('variants') || 'front').split(',') } : undefined, (params.get('look') as LookId | 'none' | null) ?? undefined, 0, params.get('seed') ? Number(params.get('seed')) : undefined);
   cover.textContent = '准备画面…';
-  await player.warm(nextTick);
+  await player.warm(yieldToPage);
   window.addEventListener('resize', () => player.resize());
   const { analysis, duration, palette, choice, wiki } = song;
 
@@ -134,7 +141,7 @@ async function main() {
     `<div style="opacity:.8">${title}</div>` +
     `<div style="opacity:.7">风格：${style.name}${params.get('style') ? '（手动指定）' : `（自动：${choice.reason}）`} · 从 ${fmt(sampleAt)} 开始</div>` +
     `<div style="opacity:.55;font-size:12px">空格暂停 · ←/→ 快进快退 · S 回到开头 · H 隐藏界面 · D 调试信息</div>` +
-    `<div style="opacity:.45;font-size:12px">分析：${useReference ? 'Clarity 项目的手工分析（对照用）' : '插件自动分析'} · ${song.ms} ms · ${Math.round(analysis.bpm)} BPM（百科 ${wiki?.bpm ?? '—'}）· 鼓 ${choice.features.drumsPerSecond}/s</div>` +
+    `<div style="opacity:.45;font-size:12px">分析：${useReference ? 'Clarity 项目的手工分析（对照用）' : '插件自动分析'} · ${song.ms} ms · ${Math.round(analysis.namedBpm ?? analysis.bpm)} BPM（网格 ${Math.round(analysis.bpm)}，百科 ${wiki?.bpm ?? '—'}）· 鼓 ${choice.features.drumsPerSecond}/s</div>` +
     `<div style="opacity:.45;font-size:12px">百科：${wiki ? [...wiki.genres, ...wiki.tags].join(' · ') || '无标签' : '—'}</div>`;
   cover.onclick = () => { cover.remove(); audio.play(); };
   window.addEventListener('keydown', e => {

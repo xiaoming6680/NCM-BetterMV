@@ -5,9 +5,10 @@
 // when it tracks alongside; lying on the cover when it rises over it). The translation stands under the words.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { clamp01, inOutCubic, lerp, outExpo, rng, smooth } from './types.ts';
+import { clamp01, inOutCubic, lerp, outExpo, rng, smooth, punch } from './types.ts';
 import { textMesh, hasCjk } from '../render/text.ts';
 import type { LineState } from '../director/lyrics.ts';
+import { COLS, SpecRing, Spectrogram } from './viz.ts';
 
 const N = 192;
 const CELL = 0.36;
@@ -15,7 +16,16 @@ const W = N * CELL;
 const SPEED = 2.4; // world units per beat
 const RIPPLES = 8;
 const RIDE = 2.0; // a line's banner rides this far ahead (seconds of flight) until the camera catches up
+const NB = 64;
+/** Spectrum columns on the GPU (17 s): the field ahead is the next ten seconds or so of the song. */
+const RING = 1024;
+/** Seconds of the song behind and ahead of the camera kept in the ring. */
+const BACK = 2, AHEAD = 11;
 
+// The field is also the song coming at the camera, as the spectrum tube is: each row of columns ahead is a moment
+// still to come (the further, the later), and across it, out from the flight line, the bands run from the bass by
+// the valley walls to the treble far out. The field is let down to a dim relief and lit where the song is: where a
+// band will be loud its columns light up, their tops glowing; far ahead dimmer, going out behind the camera.
 const vertexShader = /* glsl */ `
   attribute vec2 aCell;
   attribute vec3 aColor;
@@ -24,8 +34,10 @@ const vertexShader = /* glsl */ `
   uniform float uHeight, uFlat, uKick, uSink, uIsland;
   uniform vec4 uRipples[${RIPPLES}];
   uniform vec3 uCam;
+  uniform sampler2D tSpec;
+  uniform float uNow, uNowZ, uColsPerUnit, uSpecOn;
   varying vec3 vColor, vNormal, vWorld;
-  varying float vTop, vRel, vLum;
+  varying float vTop, vRel, vLum, vSpec, vAge, vOn;
   // Same curve as Relief.flyer(): the flight line, as x for a world z.
   float pathX(float z) {
     float b = -z / ${SPEED.toFixed(4)};
@@ -48,7 +60,17 @@ const vertexShader = /* glsl */ `
     h += r * (0.8 + uHeight * 0.25) * (1.0 - uFlat * 0.7);
     h *= 1.0 + uKick * 0.3 * aLum * (1.0 - uFlat);
     // A valley along the flight line keeps the camera clear of the columns; the walls either side stay tall.
-    float valley = smoothstep(1.3, 4.8, abs(xz.x - pathX(xz.y)));
+    float off = abs(xz.x - pathX(xz.y));
+    float valley = smoothstep(1.3, 4.8, off);
+    // The song at this row (rows ahead of now are later) and this band (out from the flight line).
+    float c = uNow + (uNowZ - xz.y) * uColsPerUnit;
+    float s = texture2D(tSpec, vec2((clamp((off - 2.0) / 22.0, 0.0, 1.0) * ${(NB - 1).toFixed(1)} + 0.5) / ${NB.toFixed(1)}, (mod(c, ${RING.toFixed(1)}) + 0.5) / ${RING.toFixed(1)})).r;
+    float on = uSpecOn * (1.0 - max(uIsland, uFlat));
+    vSpec = smoothstep(0.55, 1.0, s) * on;
+    vOn = on;
+    vAge = (uNow - c) / ${COLS.toFixed(1)};
+    // (Light only, no lift: standing up, the columns filled the dark sky and the frame only got lighter; and one
+    // standing up into the lens filled the frame with a blur.)
     h *= mix(mix(0.2, 1.0, valley), 1.0, max(uIsland, uFlat));
     vec3 p = position;
     p.xz *= ${(CELL * 0.9).toFixed(4)};
@@ -64,9 +86,9 @@ const vertexShader = /* glsl */ `
 
 const fragmentShader = /* glsl */ `
   uniform vec3 uFog, uSignal, uCam, uKeyColor;
-  uniform float uFogDensity, uKick, uScanZ, uScan, uGlow;
+  uniform float uFogDensity, uKick, uScanZ, uScan, uGlow, uRest;
   varying vec3 vColor, vNormal, vWorld;
-  varying float vTop, vRel, vLum;
+  varying float vTop, vRel, vLum, vSpec, vAge, vOn;
   void main() {
     vec3 n = normalize(vNormal);
     float key = max(dot(n, normalize(vec3(-0.45, 0.8, 0.4))), 0.0);
@@ -75,6 +97,12 @@ const fragmentShader = /* glsl */ `
     col *= mix(0.3, 1.0, vRel) * mix(0.7, 1.0, vTop);
     // Compress the cover's brightest areas so only the signal accents reach the bloom threshold.
     col /= 1.0 + max(col.r, max(col.g, col.b)) * 0.35;
+    // With the sound on, the field is let down and lit where the song is: tops glowing in their own colour, the
+    // signal colour over the loudest; far ahead dimmer, behind going out. (No flare at now: here now is the whole
+    // near field, and lighting it up whited the frame.)
+    float lit = vAge < 0.0 ? 0.5 + 0.5 * exp(vAge * 0.4) : exp(-vAge * 0.8);
+    col *= mix(1.0, uRest + (1.1 - uRest) * vSpec * lit, vOn);
+    col += (vColor * 0.5 + uSignal * 0.5) * vTop * vSpec * vSpec * lit * 0.6;
     float band = exp(-pow((vWorld.z - uScanZ) / 0.55, 2.0)) * uScan;
     col += uSignal * (band * (0.6 + vTop * 1.6) + vTop * uKick * uGlow * smoothstep(0.55, 0.95, vLum) * 1.0);
     float d = length(vWorld - uCam);
@@ -94,9 +122,11 @@ export class Relief implements MvScene {
   private material: THREE.ShaderMaterial;
   private ripples = Array.from({ length: RIPPLES }, () => new THREE.Vector4());
   private banners = new Map<number, Banner>();
+  private ring: SpecRing;
 
   constructor(private init: SceneInit) {
     const { palette } = init;
+    this.ring = new SpecRing(Spectrogram.of(init.stereo, init.music.duration + 8, NB, 30), RING);
     this.scene.background = palette.ink.clone();
     const box = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
     const geometry = new THREE.InstancedBufferGeometry();
@@ -125,6 +155,9 @@ export class Relief implements MvScene {
         uSink: { value: 5 }, uIsland: { value: 0 }, uRipples: { value: this.ripples },
         uFog: { value: palette.ink.clone() }, uSignal: { value: palette.signal.clone() }, uCam: { value: new THREE.Vector3() },
         uKeyColor: { value: palette.paper.clone() }, uFogDensity: { value: 0.045 }, uScanZ: { value: 0 }, uScan: { value: 0 }, uGlow: { value: 1 },
+        tSpec: { value: this.ring.texture }, uNow: { value: 0 }, uNowZ: { value: 0 }, uColsPerUnit: { value: 1 }, uSpecOn: { value: init.stereo ? 1 : 0 },
+        // The field between the sounds: a light cover let down by half (it filled the frame), a dark one hardly.
+        uRest: { value: palette.light ? 0.5 : 0.8 },
       },
     });
     const mesh = new THREE.Mesh(geometry, this.material);
@@ -136,6 +169,10 @@ export class Relief implements MvScene {
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
+  }
+
+  keepUp(t: number): void {
+    this.ring.spec.prefetch(t, 0.8);
   }
 
   /** Where the flight line is at time t (camera height is added per shot). */
@@ -236,7 +273,7 @@ export class Relief implements MvScene {
     let fov = framing.fov;
     const cam = this.camera;
     // Downbeat punch, the bob of the beat, and (while heating up) a widening lens and a shake.
-    fov -= info.inBar < 1 ? Math.exp(-info.inBar * 6) * 2.5 * (0.4 + energy) : 0;
+    fov -= info.inBar < 1 ? punch(info.inBar, 1 / 6, 0.12) * 2.5 * (0.4 + energy) : 0;
     fov += build * 12;
     pos.y += Math.sin(info.pos * Math.PI) * 0.06 + kick * 0.05;
     const shake = build * build * 0.14 + kick * build * 0.1;
@@ -248,6 +285,12 @@ export class Relief implements MvScene {
     u.uFlat.value = flat;
     u.uIsland.value = island;
     this.updateRipples(t, energy, build);
+    // The song laid along the flight: now a few units ahead of the camera, a beat every SPEED units on from there.
+    const now = t * COLS;
+    this.ring.sync(Math.floor(now - BACK * COLS), Math.floor(now + AHEAD * COLS));
+    u.uNow.value = now;
+    u.uNowZ.value = p.z - 4;
+    u.uColsPerUnit.value = (COLS * 60) / Math.max(40, info.bpm) / SPEED;
 
     cam.fov = fov;
     cam.updateProjectionMatrix();
@@ -295,7 +338,7 @@ export class Relief implements MvScene {
     root.userData.lyrics = true;
     const cjk = hasCjk(state.line.text);
     const h = cjk ? 0.78 : 0.72, gap = cjk ? h * 0.1 : h * 0.3, maxW = 10;
-    const meshes = state.line.words.map(w => textMesh(w.text, 'display', h, { px: 180 }));
+    const meshes = state.line.words.map(w => textMesh(w.text, 'condensed', h, { px: 180 }));
     const widths = meshes.map(m => m.userData.width as number);
     const rows: number[][] = [[]];
     let acc = 0;

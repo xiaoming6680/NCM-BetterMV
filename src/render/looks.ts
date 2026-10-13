@@ -9,6 +9,9 @@
 //   ascii  the picture made of characters — the song's own (the lyrics' characters sorted by how much ink they take),
 //          or a Latin ramp for songs without them — each cell's glyph picked by its brightness, in its colour.
 //   crt    the picture on a curved tube: scanlines, an RGB grille, a black bezel with rounded corners.
+//   vhs    the picture played off a tape: soft luma, colour far softer and smeared late to the right, lines that waver,
+//          a tracking band rolling up the frame with snow in it, the head switch tearing the bottom lines, blacks
+//          lifted and whites rolled off. The words stay on the tape (the wavering is small; they read).
 // With ascii, riso or hibit on, the lyrics and the motion-graphics layer are drawn apart (ShotPass.split) so the sung line
 // stays readable: over characters and pixels they lie flat and clean, off the glass (the engine's rule: subtitles stay outside
 // the tube); on a print they are printed solid in the set's deepest ink, with the next ink a touch off register
@@ -150,7 +153,8 @@ const vertexShader = /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Po
 
 const fragmentShader = /* glsl */ `
   uniform sampler2D tDiffuse, tLyr, tAtlas;
-  uniform float uRiso, uRisoPos, uHibit, uAscii, uCrt, uSplit, uTime, uGlyphs, uGlyphAspect;
+  uniform float uRiso, uRisoPos, uHibit, uAscii, uCrt, uVhs, uSplit, uTime, uGlyphs, uGlyphAspect, uBox;
+  uniform vec3 uBoxInk;
   uniform vec2 uRes;
   uniform vec3 risoPaper, risoInk0, risoInk1, risoInk2, risoDeep, risoSecond;
   uniform mat3 risoM;
@@ -164,6 +168,33 @@ const fragmentShader = /* glsl */ `
   }
   // The device-pixel size of the frame's height / 1080 (patterns keep their size at every resolution).
   float unit() { return uRes.y / 1080.0; }
+
+  // ---- VHS: the picture off a tape (after the base engine's post) ----
+  vec3 toYiq(vec3 c) { return vec3(dot(c, vec3(0.299, 0.587, 0.114)), dot(c, vec3(0.596, -0.274, -0.322)), dot(c, vec3(0.211, -0.523, 0.312))); }
+  vec3 fromYiq(vec3 y) { return vec3(y.x + 0.956 * y.y + 0.621 * y.z, y.x - 0.272 * y.y - 0.647 * y.z, y.x - 1.106 * y.y + 1.703 * y.z); }
+  vec3 vhs(vec2 uv) {
+    float fi = floor(uTime * 30.0), u = unit();
+    float row = floor(uv.y * uRes.y / (2.0 * u));
+    // The lines waver a little, and a tracking band rolls up the frame dragging its lines sideways.
+    uv.x += sin(uv.y * 38.0 + fi * 0.21) * 0.0014 + (hash12(vec2(row, fi)) - 0.5) * 0.0016;
+    // (Not always there: it rolls through for a while every few seconds, as a tape's tracking drifts.)
+    float band = smoothstep(0.04, 0.0, abs(uv.y - fract(fi * 0.006 + 0.15))) * smoothstep(0.45, 0.6, sin(fi * 0.012) * 0.5 + 0.5);
+    uv.x += band * (hash12(vec2(floor(uv.y * uRes.y / (3.0 * u)), fi)) - 0.5) * 0.035;
+    // The head switch tears the bottom lines.
+    uv.x += step(uv.y, 0.025) * (hash12(vec2(floor(uv.y * uRes.y / u), fi + 7.0)) - 0.3) * 0.03;
+    // Soft luma (a tape holds some 250 lines across); the colour far softer, smeared to the right and late.
+    vec2 px = vec2(u / uRes.x, 0.0);
+    vec3 l = vec3(0.0);
+    for (int i = -2; i <= 2; i++) l += texture2D(tDiffuse, uv + px * float(i) * 1.2).rgb;
+    vec2 ch = vec2(0.0);
+    for (int i = 0; i < 6; i++) ch += toYiq(texture2D(tDiffuse, uv - px * (float(i) * 2.5 + 3.0)).rgb).yz;
+    vec3 c = max(fromYiq(vec3(toYiq(l / 5.0).x, ch / 6.0 * 0.85)), 0.0);
+    // Tape tone: blacks lifted, whites rolled off, a faint magenta cast.
+    c = (0.035 + c * 0.9) * vec3(1.03, 0.97, 1.04);
+    // Snow in the tracking band, a little everywhere.
+    float nz = hash12(vec2(floor(uv.x * uRes.x / (3.0 * u)), row) + fi * 31.0);
+    return mix(c, vec3(nz), band * 0.3) + (nz - 0.5) * 0.03;
+  }
 
   // ---- Hi-bit: the colour of the block a point falls in ----
   float blockPx() { return max(3.0, floor(5.0 * unit() + 0.5)); }
@@ -257,6 +288,7 @@ const fragmentShader = /* glsl */ `
     }
     vec2 uv = glass;
     vec3 col = uHibit > 0.0 ? blockColour(uv) : texture2D(tDiffuse, uv).rgb;
+    if (uVhs > 0.0) col = mix(col, vhs(uv), uVhs);
     if (uAscii > 0.0) col = mix(col, ascii(uv), uAscii);
     if (uRiso > 0.0) col = mix(col, riso(glass), uRiso);
     if (uHibit > 0.0) {
@@ -289,6 +321,9 @@ const fragmentShader = /* glsl */ `
       col *= mix(1.0, smoothstep(0.0, -0.09, dB) * 0.35 + 0.65, uCrt);
       col *= 1.0 - smoothstep(-0.002, 0.002, dB) * uCrt;
     }
+    // The letterbox, redrawn in the medium (the bars drawn under the overlay are printed over or turned to glyphs):
+    // solid in the deepest ink on a print, the cover's ink elsewhere; the words and motion graphics go over it.
+    if (vUv.y < uBox || vUv.y > 1.0 - uBox) col = uRiso > 0.0 ? risoDeep : uBoxInk;
     // The words and the motion graphics (linear, premultiplied): clean over characters, printed solid on paper.
     if (uSplit > 0.5) {
       vec4 w = texture2D(tLyr, vUv);
@@ -309,7 +344,7 @@ const fragmentShader = /* glsl */ `
   }`;
 
 /** The look settings a frame carries (Fx), 0..1 each; the riso inks and the glyphs are per song. */
-export interface LookFx { riso: number; risoPositive: number; hibit: number; ascii: number; crt: number }
+export interface LookFx { riso: number; risoPositive: number; hibit: number; ascii: number; crt: number; vhs: number; letterbox: number }
 
 export class LookPass extends Pass {
   private quad: FullScreenQuad;
@@ -323,10 +358,11 @@ export class LookPass extends Pass {
       vertexShader, fragmentShader, depthTest: false, depthWrite: false,
       uniforms: {
         tDiffuse: { value: null }, tLyr: { value: null }, tAtlas: { value: null },
-        uRiso: { value: 0 }, uRisoPos: { value: 0 }, uHibit: { value: 0 }, uAscii: { value: 0 }, uCrt: { value: 0 }, uSplit: { value: 0 }, uTime: { value: 0 },
+        uRiso: { value: 0 }, uRisoPos: { value: 0 }, uHibit: { value: 0 }, uAscii: { value: 0 }, uCrt: { value: 0 }, uVhs: { value: 0 }, uSplit: { value: 0 }, uTime: { value: 0 },
         uGlyphs: { value: 2 }, uGlyphAspect: { value: 1 }, uRes: { value: new THREE.Vector2(1920, 1080) },
         risoPaper: { value: new THREE.Vector3(1, 1, 1) }, risoDeep: { value: new THREE.Vector3() }, risoSecond: { value: new THREE.Vector3() }, risoInk0: { value: new THREE.Vector3() }, risoInk1: { value: new THREE.Vector3() }, risoInk2: { value: new THREE.Vector3() },
         risoM: { value: new THREE.Matrix3() }, risoN: { value: 0 },
+        uBox: { value: 0 }, uBoxInk: { value: new THREE.Vector3() },
       },
     });
     this.quad = new FullScreenQuad(this.material);
@@ -334,6 +370,8 @@ export class LookPass extends Pass {
 
   /** Per song: the riso inks nearest its palette and the glyphs from its lyrics. */
   setSong(palette: Palette, lyricText: string): void {
+    const ink = palette.ink.clone().convertLinearToSRGB();
+    (this.material.uniforms.uBoxInk.value as THREE.Vector3).set(ink.r, ink.g, ink.b);
     const k = risoInksFor(palette);
     if (k !== this.inks) {
       const r = risoSet(k), u = this.material.uniforms;
@@ -364,6 +402,8 @@ export class LookPass extends Pass {
     u.uHibit.value = fx.hibit;
     u.uAscii.value = this.atlas ? fx.ascii : 0;
     u.uCrt.value = fx.crt;
+    u.uVhs.value = fx.vhs;
+    u.uBox.value = 0.128 * fx.letterbox;
     u.uTime.value = t;
     u.uSplit.value = lyr ? 1 : 0;
     u.tLyr.value = lyr;

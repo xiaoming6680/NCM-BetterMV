@@ -158,6 +158,25 @@ export function listTrack(item: any): { name: string; artists: string[]; duratio
   return { name: String(t.name ?? item?.name ?? ''), artists, duration: Number(t.duration ?? t.dt ?? 0) / 1000 || 0 };
 }
 
+/**
+ * The song NetEase will play after this one, when the play list tells: the next entry in list order (back to the first
+ * when the list repeats). Null for one-song repeat, shuffle, FM and AI modes, at the end of the list, and for an entry
+ * that isn't an online song with a cover.
+ */
+export function nextSong(store: Store): PlayingSong | null {
+  const mode = playMode(store);
+  if (mode !== 'playOrder' && mode !== 'playCycle') return null;
+  const list = playList(store), at = playingIndex(store, list);
+  if (at < 0) return null;
+  const i = at + 1 < list.length ? at + 1 : mode === 'playCycle' ? 0 : -1;
+  const item = list[i], t = item?.track;
+  if (i < 0 || i === at || !t || item.resourceType === 'voice') return null;
+  const id = Number(t.id), cover = String(t.al?.picUrl ?? t.album?.picUrl ?? '');
+  if (!(id > 0) || !cover) return null;
+  const { name, artists, duration } = listTrack(item);
+  return { id, name, artists, cover, duration, local: false };
+}
+
 /** Play an entry of the play list, as a click in NetEase's own list does. */
 export function playItem(store: Store, item: unknown): void {
   store.dispatch({ type: 'playing/playOneTrackInPlayingList', payload: { item, flag: 0, switchType: 'call', triggerScene: 'playingList' } });

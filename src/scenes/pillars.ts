@@ -10,9 +10,10 @@
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { rng, smooth } from './types.ts';
-import { LyricGates } from './lyricSpace.ts';
+import { LyricBlocks, Stands, voiceFor } from './lyricBlock.ts';
 import { lastIndex, type Music } from '../director/music.ts';
 import type { LyricLine, SectionLabel } from '../types.ts';
+import { COLS, Spectrogram } from './viz.ts';
 
 /** Pillars per side of the grid (the disc takes the circle inside it). */
 const N = 256;
@@ -22,6 +23,8 @@ const SP = (2 * R) / N;
 /** How much the dome rises at its middle. */
 const DOME = 6;
 const RINGS = 32;
+/** Spectrum bands laid out from the middle (bass) to the rim (treble). */
+const NB = 64;
 const LOUD = new Set<SectionLabel>(['chorus', 'drop']);
 
 const v3 = (c: THREE.Color, k = 1) => `vec3(${(c.r * k).toFixed(5)},${(c.g * k).toFixed(5)},${(c.b * k).toFixed(5)})`;
@@ -135,7 +138,8 @@ void main() {
     if (a.w <= 0.0) continue;
     float age = a.z;
     float rad = b.x * (1.0 - exp(-age / b.y));
-    float w = 0.45 + 0.085 * rad;
+    // (A crisp front, a pillar or two wide, that only softens as it spreads.)
+    float w = 0.35 + 0.05 * rad;
     float d = length(xz - a.xy);
     float front = exp(-pow((d - rad) / w, 2.0));
     float inside = smoothstep(rad + w, rad - w, d);
@@ -168,7 +172,7 @@ precision highp float;
 in vec3 position;
 in vec3 normal;
 uniform mat4 projectionMatrix, viewMatrix;
-uniform sampler2D uState;
+uniform sampler2D uState, uSpec;
 uniform vec3 uCam;
 // (Centroid: seen from above the pillars' sides are slivers, and with multisampling a colour taken off the
 // triangle ran away to hundreds — one such pixel, kept by the light trails, spread over the whole frame as white.)
@@ -182,21 +186,30 @@ void main() {
   float r = length(xz) / ${R.toFixed(1)};
   if (r > 1.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   vec4 st = texelFetch(uState, g, 0);
-  float rnd = hash12(vec2(g) * 1.37);
-  // At rest: low, uneven, the odd tall one with a bright tip.
-  float rest = 0.15 + 0.5 * n2(xz * 0.09 + 3.1) + 0.15 * rnd;
+  float rnd = hash12(vec2(g) * 1.37), rnd2 = hash12(vec2(g) * 2.91 + 4.0), rnd3 = hash12(vec2(g) * 0.53 + 7.0);
+  // The spectrum, out from the middle: the bass at the centre, the treble at the rim. Each pillar stands up as a
+  // needle of light while its band is louder than its own threshold, so how densely the needles stand is how loud
+  // that band is — the disc shimmers with the music under the rings, and goes dark when it does.
+  float band = clamp(r * 0.92 + (rnd2 - 0.5) * 0.1, 0.0, 1.0);
+  float s = texture(uSpec, vec2((band * ${(NB - 1).toFixed(1)} + 0.5) / ${NB.toFixed(1)}, 0.5)).r;
+  float on = smoothstep(0.1 + rnd3 * 0.85, 0.16 + rnd3 * 0.85, s);
+  // At rest: low and rough, each pillar its own height (a pelt, not a surface), the odd tall one with a bright tip.
+  float rest = 0.08 + 0.22 * n2(xz * 0.09 + 3.1) + 0.5 * rnd * rnd;
   float lone = step(0.999, hash12(vec2(g) * 0.71 + 9.0));
   float edge = 1.0 - smoothstep(0.8, 1.0, r);
-  float h = ((rest + lone * 1.6) * mix(0.4, 1.0, edge) + st.r) * edge + 0.03;
+  float h = ((rest + lone * 1.6 + on * (0.4 + 2.2 * s * (0.4 + 0.6 * rnd2))) * mix(0.4, 1.0, edge) + st.r) * edge + 0.03;
   float y0 = ${DOME.toFixed(1)} * (1.0 - r * r);
-  float wide = ${(SP * 0.62).toFixed(4)} * (1.0 - lone * 0.55);
+  float wide = ${(SP * 0.62).toFixed(4)} * (1.0 - lone * 0.55) * (1.0 - on * 0.55);
   vec3 p = vec3(xz.x + position.x * wide, y0 + position.y * h, xz.y + position.z * wide);
   gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
   // Brighter up the pillar; its top brightest; the lone ones' tips white.
   float up = position.y;
-  // (Cold pillars are dim: the disc lights where the rings have been.)
-  float lit = 0.45 + 0.55 * smoothstep(0.0, 0.7, st.g + st.b);
+  // (Cold pillars are near dark: the disc lights where the rings have been and where the music stands it up.)
+  float lit = 0.12 + 0.88 * smoothstep(0.0, 0.7, st.g + st.b);
   vec3 c = ramp(st.g, st.b) * (0.12 + 0.88 * pow(up, 1.8)) * lit;
+  // A standing needle: a dim stem in its band's colour (bass the second colour, treble the main) and a hot tip.
+  vec3 needle = mix(WARM * 1.6, HOT, smoothstep(0.1, 0.75, band));
+  c += mix(needle, WHITE, 0.45 * pow(up, 8.0)) * on * (0.04 + 1.8 * pow(up, 7.0)) * (0.5 + 0.8 * s);
   if (normal.y > 0.5) c *= 1.4;
   c = mix(c * (1.0 - lone * 0.5), WHITE * 0.9, lone * smoothstep(0.88, 1.0, up) * 0.85);
   c *= mix(0.25, 1.0, edge);
@@ -277,18 +290,30 @@ export class Pillars implements MvScene {
   private ringT: Float64Array;
   private stateRT = new THREE.WebGLRenderTarget(N, N, { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false });
   private stateScene = new THREE.Scene();
+  get offscreen(): THREE.Object3D[] { return [this.stateScene]; }
   private stateCam = new THREE.Camera();
   private A = Array.from({ length: RINGS }, () => new THREE.Vector4());
   private B = Array.from({ length: RINGS }, () => new THREE.Vector4());
   private stateU: Record<string, THREE.IUniform>;
   private u: Record<string, THREE.IUniform>;
   private skyU: Record<string, THREE.IUniform>;
-  private gates: LyricGates;
+  private blocks: LyricBlocks;
+  /** Lines stand over the disc, in the dark above it, in turn high left and lower right. */
+  private stands = new Stands([[-0.15, 0.22], [0.15, 0.12]]);
   private soft: boolean;
+  private spec: Spectrogram;
+  private specData = new Uint8Array(NB);
+  private specV = new Float32Array(NB);
+  private specMean = new Float32Array(NB);
+  private specTex = new THREE.DataTexture(this.specData, NB, 1, THREE.RedFormat, THREE.UnsignedByteType);
 
   constructor(init: SceneInit, look: 'pulse' | 'ballad' = 'pulse', seed = 1) {
     const { palette, music } = init;
     this.soft = look === 'ballad';
+    // (The same spectrogram the other plates read: one FFT per column for the whole MV.)
+    this.spec = Spectrogram.of(init.stereo, music.duration + 8, NB, 30);
+    this.specTex.minFilter = this.specTex.magFilter = THREE.LinearFilter;
+    this.specTex.needsUpdate = true;
     this.scene.background = palette.ink.clone().multiplyScalar(0.1);
     this.rings = ringsOf(music, init.lyrics.lines, seed, this.soft);
     this.ringT = Float64Array.from(this.rings, r => r.t);
@@ -303,7 +328,7 @@ export class Pillars implements MvScene {
     quad.frustumCulled = false;
     this.stateScene.add(quad);
 
-    this.u = { uState: { value: this.stateRT.texture }, uCam: { value: new THREE.Vector3() } };
+    this.u = { uState: { value: this.stateRT.texture }, uSpec: { value: this.specTex }, uCam: { value: new THREE.Vector3() } };
     // A unit pillar: four sides and a top, x and z in ±0.5, y 0..1.
     const box = new THREE.BoxGeometry(1, 1, 1);
     box.translate(0, 0.5, 0);
@@ -335,8 +360,8 @@ export class Pillars implements MvScene {
     };
     this.scene.add(sky);
 
-    this.gates = new LyricGates(palette, { style: this.soft ? 'poem' : 'hook', em: 2.6, maxW: 34, trans: { em: 1.05, vertical: false }, linger: 6 });
-    this.scene.add(this.gates.group);
+    this.blocks = new LyricBlocks(palette, music, { voice: voiceFor(look, init.seed), em: 2.6, maxW: this.soft ? 11 : 13, trans: 0.48, scrim: 0.45, dust: [0, 1.5, 0] });
+    this.scene.add(this.blocks.group);
 
     this.scene.onBeforeRender = renderer => {
       const prev = renderer.getRenderTarget();
@@ -350,6 +375,37 @@ export class Pillars implements MvScene {
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
+    this.blocks.setAspect(aspect);
+  }
+
+  keepUp(t: number): void {
+    this.spec.prefetch(t, 0.8);
+  }
+
+  /**
+   * What the needles stand to at time t, per band: mostly how much louder the band is than over the last second (a
+   * note, a hit — a band held loud through a drop goes quiet again rather than standing as a solid field), plus a
+   * little for the very loudest; each band's peak of the last 0.1 s, held and let go over that time (a pure function
+   * of t, like everything else), lightly blurred across neighbouring bands.
+   */
+  private spectrumAt(t: number): void {
+    const out = this.specData, c0 = Math.floor(t * COLS), gain = this.soft ? 0.85 : 1;
+    const v = this.specV.fill(0), mean = this.specMean.fill(0);
+    for (let k = 0; k < 7; k++) {
+      const col = this.spec.column(c0 - k), fall = Math.exp(-k / 3.5);
+      for (let b = 0; b < NB; b++) v[b] = Math.max(v[b], col[b] * fall);
+    }
+    for (let k = 4; k < COLS; k += 2) {
+      const col = this.spec.column(c0 - k);
+      for (let b = 0; b < NB; b++) mean[b] += col[b] / ((COLS - 4) / 2);
+    }
+    for (let b = 0; b < NB; b++) {
+      const s = 0.25 * v[Math.max(0, b - 1)] + 0.5 * v[b] + 0.25 * v[Math.min(NB - 1, b + 1)];
+      const m = 0.25 * mean[Math.max(0, b - 1)] + 0.5 * mean[b] + 0.25 * mean[Math.min(NB - 1, b + 1)];
+      const n = 2.2 * Math.max(0, s - m - 0.03) + 0.4 * smooth((s - 0.72) / 0.28);
+      out[b] = Math.round(Math.min(1, n * gain) * 255);
+    }
+    this.specTex.needsUpdate = true;
   }
 
   /** orbit: oblique, slowly circling; low: across the disc, the pillars large in front; top: from above, turning. */
@@ -397,20 +453,16 @@ export class Pillars implements MvScene {
     for (let i = m; i < RINGS; i++) this.A[i].set(0, 0, 0, 0);
     this.stateU.uWarm.value = (loud ? 0.08 : 0.02) + 0.08 * music.env('rms', t) * (this.soft ? 0.7 : 1);
     this.stateU.uT.value = t;
+    this.spectrumAt(t);
 
-    const p = new THREE.Vector3(), q = new THREE.Quaternion();
-    const at = (time: number, lift: number, root: THREE.Object3D) => {
-      this.pose(time, shot, p, q);
-      const fw = new THREE.Vector3(0, 0, -1).applyQuaternion(q), up = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
-      root.position.copy(p).addScaledVector(fw, 30).addScaledVector(up, lift);
-      root.quaternion.copy(q);
-    };
-    this.gates.update(ctx.lyrics, t, sec.energy, (c, time, root) => {
-      at(Math.min(time, c.end), c.ordinal % 2 ? 3.6 : 6.4, root);
-      return smooth((time - c.start + 0.12) / 0.25) * (1 - smooth((time - Math.min(c.next - 0.05, c.end + 4)) / 0.25));
-    }, (state, time, root) => {
-      at(Math.min(time, state.line.end), 1.6, root);
-      return 1 - smooth((time - state.line.end - 0.3) / 0.5);
+    // The words: each line one block standing over the disc, where the slowly circling camera keeps it in view while
+    // it is sung (lyricBlock.ts); the camera turning past it shows it standing in the world.
+    const view = { reach: 30, far: 42, fov: cam.fov, aspect: cam.aspect, em: this.soft ? 0.064 : 0.068 };
+    const pose = (time: number, pp: THREE.Vector3, qq: THREE.Quaternion) => this.pose(time, shot, pp, qq);
+    this.blocks.update(ctx.lyrics, t, sec.energy, (st, time, root, leave, size) => {
+      const s = this.stands.get(shot.start, st, leave, pose, 2.6, view, size);
+      s.apply(time, root);
+      return smooth((s.depth(time) - 8) / 6);
     });
 
     ctx.fx.bloom = 0.45;

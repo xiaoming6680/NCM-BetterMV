@@ -6,22 +6,33 @@
 // in the swarm.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, inOutCubic, lerp, outExpo, rng, smooth } from './types.ts';
+import { clamp01, inOutCubic, lerp, outExpo, rng, smooth, punch } from './types.ts';
 import { LyricLayer } from './lyricSpace.ts';
+import { voiceFaces } from './lyricBlock.ts';
+import { COLS, SpecRing, Spectrogram } from './viz.ts';
 
 const M = 48;
 const SIZE = 16;
+const NB = 64;
+const RING = 256;
+/** Seconds of the song from the wall's middle out to its corners. */
+const SPAN = 2.2;
 
+// The standing wall carries the sound too: out from its middle a shard is further back in time (each sound runs out
+// across the wall as a wave), round the middle the bands run from the bass at the bottom to the treble at the top.
+// Where the wave is loud the shards stand out from the wall, their rims burning; at rest the wall is a shade down, so
+// a light cover no longer fills the frame flat.
 const vertexShader = /* glsl */ `
   attribute vec3 aCenter;
   attribute vec4 aRand;
   attribute vec2 aCell;
   attribute vec3 aBary;
   uniform float uExplode, uTime, uFlip, uKick, uSpin, uShake, uPattern, uHoldTilt, uHoldYaw;
-  uniform sampler2D uLyric;
+  uniform sampler2D uLyric, tSpec;
   uniform vec4 uLyricRect;
-  uniform float uLyricOn;
+  uniform float uLyricOn, uNow, uSpecOn;
   varying vec2 vUv;
+  varying float vLift;
   // How much type is printed at a point of the wall (the glyphs' light, not their dark bed).
   float ink(vec2 wall) {
     vec2 q = (wall - uLyricRect.xy) / uLyricRect.zw + 0.5;
@@ -59,6 +70,15 @@ const vertexShader = /* glsl */ `
     float e = uExplode * (1.0 - held);
     vec3 dir = normalize(vec3(aRand.x - 0.5, aRand.y - 0.5, aRand.z * 0.9 + 0.15));
     vec3 pc = aCenter + dir * e * (5.0 + aRand.w * 24.0);
+    // The sound's wave across the standing wall (per shard: read at its centre), not on the shards holding the words.
+    float r0 = length(aCenter.xy);
+    float x = (acos(clamp(-aCenter.y / max(r0, 1e-3), -1.0, 1.0)) / 3.14159265 * ${(NB - 1).toFixed(1)} + 0.5) / ${NB.toFixed(1)};
+    float c = uNow - r0 / ${(SIZE * 0.7071).toFixed(3)} * ${(SPAN * COLS).toFixed(1)};
+    #define SPEC(dc) texture2D(tSpec, vec2(x, (mod(c - (dc), ${RING.toFixed(1)}) + 0.5) / ${RING.toFixed(1)})).r
+    float s = SPEC(0.0), rise = max(0.0, s - 0.25 * (SPEC(8.0) + SPEC(16.0) + SPEC(24.0) + SPEC(32.0)) - 0.02);
+    vLift = clamp(0.4 * smoothstep(0.55, 1.0, s) + 1.3 * smoothstep(0.02, 0.3, rise), 0.0, 1.0) * uSpecOn * (1.0 - uExplode) * (1.0 - step(0.5, held));
+    pc.z += vLift * (0.5 + 0.9 * aRand.y);
+    local = rot(vec3(aRand.y - 0.5, aRand.x - 0.5, 0.0) + vec3(1e-3), vLift * 0.6) * local;
     float swirl = e * (uTime * 0.16 * (0.4 + aRand.w) + aRand.z * 0.6) * uSpin;
     float cs = cos(swirl), sn = sin(swirl);
     pc = vec3(pc.x * cs - pc.z * sn, pc.y, pc.x * sn + pc.z * cs);
@@ -85,14 +105,16 @@ const fragmentShader = /* glsl */ `
   uniform vec4 uLyricRect;
   uniform float uLyricOn;
   uniform vec3 uSignal, uAccent, uPaper, uInk;
-  uniform float uExplode, uKick, uHat, uEdge, uTime;
+  uniform float uExplode, uKick, uHat, uEdge, uTime, uSpecOn;
   varying vec2 vUv;
   varying vec3 vBary;
-  varying float vRand, vHeld;
+  varying float vRand, vHeld, vLift;
   void main() {
     // Backs: dark glass tinted by the signal (a few by the accent); the rim does the shining.
     vec3 back = mix(uInk * 1.6, mix(uSignal, uAccent, step(0.8, vRand)), 0.18 + 0.5 * (1.0 - uExplode) + 0.1 * vRand);
     vec3 col = gl_FrontFacing ? texture2D(uCover, vUv).rgb : back;
+    // The standing wall a shade down, lit where the sound's wave stands its shards out.
+    if (gl_FrontFacing) col *= mix(1.0, mix(0.68, 1.12, vLift), uSpecOn * (1.0 - uExplode));
     // The words, printed on the face of the wall (rect: centre and size in wall units).
     vec2 q = ((vUv - 0.5) * ${SIZE.toFixed(1)} - uLyricRect.xy) / uLyricRect.zw + 0.5;
     if (gl_FrontFacing && uLyricOn > 0.5 && q.x > 0.0 && q.x < 1.0 && q.y > 0.0 && q.y < 1.0) {
@@ -102,7 +124,7 @@ const fragmentShader = /* glsl */ `
     float edge = min(min(vBary.x, vBary.y), vBary.z);
     vec3 rim = gl_FrontFacing ? uPaper * 1.4 : mix(uSignal, uPaper, 0.3) * 1.6;
     // (The held shards carrying the words keep quiet: no rims, no kick, no sparkle to wash the type out.)
-    col = mix(col, rim, (1.0 - smoothstep(0.0, 0.03 + 0.05 * uExplode, edge)) * uEdge * (1.0 - 0.9 * vHeld));
+    col = mix(col, rim, (1.0 - smoothstep(0.0, 0.03 + 0.05 * uExplode + 0.04 * vLift, edge)) * min(1.0, uEdge + vLift * 0.8) * (1.0 - 0.9 * vHeld));
     col *= 1.0 + uKick * uExplode * 0.4 * (1.0 - vHeld);
     col += uPaper * step(0.94, fract(vRand * 91.7 + floor(uTime * 9.0) * 0.37)) * uHat * uExplode * 2.5 * (1.0 - vHeld);
     gl_FragColor = vec4(col, 1.0);
@@ -114,9 +136,11 @@ export class Shatter implements MvScene {
   private material: THREE.ShaderMaterial;
   private dust: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
   private layer: LyricLayer;
+  private ring: SpecRing;
 
   constructor(private init: SceneInit) {
     const { palette } = init;
+    this.ring = new SpecRing(Spectrogram.of(init.stereo, init.music.duration + 8, NB, 30), RING);
     this.scene.background = palette.ink.clone();
     const tris = M * M * 2;
     const pos = new Float32Array(tris * 9), uv = new Float32Array(tris * 6), center = new Float32Array(tris * 9);
@@ -158,6 +182,7 @@ export class Shatter implements MvScene {
         uPaper: { value: palette.paper.clone() }, uInk: { value: palette.ink.clone() }, uExplode: { value: 0 }, uTime: { value: 0 }, uFlip: { value: -1 },
         uKick: { value: 0 }, uHat: { value: 0 }, uEdge: { value: 0.35 }, uSpin: { value: 1 }, uShake: { value: 0 }, uPattern: { value: 0 },
         uLyric: { value: null }, uLyricRect: { value: new THREE.Vector4(0, 0, SIZE, SIZE) }, uLyricOn: { value: 0 }, uHoldTilt: { value: 0 }, uHoldYaw: { value: 0 },
+        tSpec: { value: this.ring.texture }, uNow: { value: 0 }, uSpecOn: { value: init.stereo ? 1 : 0 },
       },
     });
     const mesh = new THREE.Mesh(geometry, this.material);
@@ -175,6 +200,7 @@ export class Shatter implements MvScene {
     this.scene.add(this.dust);
 
     this.layer = new LyricLayer(palette, 'hook');
+    this.layer.rig.faces = voiceFaces('pulse', init.seed);
     this.material.uniforms.uLyric.value = this.layer.target.texture;
     this.scene.add(this.layer.token);
     this.scene.onBeforeRender = renderer => {
@@ -189,9 +215,16 @@ export class Shatter implements MvScene {
     this.camera.updateProjectionMatrix();
   }
 
+  keepUp(t: number): void {
+    this.ring.spec.prefetch(t, 0.8);
+  }
+
   update(ctx: FrameCtx): void {
     const { t, music, shot } = ctx;
     const u = this.material.uniforms;
+    const now = t * COLS;
+    this.ring.sync(Math.floor(now - (SPAN + 0.7) * COLS) - 2, Math.floor(now) + 1);
+    u.uNow.value = now;
     const info = music.at(t);
     const section = shot.section;
     const energy = section.energy;
@@ -295,7 +328,7 @@ export class Shatter implements MvScene {
       }
     }
     // Downbeat punch.
-    fov -= info.inBar < 1 ? Math.exp(-info.inBar * 5) * 3 * (0.5 + energy) : 0;
+    fov -= info.inBar < 1 ? punch(info.inBar, 1 / 5, 0.12) * 3 * (0.5 + energy) : 0;
     cam.fov = fov;
     cam.updateProjectionMatrix();
     cam.up.set(0, 1, 0);

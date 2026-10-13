@@ -3,6 +3,7 @@
 // trails from feedback of the previous frame).
 import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+import { Lens, type LensFrame, type PlateLens } from './lens.ts';
 
 /** Ways from one shot to the next. */
 export const TransitionKind = {
@@ -201,10 +202,14 @@ const fragmentShader = /* glsl */ `
     gl_FragColor = vec4(mix(a, b, m) + uEdge * e * 2.2, 1.0);
   }`;
 
-/** Objects flagged `userData.lyrics` (lyric rigs, banners, poster lines) are hidden in an outgoing shot. */
-function withoutLyrics(scene: THREE.Scene, draw: () => void): void {
+/**
+ * Objects flagged `userData.lyrics` (lyric rigs, banners, poster lines) are hidden in an outgoing shot. Words printed
+ * on a plate's surfaces (a LyricLayer's token, `userData.printed`) are part of the picture: drawing the plate apart
+ * from its words (the lens, the looks, light trails) keeps them (`keepPrinted`) — hidden, the surfaces went blank.
+ */
+function withoutLyrics(scene: THREE.Scene, draw: () => void, keepPrinted = false): void {
   const hidden: THREE.Object3D[] = [];
-  scene.traverse(o => { if (o.userData.lyrics && o.visible) { o.visible = false; hidden.push(o); } });
+  scene.traverse(o => { if (o.userData.lyrics && o.visible && !(keepPrinted && o.userData.printed)) { o.visible = false; hidden.push(o); } });
   draw();
   for (const o of hidden) o.visible = true;
 }
@@ -216,7 +221,8 @@ function withoutLyrics(scene: THREE.Scene, draw: () => void): void {
 function onlyLyrics(scene: THREE.Scene, draw: () => void): void {
   const keep = new Set<THREE.Object3D>();
   scene.traverse(o => {
-    if (!o.userData.lyrics) return;
+    // (Printed words were drawn with their surfaces.)
+    if (!o.userData.lyrics || o.userData.printed) return;
     o.traverse(c => keep.add(c));
     for (let p = o.parent; p; p = p.parent) keep.add(p);
   });
@@ -240,8 +246,24 @@ export class ShotPass extends Pass {
    */
   split = false;
   readonly words: THREE.WebGLRenderTarget;
+  /** This frame's time, and the shot on screen (its start: a new value is a cut), for the lens. */
+  time = 0;
+  shotKey = 0;
+  /** The on-screen shot's lens this frame (fx: −1 = the plate's own), the style's shutter, and a scale (0 = no lens). */
+  lensFx = { aperture: -1, motion: -1, focus: 0, travel: 0 };
+  shutter = 1 / 50;
+  lensScale = 1;
+  /** Letterbox, 0..1 of a 2.39:1 frame's bars, in the ink colour (setInk); under the overlay. */
+  letterbox = 0;
+  private bars: THREE.ShaderMaterial;
   private rtA: THREE.WebGLRenderTarget;
   private rtB: THREE.WebGLRenderTarget;
+  /** The two shots of a transition after the lens. */
+  private shotA: THREE.WebGLRenderTarget;
+  private shotB: THREE.WebGLRenderTarget;
+  private lens = new Lens();
+  /** (Listed for Engine.compilePost.) */
+  readonly lensMaterials = this.lens.materials;
   private quad: FullScreenQuad;
   private material: THREE.ShaderMaterial;
 
@@ -249,8 +271,11 @@ export class ShotPass extends Pass {
     super();
     this.needsSwap = false;
     const opts = { type: THREE.HalfFloatType, samples: 4 };
-    this.rtA = new THREE.WebGLRenderTarget(1, 1, opts);
-    this.rtB = new THREE.WebGLRenderTarget(1, 1, opts);
+    // (With their depth, for the lens.)
+    this.rtA = new THREE.WebGLRenderTarget(1, 1, { ...opts, depthTexture: new THREE.DepthTexture(1, 1) });
+    this.rtB = new THREE.WebGLRenderTarget(1, 1, { ...opts, depthTexture: new THREE.DepthTexture(1, 1) });
+    this.shotA = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
+    this.shotB = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
     this.words = new THREE.WebGLRenderTarget(1, 1, opts);
     this.material = new THREE.ShaderMaterial({
       vertexShader, fragmentShader, depthTest: false, depthWrite: false,
@@ -261,7 +286,16 @@ export class ShotPass extends Pass {
       },
     });
     this.quad = new FullScreenQuad(this.material);
+    this.bars = new THREE.ShaderMaterial({
+      vertexShader, depthTest: false, depthWrite: false,
+      fragmentShader: /* glsl */ `uniform float uH; uniform vec3 uInk; varying vec2 vUv;
+        void main() { if (vUv.y > uH && vUv.y < 1.0 - uH) discard; gl_FragColor = vec4(uInk, 1.0); }`,
+      uniforms: { uH: { value: 0 }, uInk: { value: new THREE.Color() } },
+    });
   }
+
+  /** The letterbox bars' colour (the cover's ink). */
+  setInk(ink: THREE.Color): void { (this.bars.uniforms.uInk.value as THREE.Color).copy(ink); }
 
   setCover(cover: THREE.Texture | null): void { this.material.uniforms.tCover.value = cover; }
 
@@ -274,6 +308,9 @@ export class ShotPass extends Pass {
   override setSize(width: number, height: number): void {
     this.rtA.setSize(width, height);
     this.rtB.setSize(width, height);
+    this.shotA.setSize(width, height);
+    this.shotB.setSize(width, height);
+    this.lens.setSize(width, height);
     this.words.setSize(width, height);
     this.material.uniforms.uAspect.value = width / Math.max(1, height);
   }
@@ -281,9 +318,12 @@ export class ShotPass extends Pass {
   override render(renderer: THREE.WebGLRenderer, _write: THREE.WebGLRenderTarget, read: THREE.WebGLRenderTarget): void {
     const target = this.renderToScreen ? null : read;
     const tr = this.transition, split = this.split;
-    const plain = (scene: THREE.Scene, draw: () => void) => (split ? withoutLyrics(scene, draw) : draw());
+    // (A shot that shows its words, drawn apart from them: what is printed on its surfaces stays with the plate.)
+    const plain = (scene: THREE.Scene, draw: () => void) => (split ? withoutLyrics(scene, draw, true) : draw());
+    const lens = this.lensFor(this.scene, true);
     if (!tr) {
-      plain(this.scene, () => {
+      if (lens) this.lensShot(renderer, this.scene, this.camera as THREE.PerspectiveCamera, this.rtB, lens, !split, this.shotKey, false, target, true);
+      else plain(this.scene, () => {
         renderer.setRenderTarget(target);
         renderer.clear();
         renderer.render(this.scene, this.camera);
@@ -291,9 +331,22 @@ export class ShotPass extends Pass {
     } else {
       const drawA = () => { renderer.setRenderTarget(this.rtA); renderer.clear(); renderer.render(tr.from.scene, tr.from.camera); };
       const drawB = () => { renderer.setRenderTarget(this.rtB); renderer.clear(); renderer.render(this.scene, this.camera); };
-      if (tr.hide === 'from') { withoutLyrics(tr.from.scene, drawA); plain(this.scene, drawB); }
-      else { plain(tr.from.scene, drawA); withoutLyrics(this.scene, drawB); }
+      const lensA = this.lensFor(tr.from.scene, false);
+      // (One camera filming both sides: no motion blur on either.)
+      const same = tr.from.camera === this.camera;
       const u = this.material.uniforms;
+      u.tA.value = this.rtA.texture;
+      u.tB.value = this.rtB.texture;
+      if (lensA) {
+        this.lensShot(renderer, tr.from.scene, tr.from.camera as THREE.PerspectiveCamera, this.rtA, lensA, tr.hide !== 'from' && !split, null, same, this.shotA, tr.hide !== 'from');
+        u.tA.value = this.shotA.texture;
+      } else if (tr.hide === 'from') withoutLyrics(tr.from.scene, drawA);
+      else plain(tr.from.scene, drawA);
+      if (lens) {
+        this.lensShot(renderer, this.scene, this.camera as THREE.PerspectiveCamera, this.rtB, lens, tr.hide === 'from' && !split, this.shotKey, same, this.shotB, tr.hide === 'from');
+        u.tB.value = this.shotB.texture;
+      } else if (tr.hide === 'from') plain(this.scene, drawB);
+      else withoutLyrics(this.scene, drawB);
       u.uP.value = tr.progress;
       u.uKind.value = tr.kind;
       u.uSeed.value = tr.seed % 997;
@@ -305,6 +358,16 @@ export class ShotPass extends Pass {
       this.quad.render(renderer);
     }
     const auto = renderer.autoClear;
+    if (this.letterbox > 0.001) {
+      // 2.39:1 inside 16:9 (the same bar height on other screens): each bar 12.8% of the height.
+      this.bars.uniforms.uH.value = 0.128 * this.letterbox;
+      renderer.autoClear = false;
+      renderer.setRenderTarget(target);
+      this.quad.material = this.bars;
+      this.quad.render(renderer);
+      this.quad.material = this.material;
+      renderer.autoClear = auto;
+    }
     if (split) {
       // The words of the shot whose words show (see Transition.hide), then the overlay, over transparency.
       const shown = !tr || tr.hide === 'from' ? { scene: this.scene, camera: this.camera } : tr.from;
@@ -326,9 +389,48 @@ export class ShotPass extends Pass {
     }
   }
 
+  /** A scene's lens this frame (the on-screen shot's fx over its plate's), or null: drawn as it is. */
+  private lensFor(scene: THREE.Scene, main: boolean): LensFrame | null {
+    const plate = scene.userData.lens as PlateLens | undefined;
+    if (this.lensScale <= 0 || !(plate || main)) return null;
+    const fx = main ? this.lensFx : { aperture: -1, motion: -1, focus: 0, travel: 0 };
+    const aperture = (fx.aperture >= 0 ? fx.aperture : plate?.aperture ?? 0) * this.lensScale;
+    const motion = (fx.motion >= 0 ? fx.motion : plate?.motion ?? 0) * this.lensScale;
+    if (aperture <= 0.001 && motion <= 0.001) return null;
+    return { aperture, motion, focus: fx.focus, travel: fx.travel, depthless: plate?.depthless ?? 0, shutter: this.shutter };
+  }
+
+  /**
+   * A shot through the lens into `out`: the plate without its lyrics (and its depth) into `rt`, the lens, then — when
+   * this shot shows its words — the lyrics alone into `rt` against the plate's depth (kept: they still go behind
+   * what stands in front of them), laid over.
+   */
+  private lensShot(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera, rt: THREE.WebGLRenderTarget,
+    lens: LensFrame, lyrics: boolean, key: number | null, still: boolean, out: THREE.WebGLRenderTarget | null, printed = lyrics): void {
+    renderer.setRenderTarget(rt);
+    renderer.clear();
+    withoutLyrics(scene, () => renderer.render(scene, camera), printed);
+    this.lens.apply(renderer, scene, camera, rt.texture, rt.depthTexture!, lens, this.time, key, still, out);
+    if (!lyrics) return;
+    const color = renderer.getClearColor(new THREE.Color()), alpha = renderer.getClearAlpha(), auto = renderer.autoClear;
+    renderer.setRenderTarget(rt);
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear(true, false, false);
+    renderer.autoClear = false;
+    let drew = false;
+    onlyLyrics(scene, () => { drew = true; renderer.render(scene, camera); });
+    renderer.autoClear = auto;
+    renderer.setClearColor(color, alpha);
+    if (drew) this.lens.overlay(renderer, rt.texture, out);
+  }
+
   override dispose(): void {
     this.rtA.dispose();
     this.rtB.dispose();
+    this.shotA.dispose();
+    this.shotB.dispose();
+    this.lens.dispose();
+    this.bars.dispose();
     this.words.dispose();
     this.material.dispose();
     this.quad.dispose();
@@ -407,6 +509,41 @@ export class EchoPass extends Pass {
     this.material.dispose();
     this.quad.dispose();
     this.copy.dispose();
+  }
+}
+
+/**
+ * The words laid back over the picture after the light trails, so the trails stay on the plate and the line reads
+ * (ballad choruses trailed the sung line into a smear). They come from ShotPass.words (its `split`), premultiplied.
+ */
+export class WordsPass extends Pass {
+  readonly material: THREE.ShaderMaterial;
+  private quad: FullScreenQuad;
+
+  constructor(words: THREE.Texture) {
+    super();
+    this.needsSwap = false;
+    this.material = new THREE.ShaderMaterial({
+      vertexShader, fragmentShader: /* glsl */ `uniform sampler2D tColor; varying vec2 vUv; void main() { gl_FragColor = texture2D(tColor, vUv); }`,
+      depthTest: false, depthWrite: false, transparent: true,
+      blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+      blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+      uniforms: { tColor: { value: words } },
+    });
+    this.quad = new FullScreenQuad(this.material);
+  }
+
+  override render(renderer: THREE.WebGLRenderer, _write: THREE.WebGLRenderTarget, read: THREE.WebGLRenderTarget): void {
+    const auto = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.setRenderTarget(this.renderToScreen ? null : read);
+    this.quad.render(renderer);
+    renderer.autoClear = auto;
+  }
+
+  override dispose(): void {
+    this.material.dispose();
+    this.quad.dispose();
   }
 }
 

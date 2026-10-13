@@ -14,7 +14,7 @@ export class Hud {
   private plate = document.createElement('div');
   private counter = document.createElement('div');
   private section = document.createElement('div');
-  private crystal = document.createElement('div');
+  private sigil = document.createElement('div');
   private last = { shot: null as Shot | null, bar: -1, section: '' };
   private hidden = false;
 
@@ -35,14 +35,14 @@ export class Hud {
     this.plate.style.cssText = 'position:absolute;left:40px;top:22px';
     this.counter.style.cssText = 'position:absolute;left:40px;bottom:22px;font-size:13px;letter-spacing:.12em';
     this.section.style.cssText = 'position:absolute;right:40px;bottom:22px;text-align:right';
-    // Beside the crystal badge the overlay draws top right: its Conway notation and triangle count.
-    this.crystal.style.cssText = 'position:absolute;right:86px;top:33px;text-align:right;opacity:.8';
-    r.append(this.plate, this.counter, this.section, this.crystal);
+    // Beside the armillary badge the overlay draws top right: its rings and the marks on its meridian.
+    this.sigil.style.cssText = 'position:absolute;right:86px;top:33px;text-align:right;opacity:.8';
+    r.append(this.plate, this.counter, this.section, this.sigil);
     parent.append(r);
   }
 
-  /** The song's crystal, e.g. `kI · 60△`. */
-  set crystalLabel(text: string) { this.crystal.textContent = text; }
+  /** The song's armillary, e.g. `IV 32` (an em space between). */
+  set sigilLabel(text: string) { this.sigil.textContent = text; }
 
   get visible(): boolean { return !this.hidden; }
 
@@ -50,13 +50,18 @@ export class Hud {
   set visible(v: boolean) {
     if (v === !this.hidden) return;
     this.hidden = !v;
-    this.root.style.opacity = v ? '1' : '0';
+    this.root.style.opacity = v && !this.opening ? '1' : '0';
   }
+
+  /** Over the opening cards (the song's own title card) the layer stays away, and comes up with the first plate. */
+  private opening = true;
 
   update(shot: Shot, index: number, total: number, bar: number, bpm: number): void {
     const poster = shot.scene === 'poster';
     if (shot !== this.last.shot) {
       this.last.shot = shot;
+      this.opening = shot.scene === 'cards';
+      this.root.style.opacity = !this.hidden && !this.opening ? '1' : '0';
       this.plate.textContent = `${String(index + 1).padStart(2, '0')} / ${String(total).padStart(2, '0')}   ${SCENE_NAME[shot.scene]}`;
       this.counter.style.opacity = this.section.style.opacity = poster ? '0' : '1';
     }
@@ -64,7 +69,7 @@ export class Hud {
       this.last.bar = bar;
       this.counter.textContent = `${this.glyph} ${String(bar).padStart(3, '0')}`;
     }
-    const section = `${SECTION[shot.section.label]} · ${Math.round(bpm)} BPM`;
+    const section = `${SECTION[shot.section.label]}\u3000${Math.round(bpm)} BPM`;
     if (section !== this.last.section) {
       this.last.section = section;
       this.section.textContent = section;

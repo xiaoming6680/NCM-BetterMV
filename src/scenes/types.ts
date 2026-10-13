@@ -4,12 +4,12 @@ import type { LyricTrack } from '../director/lyrics.ts';
 import type { Palette } from '../render/palette.ts';
 import type { Fx } from '../render/engine.ts';
 import type { Section } from '../types.ts';
-import type { CrystalSpec } from '../sigil/crystal.ts';
+import type { ArmillarySpec } from '../sigil/armillary.ts';
 
-export type SceneId = 'relief' | 'shatter' | 'diorama' | 'bokeh' | 'tunnel' | 'drive' | 'kaleido' | 'flip' | 'rings' | 'poster' | 'ridges' | 'halftone' | 'particles' | 'typewall' | 'ink' | 'crystal' | 'cards' | 'debug' | 'subdivide' | 'align' | 'scope' | 'vinyl' | 'clouds' | 'city' | 'aurora' | 'canvas' | 'pillars';
+export type SceneId = 'relief' | 'shatter' | 'diorama' | 'bokeh' | 'tunnel' | 'drive' | 'kaleido' | 'flip' | 'rings' | 'poster' | 'ridges' | 'halftone' | 'particles' | 'typewall' | 'ink' | 'crystal' | 'cards' | 'debug' | 'subdivide' | 'align' | 'scope' | 'vinyl' | 'clouds' | 'city' | 'aurora' | 'canvas' | 'pillars' | 'ripple' | 'channel' | 'orb' | 'menger' | 'sierpinski' | 'cantor' | 'papercut' | 'rain' | 'lanterns' | 'neon';
 
 /** A section redrawn in another medium (src/render/looks.ts): a riso print, Hi-bit pixels, characters on a tube. */
-export type LookId = 'riso' | 'hibit' | 'ascii';
+export type LookId = 'riso' | 'hibit' | 'ascii' | 'vhs';
 
 /** One camera setup inside a scene, between two downbeats. */
 export interface Shot {
@@ -27,6 +27,8 @@ export interface Shot {
    * moves over the whole run, so cutting to another camera carries on the move instead of starting it again.
    */
   run?: { start: number; end: number };
+  /** (Development: a film's own look for this shot, over its section's.) */
+  look?: LookId;
 }
 
 export interface FrameCtx {
@@ -57,8 +59,8 @@ export interface SceneInit {
   artists?: string[];
   /** This play's random seed (the same song differs from play to play). */
   seed?: number;
-  /** The song's own crystal (src/sigil/crystal.ts). */
-  crystal: CrystalSpec;
+  /** The song's own armillary (src/sigil/armillary.ts). */
+  armillary: ArmillarySpec;
   /** The audio for the oscilloscope: both channels, 16-bit. */
   stereo?: Stereo;
   /** Oscilloscope music: the scope draws the channels' picture (XY), as a real one would. */
@@ -82,6 +84,11 @@ export interface MvScene {
    * so coming back to it doesn't stall on a minute of catching up.
    */
   keepUp?(t: number, renderer: THREE.WebGLRenderer): void;
+  /**
+   * What the plate draws in passes of its own, off its scene graph (scenes, or passMesh(material) for a
+   * FullScreenQuad): compiled along with it before the MV shows (Engine.compile).
+   */
+  readonly offscreen?: readonly THREE.Object3D[];
 }
 
 /** Small deterministic PRNG (mulberry32). */
@@ -101,4 +108,20 @@ export const smooth = (x: number) => { x = clamp01(x); return x * x * (3 - 2 * x
 export const outExpo = (x: number) => (x >= 1 ? 1 : 1 - Math.pow(2, -10 * clamp01(x)));
 export const inOutCubic = (x: number) => { x = clamp01(x); return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; };
 export const outBack = (x: number, s = 1.6) => { x = clamp01(x) - 1; return 1 + (s + 1) * x * x * x + s * x * x; };
+// Motion curves with no jolt: what moves on screen gets going and comes to rest, its speed never jumping (the user,
+// of the whole plugin: “动画不线性”“动画曲线不好” — outExpo and a bare exponential start at full speed, then crawl).
+// outExpo and exponentials stay for light (flashes, fades, glow), where an instant attack reads as a hit.
+const SNAP_K = 9, SNAP_1 = 1 - (1 + SNAP_K) * Math.exp(-SNAP_K);
+/**
+ * A beat-locked snap, 0..1 over x in 0..1: a critically damped spring from rest — quick (fastest a ninth of the way
+ * in, two thirds there by a fifth), settling with no stop at the end. The jolt-free stand-in for outExpo in motion.
+ */
+export const snap = (x: number) => { x = clamp01(x); return (1 - (1 + SNAP_K * x) * Math.exp(-SNAP_K * x)) / SNAP_1; };
+/** How far a push has carried, 0..1, `age` after it began: its speed rises from nothing, peaks at `tau`, dies away. */
+export const surge = (age: number, tau: number) => (age <= 0 ? 0 : 1 - (1 + age / tau) * Math.exp(-age / tau));
+/** That push's speed (over all time it comes to 1): for what streaks or stretches with the speed. */
+export const surgeRate = (age: number, tau: number) => (age <= 0 ? 0 : (age / (tau * tau)) * Math.exp(-age / tau));
+/** A hit's envelope for motion (a punch of the lens, a knock): up smoothly over `attack`, then away with `decay`. */
+export const punch = (age: number, decay: number, attack = 0.03) =>
+  (age < 0 ? 0 : age < attack ? smooth(age / attack) : Math.exp(-(age - attack) / decay));
 export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;

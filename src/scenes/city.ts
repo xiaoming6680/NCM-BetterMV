@@ -13,13 +13,19 @@
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { rng, smooth } from './types.ts';
-import { LyricGates } from './lyricSpace.ts';
+import { LyricBlocks, Stands, voiceFor } from './lyricBlock.ts';
 import { lastIndex } from '../director/music.ts';
-import { CANYON_X, CANYON_Y, CENTERS, Towers } from './cityTowers.ts';
+import { CANYON_X, CANYON_Y, CENTERS, TOWER_VERT, towerFrag, Towers } from './cityTowers.ts';
 
 const SURGES = 8;
 
-const v3 = (c: THREE.Color, k = 1) => `vec3(${(c.r * k).toFixed(5)},${(c.g * k).toFixed(5)},${(c.b * k).toFixed(5)})`;
+/**
+ * A colour as a uniform. The palette's colours reach the shaders as uniforms, not written into their source: the
+ * source is then the same for every song, so a program compiled once (seconds for the city under D3D) is taken from
+ * the browser's shader cache for the next song with the city, and the next time NetEase starts. (Rounded as they were
+ * when written into the source.)
+ */
+const u3 = (c: THREE.Color, k = 1) => new THREE.Vector3(+(c.r * k).toFixed(5), +(c.g * k).toFixed(5), +(c.b * k).toFixed(5));
 /** A light's colour: the hue of c at full strength (its brightest channel 1). */
 const lamp = (c: THREE.Color) => { const m = Math.max(c.r, c.g, c.b, 1e-4); return c.clone().multiplyScalar(1 / m); };
 
@@ -47,11 +53,10 @@ float snoise(vec2 v) {
   return 130.0 * dot(m, g);
 }`;
 
-/** The sky and haze for a palette: a dusk gradient by elevation, the cover's colour glowing along the horizon. */
-function atmosphere(p: { ink: THREE.Color; signal: THREE.Color; accent: THREE.Color; paper: THREE.Color }): string {
+/** The sky and haze for a palette (ATMOSPHERE's uniforms): a dusk gradient by elevation, the cover's colour glowing along the horizon. */
+function atmosphere(p: { ink: THREE.Color; signal: THREE.Color; accent: THREE.Color; paper: THREE.Color }): Record<string, THREE.IUniform> {
   const { ink, signal: sig, accent: acc, paper } = p;
   const mix = (a: THREE.Color, b: THREE.Color, t: number, k: number) => a.clone().lerp(b, t).multiplyScalar(k);
-  const knots = [-12, -5, -1.2, 0, 0.5, 1.3, 2.6, 5, 10, 20, 45, 90];
   // Late dusk: dark overhead, the cover's colour only in a band along the horizon.
   const cols = [
     mix(ink, acc, 0.2, 0.2), mix(ink, acc, 0.25, 0.22), mix(acc, sig, 0.4, 0.24), mix(acc, sig, 0.5, 0.26),
@@ -60,11 +65,15 @@ function atmosphere(p: { ink: THREE.Color; signal: THREE.Color; accent: THREE.Co
   ].map(c => c.add(new THREE.Color(0.0015, 0.002, 0.004)));
   const haze = mix(ink, acc, 0.25, 0.22).add(new THREE.Color(0.002, 0.0025, 0.005));
   const amb = mix(ink, acc, 0.3, 0.22).add(new THREE.Color(0.002, 0.003, 0.006));
-  return /* glsl */ `
+  return { uSky: { value: cols.map(c => u3(c)) }, uHazeCol: { value: u3(haze) }, uAmb: { value: u3(amb) } };
+}
+const KNOTS = [-12, -5, -1.2, 0, 0.5, 1.3, 2.6, 5, 10, 20, 45, 90];
+const ATMOSPHERE = /* glsl */ `
 uniform vec3 uCam;
 uniform float uLights, uTime, uHaze, uTraffic, uExposure;
-const float KN[12] = float[12](${knots.map(k => k.toFixed(2)).join(', ')});
-const vec3 SKY[12] = vec3[12](${cols.map(c => v3(c)).join(', ')});
+uniform vec3 uSky[12], uHazeCol, uAmb;
+const float KN[12] = float[12](${KNOTS.map(k => k.toFixed(2)).join(', ')});
+#define SKY uSky
 vec3 skyCol(vec3 d) {
   float a = degrees(asin(clamp(d.y, -1.0, 1.0)));
   int i = 0;
@@ -82,20 +91,28 @@ float transmit(vec3 p) {
   return exp(-L * uHaze * (1.4e-5 + 1.05e-4 * g));
 }
 /** The haze things sink into: the dark air below the horizon, meeting the horizon's glow only far off. */
-vec3 fogCol(vec3 d) { return mix(${v3(haze)}, skyCol(vec3(d.x, max(d.y, 0.006), d.z)), smoothstep(-0.12, 0.0, d.y)); }
-vec3 ambient() { return ${v3(amb)}; }`;
-}
+vec3 fogCol(vec3 d) { return mix(uHazeCol, skyCol(vec3(d.x, max(d.y, 0.006), d.z)), smoothstep(-0.12, 0.0, d.y)); }
+vec3 ambient() { return uAmb; }`;
 
-/** The city per pixel (Still_Shining's ss/city.ts, its light colours taken from the cover). */
-function cityGlsl(p: { ink: THREE.Color; signal: THREE.Color; accent: THREE.Color; paper: THREE.Color }): string {
+/** The city's light colours, taken from the cover (CITY's uniforms). */
+function lampColours(p: { signal: THREE.Color; accent: THREE.Color; paper: THREE.Color }): Record<string, THREE.IUniform> {
   const white = lamp(p.paper), sig = lamp(p.signal), acc = lamp(p.accent);
   const warm = lamp(p.paper.clone().lerp(p.signal, 0.45)), cool = lamp(p.paper.clone().lerp(p.accent, 0.4));
-  return /* glsl */ `
+  return { uWhite: { value: u3(white) }, uSig: { value: u3(sig) }, uAcc: { value: u3(acc) }, uWarm: { value: u3(warm) }, uCool: { value: u3(cool) } };
+}
+
+/** The city per pixel (Still_Shining's ss/city.ts). */
+const CITY = /* glsl */ `
 uniform vec4 uCenters[4];
 uniform vec4 uSurge[${SURGES}];
 const float S = 650.0, MHW = 12.0, NHW = 4.5;
 const float SQ2PI = 2.5066283;
-const vec3 C_WHITE = ${v3(white)}, C_SIG = ${v3(sig)}, C_ACC = ${v3(acc)}, C_WARM = ${v3(warm)}, C_COOL = ${v3(cool)};
+uniform vec3 uWhite, uSig, uAcc, uWarm, uCool;
+#define C_WHITE uWhite
+#define C_SIG uSig
+#define C_ACC uAcc
+#define C_WARM uWarm
+#define C_COOL uCool
 /** The power surges running out across the city here (0 = none). */
 float gSurge = 0.0;
 
@@ -333,7 +350,6 @@ vec3 cityShade(vec2 p, float fp, vec3 V) {
   }
   return col;
 }`;
-}
 
 const CITY_VERT = /* glsl */ `
 precision highp float;
@@ -376,38 +392,13 @@ function polarGrid(rings = 150, segs = 192): THREE.BufferGeometry {
 /** A surge of light: when it starts, how strong, and where in view (ahead, across) it starts from. */
 interface Surge { t: number; size: number; ahead: number; across: number; speed: number }
 
-export class City implements MvScene {
-  readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(46, 16 / 9, 2, 400000);
-  private u: Record<string, THREE.IUniform>;
-  private invVP = new THREE.Matrix4();
-  private surges: Surge[] = [];
-  private surgeT: Float64Array;
-  private surgeU = Array.from({ length: SURGES }, () => new THREE.Vector4());
-  private gates: LyricGates;
-  private readonly soft: boolean;
-
-  constructor(init: SceneInit, look: 'pulse' | 'ballad' = 'pulse') {
-    const { palette, music } = init;
-    this.soft = look === 'ballad';
-    this.scene.background = palette.ink.clone();
-    const atmo = atmosphere(palette);
-    this.u = {
-      uCam: { value: new THREE.Vector3() }, uLights: { value: 1 }, uTime: { value: 0 }, uHaze: { value: 1 }, uTraffic: { value: 1 },
-      uExposure: { value: 1 }, uInvVP: { value: this.invVP }, uSurge: { value: this.surgeU }, uFocal: { value: 1000 }, uBeat: { value: 0 },
-      uCenters: { value: CENTERS.map(c => new THREE.Vector4(...c)) },
-    };
-    const raw = (vertexShader: string, fragmentShader: string, depthTest = false) => new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader, fragmentShader, uniforms: this.u, depthTest, depthWrite: false });
-
-    const tri = new THREE.BufferGeometry();
-    tri.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
-    const sky = new THREE.Mesh(tri, raw(SKY_VERT, /* glsl */ `
+const SKY_FRAG = /* glsl */ `
 precision highp float;
 in vec2 vNdc;
 uniform mat4 uInvVP;
 out vec4 fragColor;
 ${COMMON}
-${atmo}
+${ATMOSPHERE}
 void main() {
   vec4 a = uInvVP * vec4(vNdc, 1.0, 1.0);
   vec3 d = normalize(a.xyz / a.w - uCam);
@@ -415,24 +406,16 @@ void main() {
   vec3 q = floor(d * 420.0);
   float s = step(0.997, hash12(q.xy + q.z * 17.3)) * smoothstep(0.06, 0.35, d.y);
   fragColor = vec4((skyCol(d) + vec3(s * 0.25)) * uExposure, 1.0);
-}`));
-    sky.frustumCulled = false;
-    sky.renderOrder = -10;
-    sky.onBeforeRender = (_r, _s, camera) => {
-      camera.updateMatrixWorld();
-      this.invVP.multiplyMatrices((camera as THREE.PerspectiveCamera).projectionMatrix, camera.matrixWorldInverse).invert();
-    };
-    this.scene.add(sky);
+}`;
 
-
-    const city = new THREE.Mesh(polarGrid(), raw(CITY_VERT, /* glsl */ `
+const GROUND_FRAG = /* glsl */ `
 precision highp float;
 precision highp int;
 in vec3 vW;
 out vec4 fragColor;
 ${COMMON}
-${atmo}
-${cityGlsl(palette)}
+${ATMOSPHERE}
+${CITY}
 void main() {
   vec3 V = normalize(vW - uCam);
   vec2 dx = dFdx(vW.xz), dy = dFdy(vW.xz);
@@ -442,20 +425,73 @@ void main() {
   vec3 o = (c * T + fogCol(V) * (1.0 - T)) * uExposure;
   if (any(isnan(o)) || any(isinf(o))) o = vec3(0.0); // (a rare bad pixel would black the frame out through the glow)
   fragColor = vec4(o, 1.0);
-}`, true)); // (behind the towers, which are drawn first, it isn't shaded)
+}`;
+
+/** The code the towers share with the ground. */
+const SHARED = `${COMMON}
+${ATMOSPHERE}
+${CITY}`;
+
+/**
+ * The city's programs that take seconds to compile (the ground) or a while (the towers, the sky), to compile ahead
+ * (Engine.compile) while a song is still being read and analysed: the palette is in uniforms, so they are the very
+ * programs the plate will use, whatever the song.
+ */
+export function cityPrograms(): THREE.Object3D[] {
+  const g = new THREE.BufferGeometry();
+  const m = (vertexShader: string, fragmentShader: string) => new THREE.Mesh(g, new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader, fragmentShader }));
+  return [m(CITY_VERT, GROUND_FRAG), m(SKY_VERT, SKY_FRAG), m(TOWER_VERT, towerFrag(SHARED))];
+}
+
+export class City implements MvScene {
+  readonly scene = new THREE.Scene();
+  readonly camera = new THREE.PerspectiveCamera(46, 16 / 9, 2, 400000);
+  private u: Record<string, THREE.IUniform>;
+  private invVP = new THREE.Matrix4();
+  private surges: Surge[] = [];
+  private surgeT: Float64Array;
+  private surgeU = Array.from({ length: SURGES }, () => new THREE.Vector4());
+  private blocks: LyricBlocks;
+  /** Consecutive lines stand left, right and middle, a little above the middle of the view. */
+  private stands = new Stands([[-0.2, 0.1], [0.2, 0.04], [0, 0.14]]);
+  private readonly soft: boolean;
+
+  constructor(init: SceneInit, look: 'pulse' | 'ballad' = 'pulse') {
+    const { palette, music } = init;
+    this.soft = look === 'ballad';
+    this.scene.background = palette.ink.clone();
+    this.u = {
+      ...atmosphere(palette), ...lampColours(palette),
+      uBeacon: { value: new THREE.Vector3(...lamp(palette.signal).toArray().map(v => +v.toFixed(4))) },
+      uCam: { value: new THREE.Vector3() }, uLights: { value: 1 }, uTime: { value: 0 }, uHaze: { value: 1 }, uTraffic: { value: 1 },
+      uExposure: { value: 1 }, uInvVP: { value: this.invVP }, uSurge: { value: this.surgeU }, uFocal: { value: 1000 }, uBeat: { value: 0 },
+      uCenters: { value: CENTERS.map(c => new THREE.Vector4(...c)) },
+    };
+    const raw = (vertexShader: string, fragmentShader: string, depthTest = false) => new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader, fragmentShader, uniforms: this.u, depthTest, depthWrite: false });
+
+    const tri = new THREE.BufferGeometry();
+    tri.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
+    const sky = new THREE.Mesh(tri, raw(SKY_VERT, SKY_FRAG));
+    sky.frustumCulled = false;
+    sky.renderOrder = -10;
+    sky.onBeforeRender = (_r, _s, camera) => {
+      camera.updateMatrixWorld();
+      this.invVP.multiplyMatrices((camera as THREE.PerspectiveCamera).projectionMatrix, camera.matrixWorldInverse).invert();
+    };
+    this.scene.add(sky);
+
+
+    const city = new THREE.Mesh(polarGrid(), raw(CITY_VERT, GROUND_FRAG, true)); // (behind the towers, which are drawn first, it isn't shaded)
     city.frustumCulled = false;
     city.renderOrder = -8;
     this.scene.add(city);
 
-    this.scene.add(new Towers(`${COMMON}
-${atmo}
-${cityGlsl(palette)}`, this.u, lamp(palette.signal)).group);
+    this.scene.add(new Towers(SHARED, this.u).group);
 
     this.planSurges(init);
     this.surgeT = Float64Array.from(this.surges, s => s.t);
-    this.gates = new LyricGates(palette, { style: this.soft ? 'poem' : 'hook', em: 40, maxW: 640, trans: { em: 17, vertical: false }, linger: 9 });
-    this.scene.add(this.gates.group);
-    void music;
+    this.blocks = new LyricBlocks(palette, music, { voice: voiceFor(look, init.seed), em: 40, maxW: this.soft ? 11 : 13, trans: 0.48, scrim: 0.55, dust: [0, 2.2, 0] });
+    this.scene.add(this.blocks.group);
     this.resize(init.aspect);
   }
 
@@ -491,6 +527,7 @@ ${cityGlsl(palette)}`, this.u, lamp(palette.signal)).group);
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
+    this.blocks.setAspect(aspect);
   }
 
   private height = 1080;
@@ -553,32 +590,17 @@ ${cityGlsl(palette)}`, this.u, lamp(palette.signal)).group);
     }
     for (let i = n; i < SURGES; i++) this.surgeU[i].set(0, 0, 0, 0);
 
-    // The words: signs in the air ahead, held while sung, then left behind.
-    // Close ahead, so the camera closes in on a sign as it fades once sung; consecutive signs step left, right and
-    // middle.
-    const high = shot.variant === 'high';
-    const ahead = high ? 520 : shot.variant === 'glide' ? 260 : shot.variant === 'canyon' ? 120 : 190;
-    const scale = ahead / 820;
-    // (Offsets in base units, em 40: a sign and the next stand well apart, left, right, middle, like the clouds'.)
-    const LANES: Array<[number, number]> = [[-90 * scale, 42 * scale], [90 * scale, -8 * scale], [0, -52 * scale]];
-    const at = (time: number, dist: number, drop: number, lane: number, root: THREE.Object3D) => {
-      this.pose(time, shot, p, q);
-      const fw = new THREE.Vector3(0, 0, -1).applyQuaternion(q), up = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
-      const rt = new THREE.Vector3(1, 0, 0).applyQuaternion(q), [lx, ly] = LANES[lane % LANES.length];
-      root.position.copy(p).addScaledVector(fw, dist).addScaledVector(up, ly - drop).addScaledVector(rt, lx);
-      root.quaternion.copy(q);
-      root.scale.setScalar(scale);
-      return root.position.clone().sub(cam.position).dot(new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion));
-    };
-    this.gates.update(ctx.lyrics, t, sec.energy, (c, time, root) => {
-      const depth = at(Math.min(time, c.end), ahead, 0, c.ordinal, root);
-      // Gone half a second after it is sung, while the camera closes in (left longer, it sat on the next one); from
-      // high up, which hardly moves, held until the next comes in.
-      const gone = high ? 1 - smooth((time - Math.min(c.next, c.end + 8) - 0.1) / 0.4) : 1 - smooth((time - c.end - 0.1) / 0.5);
-      return smooth((time - c.start + 0.12) / 0.25) * smooth((depth - 25 * scale * 8) / (60 * scale * 8)) * gone;
-    }, (state, time, root) => {
-      const depth = at(Math.min(time, state.line.end), ahead, 50 * scale, 2, root);
-      return smooth((depth - 25 * scale * 8) / (60 * scale * 8));
+    // The words: each line one block standing in the air, where the flight will have it in view while it is sung;
+    // the camera comes up to it as the line ends and flies past it as the next comes up (lyricBlock.ts). From high
+    // up, which hardly moves, it just stands there.
+    const reach = shot.variant === 'high' ? 520 : shot.variant === 'glide' ? 300 : shot.variant === 'canyon' ? 150 : 220;
+    const view = { reach, far: reach * 1.9, fov: cam.fov, aspect: cam.aspect, em: this.soft ? 0.064 : 0.068 };
+    const pose = (time: number, pp: THREE.Vector3, qq: THREE.Quaternion) => this.pose(time, shot, pp, qq);
+    this.blocks.update(ctx.lyrics, t, sec.energy, (st, time, root, leave, size) => {
+      const s = this.stands.get(shot.start, st, leave, pose, 40, view, size);
+      s.apply(time, root);
+      // Gone before the camera is on top of it (it would fill the frame).
+      return smooth((s.depth(time) - reach * 0.3) / (reach * 0.25));
     });
 
     ctx.fx.bloom = 0.5;

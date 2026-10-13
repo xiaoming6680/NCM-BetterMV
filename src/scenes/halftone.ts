@@ -9,9 +9,16 @@
 // them with the picture): light dots on ink, ink dots on paper; the cover's dots thin out round them.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { clamp01, inOutCubic, lerp, rng } from './types.ts';
+import { clamp01, inOutCubic, lerp, rng, punch } from './types.ts';
 import { LyricLayer } from './lyricSpace.ts';
+import { voiceFaces } from './lyricBlock.ts';
 import { lastIndex } from '../director/music.ts';
+import { COLS, SpecRing, Spectrogram } from './viz.ts';
+
+const NB = 64;
+const RING = 256;
+/** Seconds of the song's spectrum printed up the frame. */
+const SPEC_SPAN = 2.6;
 
 const vertexShader = /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 const fragmentShader = /* glsl */ `
@@ -22,8 +29,21 @@ const fragmentShader = /* glsl */ `
   uniform sampler2D uLyric;
   uniform vec4 uLyricRect; // where the words lie on the cover: centre and size in cover uv
   uniform float uLyricOn;
+  uniform sampler2D tSpec;
+  uniform float uNow, uSpecOn;
   varying vec2 vUv;
   vec2 rot(vec2 p, float a) { float c = cos(a), s = sin(a); return vec2(c * p.x - s * p.y, s * p.x + c * p.y); }
+  // The print is a spectrogram as well: across the frame the bands (the bass down the middle, the treble out to both
+  // sides), up it time (now at the bottom, the last ${(SPEC_SPAN).toFixed(1)} s above, rising like a waterfall).
+  // x: how loud that band was then, y: how much louder than the half second before (a note, a hit).
+  vec2 specAt(vec2 px) {
+    vec2 uv = clamp(px / uRes, 0.0, 1.0);
+    float x = (abs(uv.x - 0.5) * 2.0 * ${(NB - 1).toFixed(1)} + 0.5) / ${NB.toFixed(1)};
+    float c = uNow - uv.y * ${(SPEC_SPAN * COLS).toFixed(1)};
+    #define SPEC(dc) texture2D(tSpec, vec2(x, (mod(c - (dc), ${RING.toFixed(1)}) + 0.5) / ${RING.toFixed(1)})).r
+    float s = SPEC(0.0);
+    return vec2(s, max(0.0, s - 0.25 * (SPEC(8.0) + SPEC(16.0) + SPEC(24.0) + SPEC(32.0)) - 0.02));
+  }
   // Screen pixel → cover uv: the cover fills the frame (cropped), zoomed and panned.
   vec2 coverUv(vec2 px) {
     vec2 q = (px - 0.5 * uRes) / max(uRes.x, uRes.y);
@@ -53,7 +73,10 @@ const fragmentShader = /* glsl */ `
     else v = acc;
     v *= uGain;
     // On ink the dots stay apart so the dark shows between them; on paper they may close up in the shadows.
-    float radius = sqrt(clamp(v, 0.0, 1.0)) * (uNeon > 0.5 ? 0.56 : 0.72) * uCell * (1.0 + uKick * 0.28) * (1.0 - 0.92 * lyricAt(coverUv(rot(centre, -angle))).a);
+    // Each dot also as big as its band was loud when its row was printed.
+    vec2 sp = specAt(rot(centre, -angle));
+    float loud = mix(1.0 + uKick * 0.28, min(1.25, 0.3 + 0.8 * smoothstep(0.25, 0.95, sp.x) + 1.2 * smoothstep(0.02, 0.3, sp.y)), uSpecOn);
+    float radius = sqrt(clamp(v, 0.0, 1.0)) * (uNeon > 0.5 ? 0.56 : 0.72) * uCell * loud * (1.0 - 0.92 * lyricAt(coverUv(rot(centre, -angle))).a);
     float d = length(rot(px, angle) - centre);
     return smoothstep(radius + 0.9, radius - 0.9, d);
   }
@@ -84,8 +107,9 @@ const fragmentShader = /* glsl */ `
     float a = screenAt(px - uMisreg, uAngle + 1.309, 2);
     vec3 col;
     if (uNeon > 0.5) {
-      // Light on ink: the screens add up like glowing phosphor.
-      col = uInk + uPaper * k * 0.5 + uSig * s * 1.1 + uAcc * a * 0.85 + tint * w;
+      // Light on ink: the screens add up like glowing phosphor, flaring where a note or a hit is being printed.
+      float flare = 1.0 + 1.1 * smoothstep(0.03, 0.3, specAt(px).y) * uSpecOn;
+      col = uInk + (uPaper * k * 0.5 + uSig * s * 1.1 + uAcc * a * 0.85) * flare + tint * w;
     } else {
       // Ink on paper: each screen multiplies over the paper, overprinting where they meet.
       col = uPaper;
@@ -105,11 +129,13 @@ export class Halftone implements MvScene {
   private snares: Float64Array;
   private res = new THREE.Vector2(1920, 1080);
   private readonly neon: boolean;
+  private ring: SpecRing;
   private meter: { shot: Shot | null; negative: boolean; gain: number; levels: [number, number] } = { shot: null, negative: false, gain: 1, levels: [0, 1] };
 
   constructor(private init: SceneInit, look: 'pulse' | 'ballad' = 'pulse') {
     const { palette } = init;
     this.neon = look !== 'ballad';
+    this.ring = new SpecRing(Spectrogram.of(init.stereo, init.music.duration + 8, NB, 30), RING);
     this.scene.background = (this.neon ? palette.ink : palette.paper).clone();
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
       vertexShader, fragmentShader, depthTest: false, depthWrite: false,
@@ -119,6 +145,7 @@ export class Halftone implements MvScene {
         uNegative: { value: 0 }, uGain: { value: 1 }, uLevels: { value: new THREE.Vector2(0, 1) },
         uPaper: { value: palette.paper.clone() }, uInk: { value: palette.ink.clone() }, uSig: { value: palette.signal.clone() }, uAcc: { value: palette.accent.clone() },
         uLyric: { value: null }, uLyricRect: { value: new THREE.Vector4(0.5, 0.5, 1, 1) }, uLyricOn: { value: 0 },
+        tSpec: { value: this.ring.texture }, uNow: { value: 0 }, uSpecOn: { value: init.stereo ? (this.neon ? 1 : 0.6) : 0 },
       },
     }));
     this.quad.frustumCulled = false;
@@ -126,6 +153,7 @@ export class Halftone implements MvScene {
     this.scene.add(this.quad);
     this.snares = Float64Array.from(init.music.a.hits.snare.filter(h => h[1] > 0.4), h => h[0]);
     this.layer = new LyricLayer(palette, this.neon ? 'hook' : 'poem');
+    this.layer.rig.faces = voiceFaces(this.neon ? 'pulse' : 'ballad', init.seed);
     this.layer.rig.onLight = !this.neon;
     this.quad.material.uniforms.uLyric.value = this.layer.target.texture;
     this.scene.add(this.layer.token);
@@ -196,6 +224,10 @@ export class Halftone implements MvScene {
   /** Drawing-buffer size: the dot screen is ruled in device pixels. */
   setViewport(width: number, height: number): void { this.res.set(width, height); }
 
+  keepUp(t: number): void {
+    this.ring.spec.prefetch(t, 0.8);
+  }
+
   update(ctx: FrameCtx): void {
     const { t, music, shot } = ctx;
     const u = this.quad.material.uniforms;
@@ -209,9 +241,12 @@ export class Halftone implements MvScene {
     const cells = rulings[(info.bar + Math.floor(random() * 3)) % 3] * (shot.variant === 'fine' ? 1.6 : 1) * (this.neon ? 1 : 1.45);
     u.uCell.value = this.res.y / cells;
     u.uKick.value = kick;
+    const now = t * COLS;
+    this.ring.sync(Math.floor(now - (SPEC_SPAN + 0.6) * COLS) - 2, Math.floor(now) + 1);
+    u.uNow.value = now;
     // Snares knock the colour screens out of register; it settles back.
     const si = lastIndex(this.snares, t), sAge = si >= 0 ? t - this.snares[si] : 99;
-    const slip = this.neon ? Math.exp(-sAge / 0.12) * u.uCell.value * 0.6 : 0;
+    const slip = this.neon ? punch(sAge, 0.12) * u.uCell.value * 0.6 : 0;
     const dir = rng(si + 3)() * Math.PI * 2;
     u.uMisreg.value.set(Math.cos(dir) * slip, Math.sin(dir) * slip);
     // A slow move over the cover: in, out or across.

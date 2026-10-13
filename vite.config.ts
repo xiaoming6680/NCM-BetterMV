@@ -101,6 +101,10 @@ function ncm(): Plugin {
             const r = await fetch(`${API}/api/song/play/about/block/page?songId=${id}`);
             return r.json();
           }, d => !!d && (d as any).code === 200));
+          if (kind === 'chorus') return json(res, await remember(`chorus-${id}.json`, async () => {
+            const r = await fetch(`${API}/api/song/chorus?ids=%5B${id}%5D`);
+            return r.json();
+          }, d => !!d && (d as any).code === 200));
           if (kind === 'detail') return json(res, await songDetail(id));
           if (kind === 'cover') {
             const file = path.join(NCM_CACHE, `cover-${id}.jpg`);

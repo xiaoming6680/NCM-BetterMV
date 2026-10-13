@@ -14,6 +14,7 @@ Copy-Item -LiteralPath (Join-Path $projectRoot 'plugin\manifest.json') -Destinat
 Copy-Item -LiteralPath (Join-Path $projectRoot 'dist\plugin\bettermv.js') -Destination $target -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'plugin\preview.jpg') -Destination $target -Force
 Copy-Item -Path (Join-Path $projectRoot 'public\fonts\*.ttf') -Destination (Join-Path $target 'fonts') -Force
+Copy-Item -Path (Join-Path $projectRoot 'public\fonts\*.woff2') -Destination (Join-Path $target 'fonts') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'public\fonts\OFL.txt') -Destination (Join-Path $target 'fonts') -Force
 Copy-Item -Path (Join-Path $projectRoot 'public\previews\*.webp') -Destination (Join-Path $target 'previews') -Force
 Write-Output "已安装到 $target，重启网易云后生效。"

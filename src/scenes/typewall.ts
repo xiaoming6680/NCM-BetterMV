@@ -5,7 +5,7 @@
 // duotone — a strip down one side (split), full-bleed and dark (stack), or nothing but ink (solo, one row at a time).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, outExpo, rng } from './types.ts';
+import { clamp01, outExpo, rng, snap } from './types.ts';
 import { textMesh, hasCjk } from '../render/text.ts';
 import type { LineState } from '../director/lyrics.ts';
 import { lastIndex } from '../director/music.ts';
@@ -69,7 +69,7 @@ export class TypeWall implements MvScene {
     const root = new THREE.Group();
     root.userData.lyrics = true;
     const rows = this.rowsOf(state).map(r => {
-      const mesh = textMesh(r.text, 'display', 1, { center: true, px: 200, halo: 'none' });
+      const mesh = textMesh(r.text, 'condensed', 1, { center: true, px: 200, halo: 'none' });
       mesh.material.toneMapped = false;
       mesh.material.depthTest = false;
       mesh.renderOrder = 20;
@@ -126,7 +126,7 @@ export class TypeWall implements MvScene {
       // Heights: each row as wide as the area, capped; the stack sits on a baseline below the middle.
       // (Four rows of at most a fifth of the frame fit between the baseline and the top margin.)
       const hs = rows.map(r => Math.min(vh * (variant === 'solo' ? 0.5 : 0.2), areaW / Math.max(0.2, r.aspect)));
-      let y = -vh * (variant === 'solo' ? 0.25 : 0.4) + outExpo(st.exit) * vh * 1.1;
+      let y = -vh * (variant === 'solo' ? 0.25 : 0.4) + snap(st.exit) * vh * 1.1;
       for (const r of b.rows) { r.mesh.visible = false; r.block.visible = false; }
       for (let i = rows.length - 1; i >= 0; i--) {
         const r = rows[i], h = hs[i];
