@@ -4,27 +4,30 @@
 <meta charset="utf-8">
 <title>BetterMV 场景一览</title>
 <style>
-/* docs/images/scenes.jpg: the 23 scene sketches of the settings page (public/previews/, the original demo cover and
-   made-up words), 8 × 3 with their names. 1760 × 600, shot at 1x and shown 880 wide in the README (so 2x there). */
-@font-face { font-family: Archivo; src: url(/fonts/Archivo-w1000-700.ttf); font-weight: 700; }
+/* docs/images/scenes.jpg: the settings page's scene sketches (public/previews/, the original demo cover and made-up
+   words), grouped as the settings page groups them, 8 to a row, each group under its name. 1760 wide, as tall as the
+   groups need (film/render.ts shoots the whole page); shown 880 wide in the README (so 2x there). */
+@font-face { font-family: PF; src: local("PingFang SC Semibold"), local("PingFangSC-Semibold"), local("PingFang SC Bold"); font-weight: 600; }
+@font-face { font-family: PF; src: local("PingFang SC Medium"), local("PingFangSC-Medium"); font-weight: 500; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { width: 1760px; height: 600px; overflow: hidden; background: #07070a; color: #fff; font-family: "Noto Sans SC", "Microsoft YaHei UI", sans-serif; -webkit-font-smoothing: antialiased; }
-.grid { display: grid; grid-template-columns: repeat(8, 198px); gap: 18px 16px; padding: 30px 32px; }
-figure { position: relative; }
+body { width: 1760px; background: #07070a; color: #fff; font-family: PF, "Noto Sans SC", "Microsoft YaHei UI", sans-serif; -webkit-font-smoothing: antialiased; }
+main { padding: 34px 32px 26px; }
+section { margin-bottom: 26px; }
+h2 { margin: 0 0 14px 2px; font-size: 19px; font-weight: 600; color: rgba(255,255,255,.62); }
+.grid { display: grid; grid-template-columns: repeat(8, 198px); gap: 18px 16px; }
 figure img { display: block; width: 198px; height: 111.375px; object-fit: cover; border-radius: 10px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 10px 26px rgba(0,0,0,.5); }
-figcaption { margin-top: 10px; display: flex; align-items: baseline; gap: 8px; font-size: 17px; font-weight: 700; }
-figcaption small { font: 700 12px Archivo; letter-spacing: .12em; color: rgba(255,255,255,.45); text-transform: uppercase; }
+figcaption { margin-top: 10px; font-size: 17px; font-weight: 600; }
 </style>
 </head>
 <body>
-<div class="grid" id="grid"></div>
+<main id="main"></main>
 <script type="module">
-import { SCENES } from '../src/scenes/catalog.ts';
-const grid = document.getElementById('grid');
-for (const s of SCENES) {
-  const f = document.createElement('figure');
-  f.innerHTML = `<img src="/previews/${s.id}.webp" alt=""><figcaption>${s.name}<small>${s.id}</small></figcaption>`;
-  grid.appendChild(f);
+import { SCENE_GROUPS } from '../src/scenes/catalog.ts';
+const main = document.getElementById('main');
+for (const g of SCENE_GROUPS) {
+  const sec = document.createElement('section');
+  sec.innerHTML = `<h2>${g.name}</h2><div class="grid">${g.scenes.map(s => `<figure><img src="/previews/${s.id}.webp" alt=""><figcaption>${s.name}</figcaption></figure>`).join('')}</div>`;
+  main.appendChild(sec);
 }
 await Promise.all([...document.images].map(i => i.decode().catch(() => {})));
 document.body.dataset.ready = '1';

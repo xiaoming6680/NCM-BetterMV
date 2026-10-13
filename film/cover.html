@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>BetterMV 封面</title>
+<script>{ const q = new URLSearchParams(location.search); document.documentElement.className = (q.has('tall') ? 'tall' : 'wide') + (q.has('reel') ? ' reel' : ''); }</script>
+<style>
+/* The film's cover: 1920 × 1080 (?tall: 1080 × 1440 for a 3:4 grid). A frame of the film (cut to
+   build/film/cover-frames/ by film/render.ts --cover), the film's line over it, the name small underneath. */
+@font-face { font-family: PF; src: local("PingFang SC Medium"); font-weight: 500; }
+@font-face { font-family: PF; src: local("PingFang SC Heavy"); font-weight: 900; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html.wide body { width: 1920px; height: 1080px; }
+html.tall body { width: 1080px; height: 1440px; }
+body { position: relative; overflow: hidden; background: #000; color: #fff; font-family: PF, "Noto Sans SC", sans-serif; -webkit-font-smoothing: antialiased; }
+.bg { position: absolute; inset: 0; background: url(/build/film/cover-frames/frame.jpg) center / cover no-repeat; }
+.shade { position: absolute; inset: 0; }
+html.wide .shade { background: linear-gradient(90deg, rgba(0,0,0,.82) 0, rgba(0,0,0,.55) 42%, rgba(0,0,0,0) 72%); }
+html.tall .shade { background: linear-gradient(0deg, rgba(0,0,0,.85) 0, rgba(0,0,0,.55) 45%, rgba(0,0,0,0) 70%); }
+.q { position: absolute; font-weight: 900; line-height: 1.12; white-space: nowrap; text-shadow: 0 4px 40px rgba(0,0,0,.6); }
+.q .lead { display: block; font-weight: 500; opacity: .9; }
+.q .g { background: linear-gradient(90deg, #ff6a5e, #ec4141 55%, #c22a4a); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; text-shadow: none; padding-right: .04em; }
+.brand { position: absolute; display: flex; align-items: center; gap: 18px; }
+.brand img { display: block; }
+.brand b { font: 700 1.05em "Segoe UI Variable Display", "Segoe UI", sans-serif; letter-spacing: -.015em; }
+.brand span { font: 500 .5em PF; opacity: .75; margin-left: 6px; }
+
+html.wide .q { left: 110px; top: 250px; font-size: 128px; }
+html.wide .q .lead { font-size: 52px; margin-bottom: 26px; }
+html.wide .brand { left: 116px; bottom: 110px; font-size: 44px; }
+html.wide .brand img { width: 64px; height: 64px; }
+html.tall .q { left: 80px; top: 820px; font-size: 104px; }
+html.tall .q .lead { font-size: 44px; margin-bottom: 22px; }
+html.tall .brand { left: 84px; bottom: 90px; font-size: 38px; }
+html.tall .brand img { width: 56px; height: 56px; }
+/* The reel's cover (?reel): a wall of eight of its plates (frames cut to cover-frames/reel-*.jpg), the line over it and
+   the count under the line. */
+.wall { display: none; position: absolute; inset: 0; gap: 6px; background: #000; }
+.wall i { display: block; background: center / cover no-repeat; }
+html.reel .bg { display: none; }
+html.reel .wall { display: grid; }
+html.reel.wide .wall { grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(2, 1fr); }
+html.reel.tall .wall { grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(4, 1fr); }
+html.reel.wide .shade { background: linear-gradient(90deg, rgba(0,0,0,.88) 0, rgba(0,0,0,.7) 40%, rgba(0,0,0,.15) 74%, rgba(0,0,0,0) 100%); }
+html.reel.tall .shade { background: linear-gradient(0deg, rgba(0,0,0,.92) 0, rgba(0,0,0,.72) 46%, rgba(0,0,0,.1) 72%, rgba(0,0,0,0) 100%); }
+.count { display: none; position: absolute; font-weight: 500; letter-spacing: .04em; opacity: .82; }
+html.reel .count { display: block; }
+html.reel.wide .count { left: 114px; top: 640px; font-size: 40px; }
+html.reel.tall .count { left: 82px; top: 1180px; font-size: 34px; }
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<div class="wall"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+<script>document.querySelectorAll('.wall i').forEach((e, i) => { e.style.backgroundImage = `url(/build/film/cover-frames/reel-${i}.jpg)`; });</script>
+<div class="shade"></div>
+<div class="q"><span class="lead">我让网易云的</span>每一首歌<br>都有了自己的 <span class="g">MV</span></div>
+<div class="count">37 个场景，4 种风格，4 种画风</div>
+<div class="brand"><img src="/film/logo.svg" alt=""><b>BetterMV</b><span>网易云音乐插件</span></div>
+</body>
+</html>

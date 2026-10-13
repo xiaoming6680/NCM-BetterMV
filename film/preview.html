@@ -10,8 +10,7 @@
    over the bottom 65 px, so the store version keeps the icon in the upper half and leaves the name to the card.
    Behind the icon, faintly, the plugin's own push tunnel (film/art/tunnel-h.jpg). */
 @font-face { font-family: PF; src: local("PingFang SC Medium"), local("PingFangSC-Medium"); font-weight: 500; }
-@font-face { font-family: Archivo; src: url(/fonts/Archivo-w1000-700.ttf); font-weight: 700; }
-:root { --w: 880px; --h: 440px; --s: 138px; --cy: 156px; --brand: linear-gradient(135deg, #ff8a5b, #ff3d7f 50%, #7c4dff); }
+:root { --w: 880px; --h: 440px; --s: 138px; --cy: 156px; --brand: linear-gradient(135deg, #ec4141, #3a0f1f); }
 :root.store { --w: 960px; --h: 480px; --s: 150px; --cy: 162px; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { position: relative; width: var(--w); height: var(--h); overflow: hidden; background: #000; color: #f5f5f7; font-family: PF, "Microsoft YaHei UI", sans-serif; -webkit-font-smoothing: antialiased; }
@@ -23,7 +22,7 @@ body { position: relative; width: var(--w); height: var(--h); overflow: hidden; 
 .core { width: calc(var(--s) * 1.04); height: calc(var(--s) * 1.04); border-radius: 30%; background: var(--brand); filter: blur(calc(var(--s) * .16)); opacity: .8; }
 .icon { width: var(--s); height: var(--s); }
 .copy { position: absolute; left: 0; right: 0; top: 262px; text-align: center; white-space: nowrap; }
-.copy h1 { font: 700 54px Archivo; letter-spacing: -.02em; line-height: 1; }
+.copy h1 { font: 700 56px "Segoe UI Variable Display", "Segoe UI", sans-serif; letter-spacing: -.015em; line-height: 1; }
 .copy p { margin-top: 16px; font-size: 19px; font-weight: 500; letter-spacing: .04em; line-height: 1; color: #a1a1a6; }
 .store .copy { display: none; }
 </style>
@@ -34,6 +33,6 @@ body { position: relative; width: var(--w); height: var(--h); overflow: hidden; 
 <div class="l haze"></div>
 <div class="l core"></div>
 <img class="l icon" src="logo.svg" alt="">
-<div class="copy"><h1>BetterMV</h1><p>网易云音乐插件 · 放任何一首歌，实时生成一支 MV</p></div>
+<div class="copy"><h1>BetterMV</h1><p>为网易云音乐的每一首歌，实时生成专属 MV</p></div>
 </body>
 </html>

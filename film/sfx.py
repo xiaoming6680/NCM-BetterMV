@@ -2,7 +2,7 @@
 
     python film/sfx.py events.json out.wav seconds
 
-events.json is the film's PROMO.sfx (film/main.ts): [{"kind": "click" | "whoosh" | "down" | "swell", "T": seconds, "dur": s}].
+events.json is the film's PROMO.sfx (film/main.ts): [{"kind": "click" | "whoosh" | "down" | "swell" | "key" | "tick", "T": seconds, "dur": s}].
 film/render.ts mixes the result under the songs.
 """
 import json
@@ -12,7 +12,7 @@ import numpy as np
 import soundfile as sf
 
 import sound
-from sound import SR, click, reverb, swell, swoosh_down, whoosh
+from sound import SR, click, key, reverb, swell, swoosh_down, tick, whoosh
 
 
 def main():
@@ -29,6 +29,11 @@ def main():
             swoosh_down(t, dur, 0.34)
         elif e['kind'] == 'swell':
             swell(t, dur, 0.28)
+        elif e['kind'] == 'key':
+            for i in range(5):
+                key(t + i * 0.055, 0.2)
+        elif e['kind'] == 'tick':
+            tick(t, 86, 0.14)
     # (start() replaces the module's buses, so they are read through the module.)
     mix = sum(sound.BUS[k] for k in sound.BUS).astype(np.float64)
     mix += reverb(sound.SEND['hall'].astype(np.float64), 2.4) * 0.8 + reverb(sound.SEND['room'].astype(np.float64), 0.6, 0.008, 9000) * 0.5
