@@ -27,12 +27,14 @@ jobs:
         shell: pwsh
         run: |
           # No work names in the bundle (the plugin is promoted on its own) and every file the manifest needs is packed.
-          if (Select-String -Path dist/plugin/bettermv.js -Pattern '《' -Quiet) { throw 'bettermv.js 里出现了作品名（《…》）' }
+          foreach ($js in @('dist/plugin/bettermv.js', 'dist/obs/obs.js')) {
+            if (Select-String -Path $js -Pattern '《' -Quiet) { throw "$js 里出现了作品名（《…》）" }
+          }
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path dist/*.plugin).Path)
           try {
             $names = $zip.Entries.FullName
-            foreach ($need in @('manifest.json', 'bettermv.js', 'preview.jpg', 'LICENSE', 'fonts/OFL.txt')) {
+            foreach ($need in @('manifest.json', 'bettermv.js', 'preview.jpg', 'LICENSE', 'fonts/OFL.txt', 'obs/index.html', 'obs/obs.js', 'obs/bettermv-obs.exe')) {
               if ($names -notcontains $need) { throw "安装包缺少 $need" }
             }
             if (@($names | Where-Object { $_ -like 'previews/*.webp' }).Count -lt 21) { throw '场景示意图不全' }
