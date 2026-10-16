@@ -71,8 +71,8 @@ const fragmentShader = /* glsl */ `
   // The reflection is darkened, so the frame itself reads as a window rushing in rather than a tiled wallpaper.
   vec2 mirror(vec2 uv) { vec2 m = mod(uv, 2.0); return mix(m, 2.0 - m, step(1.0, m)); }
   float past(vec2 uv) { vec2 o = max(-uv, uv - 1.0); return 1.0 - 0.65 * smoothstep(0.0, 0.12, max(o.x, o.y)); }
-  vec3 texA(vec2 uv) { return texture2D(tA, mirror(uv)).rgb * past(uv); }
-  vec3 texB(vec2 uv) { return texture2D(tB, mirror(uv)).rgb * past(uv); }
+  vec3 texA(vec2 uv) { return textureLod(tA, mirror(uv), 0.0).rgb * past(uv); }
+  vec3 texB(vec2 uv) { return textureLod(tB, mirror(uv), 0.0).rgb * past(uv); }
   // Scale (and turn) a uv about the centre in screen-shaped space.
   vec2 about(vec2 uv, vec2 c, float scale, float turn) {
     vec2 d = (uv - c) * vec2(uAspect, 1.0) / scale;
@@ -102,7 +102,7 @@ const fragmentShader = /* glsl */ `
     float p = clamp(uP, 0.0, 1.0);
     int k = int(uKind + 0.5);
     vec2 q = (uv - uCenter) * vec2(uAspect, 1.0);
-    vec3 a = texture2D(tA, uv).rgb, b = texture2D(tB, uv).rgb;
+    vec3 a = textureLod(tA, uv, 0.0).rgb, b = textureLod(tB, uv, 0.0).rgb;
     float m = 0.0, e = 0.0;
     float reach = length(vec2(max(uCenter.x, 1.0 - uCenter.x) * uAspect, max(uCenter.y, 1.0 - uCenter.y)));
     // The shape reveals and the cover matte move too: the old shot keeps pushing in, the new one settles from a
@@ -166,7 +166,7 @@ const fragmentShader = /* glsl */ `
       for (int j = 0; j < 12; j++) {
         vec2 w = uv + dir * (s - (float(j) / 11.0) * 0.16 * vel * uAmt);
         float onA = step(0.0, w.x) * step(w.x, 1.0) * step(0.0, w.y) * step(w.y, 1.0);
-        acc += mix(texture2D(tB, w - dir).rgb, texture2D(tA, clamp(w, 0.0, 1.0)).rgb, onA);
+        acc += mix(textureLod(tB, w - dir, 0.0).rgb, textureLod(tA, clamp(w, 0.0, 1.0), 0.0).rgb, onA);
       }
       gl_FragColor = vec4(acc / 12.0 * (1.0 + 0.12 * vel * uAmt), 1.0);
       return;
@@ -180,8 +180,8 @@ const fragmentShader = /* glsl */ `
     } else if (k == 9) {
       vec3 w = vec3(smoothstep(0.0, 0.6, p), smoothstep(0.2, 0.8, p), smoothstep(0.4, 1.0, p));
       vec2 off = vec2(0.012 * sin(p * 3.14159), 0.0);
-      a = vec3(texture2D(tA, uv + off).r, texture2D(tA, uv).g, texture2D(tA, uv - off).b);
-      b = vec3(texture2D(tB, uv - off).r, texture2D(tB, uv).g, texture2D(tB, uv + off).b);
+      a = vec3(textureLod(tA, uv + off, 0.0).r, textureLod(tA, uv, 0.0).g, textureLod(tA, uv - off, 0.0).b);
+      b = vec3(textureLod(tB, uv - off, 0.0).r, textureLod(tB, uv, 0.0).g, textureLod(tB, uv + off, 0.0).b);
       gl_FragColor = vec4(mix(a, b, w), 1.0);
       return;
     } else if (k == 10) {
@@ -256,6 +256,7 @@ export class ShotPass extends Pass {
   /** Letterbox, 0..1 of a 2.39:1 frame's bars, in the ink colour (setInk); under the overlay. */
   letterbox = 0;
   private bars: THREE.ShaderMaterial;
+  private copy: THREE.ShaderMaterial;
   private rtA: THREE.WebGLRenderTarget;
   private rtB: THREE.WebGLRenderTarget;
   /** The two shots of a transition after the lens. */
@@ -292,6 +293,11 @@ export class ShotPass extends Pass {
         void main() { if (vUv.y > uH && vUv.y < 1.0 - uH) discard; gl_FragColor = vec4(uInk, 1.0); }`,
       uniforms: { uH: { value: 0 }, uInk: { value: new THREE.Color() } },
     });
+    this.copy = new THREE.ShaderMaterial({
+      vertexShader, depthTest: false, depthWrite: false, blending: THREE.NoBlending,
+      fragmentShader: /* glsl */ `uniform sampler2D tColor; varying vec2 vUv; void main() { gl_FragColor = texture2D(tColor, vUv); }`,
+      uniforms: { tColor: { value: null as THREE.Texture | null } },
+    });
   }
 
   /** The letterbox bars' colour (the cover's ink). */
@@ -323,11 +329,22 @@ export class ShotPass extends Pass {
     const lens = this.lensFor(this.scene, true);
     if (!tr) {
       if (lens) this.lensShot(renderer, this.scene, this.camera as THREE.PerspectiveCamera, this.rtB, lens, !split, this.shotKey, false, target, true);
-      else plain(this.scene, () => {
+      else {
+        // The plate into the multisampled rtB (the post chain's own buffers have no MSAA: a full-screen pass gains
+        // nothing from it and paid for a 4× resolve each), then copied over; no depth needed from it.
+        this.rtB.resolveDepthBuffer = false;
+        plain(this.scene, () => {
+          renderer.setRenderTarget(this.rtB);
+          renderer.clear();
+          renderer.render(this.scene, this.camera);
+        });
+        this.rtB.resolveDepthBuffer = true;
+        this.copy.uniforms.tColor.value = this.rtB.texture;
         renderer.setRenderTarget(target);
-        renderer.clear();
-        renderer.render(this.scene, this.camera);
-      });
+        this.quad.material = this.copy;
+        this.quad.render(renderer);
+        this.quad.material = this.material;
+      }
     } else {
       const drawA = () => { renderer.setRenderTarget(this.rtA); renderer.clear(); renderer.render(tr.from.scene, tr.from.camera); };
       const drawB = () => { renderer.setRenderTarget(this.rtB); renderer.clear(); renderer.render(this.scene, this.camera); };
@@ -431,6 +448,7 @@ export class ShotPass extends Pass {
     this.shotB.dispose();
     this.lens.dispose();
     this.bars.dispose();
+    this.copy.dispose();
     this.words.dispose();
     this.material.dispose();
     this.quad.dispose();

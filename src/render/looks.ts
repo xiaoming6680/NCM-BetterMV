@@ -185,9 +185,9 @@ const fragmentShader = /* glsl */ `
     // Soft luma (a tape holds some 250 lines across); the colour far softer, smeared to the right and late.
     vec2 px = vec2(u / uRes.x, 0.0);
     vec3 l = vec3(0.0);
-    for (int i = -2; i <= 2; i++) l += texture2D(tDiffuse, uv + px * float(i) * 1.2).rgb;
+    for (int i = -2; i <= 2; i++) l += textureLod(tDiffuse, uv + px * float(i) * 1.2, 0.0).rgb;
     vec2 ch = vec2(0.0);
-    for (int i = 0; i < 6; i++) ch += toYiq(texture2D(tDiffuse, uv - px * (float(i) * 2.5 + 3.0)).rgb).yz;
+    for (int i = 0; i < 6; i++) ch += toYiq(textureLod(tDiffuse, uv - px * (float(i) * 2.5 + 3.0), 0.0).rgb).yz;
     vec3 c = max(fromYiq(vec3(toYiq(l / 5.0).x, ch / 6.0 * 0.85)), 0.0);
     // Tape tone: blacks lifted, whites rolled off, a faint magenta cast.
     c = (0.035 + c * 0.9) * vec3(1.03, 0.97, 1.04);
@@ -205,7 +205,7 @@ const fragmentShader = /* glsl */ `
     vec2 cell = floor(uv * uRes / b);
     vec3 c = vec3(0.0);
     for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++)
-      c += texture2D(tDiffuse, (cell * b + (vec2(float(i), float(j)) + 0.5) * b / 4.0) / uRes).rgb;
+      c += textureLod(tDiffuse, (cell * b + (vec2(float(i), float(j)) + 0.5) * b / 4.0) / uRes, 0.0).rgb;
     return c / 16.0;
   }
 
@@ -220,7 +220,7 @@ const fragmentShader = /* glsl */ `
     vec3 c = vec3(0.0), avg = vec3(0.0);
     float best = -1.0;
     for (int j = 0; j < 3; j++) for (int i = 0; i < 3; i++) {
-      vec3 s = texture2D(tDiffuse, (cid + vec2(0.17 + 0.33 * float(i), 0.17 + 0.33 * float(j))) * cell / uRes).rgb;
+      vec3 s = textureLod(tDiffuse, (cid + vec2(0.17 + 0.33 * float(i), 0.17 + 0.33 * float(j))) * cell / uRes, 0.0).rgb;
       avg += s;
       float l = luma(s);
       if (l > best) { best = l; c = s; }
@@ -238,7 +238,7 @@ const fragmentShader = /* glsl */ `
 
   // ---- Riso ----
   vec3 risoTarget(vec2 u) {
-    vec3 c = texture2D(tDiffuse, u).rgb;
+    vec3 c = textureLod(tDiffuse, u, 0.0).rgb;
     float l = luma(c), mx = max(max(c.r, c.g), c.b);
     // A dark frame prints its light as ink on the paper: a coloured light as its own colour at full strength (one
     // or two inks), a white one (the words, a flash) as a deep overprint, so the brightest things read darkest.
@@ -287,7 +287,7 @@ const fragmentShader = /* glsl */ `
       glass = d * 0.5 + 0.5;
     }
     vec2 uv = glass;
-    vec3 col = uHibit > 0.0 ? blockColour(uv) : texture2D(tDiffuse, uv).rgb;
+    vec3 col = uHibit > 0.0 ? blockColour(uv) : textureLod(tDiffuse, uv, 0.0).rgb;
     if (uVhs > 0.0) col = mix(col, vhs(uv), uVhs);
     if (uAscii > 0.0) col = mix(col, ascii(uv), uAscii);
     if (uRiso > 0.0) col = mix(col, riso(glass), uRiso);
@@ -326,10 +326,10 @@ const fragmentShader = /* glsl */ `
     if (vUv.y < uBox || vUv.y > 1.0 - uBox) col = uRiso > 0.0 ? risoDeep : uBoxInk;
     // The words and the motion graphics (linear, premultiplied): clean over characters, printed solid on paper.
     if (uSplit > 0.5) {
-      vec4 w = texture2D(tLyr, vUv);
+      vec4 w = textureLod(tLyr, vUv, 0.0);
       if (uRiso > 0.0) {
         // Coverage from how bright the words are (their dark halos print nothing); the second ink off register.
-        vec4 w2 = texture2D(tLyr, vUv + vec2(-2.0, 1.5) * unit() / uRes);
+        vec4 w2 = textureLod(tLyr, vUv + vec2(-2.0, 1.5) * unit() / uRes, 0.0);
         float k = clamp(luma(w.rgb) * 1.6, 0.0, 1.0), k2 = clamp(luma(w2.rgb) * 1.6, 0.0, 1.0);
         float tooth = 1.0 - 0.12 * vnoise(vUv * uRes / (2.0 * unit()));
         col *= mix(vec3(1.0), risoSecond / risoPaper, k2 * 0.85 * uRiso);

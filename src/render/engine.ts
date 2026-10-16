@@ -151,7 +151,7 @@ const GradeShader = {
     varying vec2 vUv;
     float hash(vec2 p) { p = fract(p * vec2(443.897, 441.423)); p += dot(p, p.yx + 19.19); return fract((p.x + p.y) * p.x); }
     vec3 split(vec2 uv, vec2 off) {
-      return vec3(texture2D(tDiffuse, uv + off).r, texture2D(tDiffuse, uv).g, texture2D(tDiffuse, uv - off).b);
+      return vec3(textureLod(tDiffuse, uv + off, 0.0).r, textureLod(tDiffuse, uv, 0.0).g, textureLod(tDiffuse, uv - off, 0.0).b);
     }
     void main() {
       vec2 uv = vUv;
@@ -182,7 +182,7 @@ const GradeShader = {
       if (uHalation > 0.001) {
         // Halation (the finish): light scattered back through the film base glows warm round bright lights, only
         // outside them; read where the picture is (after the mirror, pixels and lens), from the bloom's tightest blur.
-        float h = dot(texture2D(tHalo, uv).rgb, vec3(0.2126, 0.7152, 0.0722));
+        float h = dot(textureLod(tHalo, uv, 0.0).rgb, vec3(0.2126, 0.7152, 0.0722));
         col += vec3(1.0, 0.38, 0.18) * max(h - 0.4 * dot(col, vec3(0.2126, 0.7152, 0.0722)), 0.0) * uHalation;
       }
       col *= uExposure;
@@ -197,7 +197,7 @@ const GradeShader = {
         // A flashback: the kept frame in the ink → signal duotone, laid over the present where it is lighter (so the
         // words sung since stay readable and nothing goes darker; the word it held sits where it still is). The colour
         // says it is a memory; it is no brighter than the frame was.
-        vec3 m = texture2D(tMemory, vUv).rgb * uExposure;
+        vec3 m = textureLod(tMemory, vUv, 0.0).rgb * uExposure;
         float l = clamp(dot(m, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.5);
         vec3 mem = mix(mix(uInk, uSignal, smoothstep(0.0, 0.45, l)), mix(uSignal, vec3(1.0), 0.4), smoothstep(0.45, 1.0, l));
         col = mix(col, max(col, mem), uMemory);
@@ -346,7 +346,9 @@ export class Engine {
     container.appendChild(renderer.domElement);
     setAnisotropy(renderer.capabilities.getMaxAnisotropy());
 
-    const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+    // (Single-sampled, no depth: the plates are drawn with MSAA and depth in ShotPass's own buffers; every pass here is
+    // full-screen. With 4× MSAA each pass also paid a resolve of colour and depth, and the pair took ~220 MB at 1080p.)
+    const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
     this.composer = new EffectComposer(renderer, target);
     this.shots = new ShotPass();
     this.memory = new MemoryPass();

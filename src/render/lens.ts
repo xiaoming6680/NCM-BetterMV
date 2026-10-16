@@ -74,7 +74,7 @@ const depthGlsl = /* glsl */ `
   float viewZ(float d) { return 2.0 * uNear * uFar / (uFar + uNear - (d * 2.0 - 1.0) * (uFar - uNear)); }
   // The depth at uv; where nothing wrote one, the plate's stand-in distance (PlateLens.depthless), else the far plane.
   float depthAt(vec2 uv) {
-    float d = texture2D(tDepth, uv).r;
+    float d = textureLod(tDepth, uv, 0.0).r;
     if (d >= 1.0 && uDepthless > 0.0) d = 0.5 + 0.5 * ((uFar + uNear) / (uFar - uNear) - 2.0 * uFar * uNear / ((uFar - uNear) * uDepthless));
     return d;
   }
@@ -88,7 +88,7 @@ const dofFragment = /* glsl */ `
   uniform float uFocus, uCoc;
   float coc(float d) { return d >= 1.0 ? uCoc : uCoc * min(abs(1.0 - uFocus / viewZ(d)), 1.0); }
   void main() {
-    vec4 c0 = texture2D(tColor, vUv);
+    vec4 c0 = textureLod(tColor, vUv, 0.0);
     float r0 = coc(depthAt(vUv));
     if (r0 < 0.6) { gl_FragColor = c0; return; }
     vec3 acc = c0.rgb;
@@ -97,7 +97,7 @@ const dofFragment = /* glsl */ `
       float fi = float(i) + 0.5;
       float r = r0 * sqrt(fi / 28.0), a = fi * 2.39996323 + spin;
       vec2 uv = vUv + vec2(cos(a), sin(a)) * r / uRes;
-      vec3 s = texture2D(tColor, uv).rgb;
+      vec3 s = textureLod(tColor, uv, 0.0).rgb;
       // (A sharp thing nearer the focus doesn't smear out over the blur behind it.)
       float w = smoothstep(r - 1.0, r + 1.0, coc(depthAt(uv)));
       // Bright lights open into discs.
@@ -114,7 +114,7 @@ const motionFragment = /* glsl */ `
   uniform mat4 uReproj, uReprojFar;
   uniform float uScale, uMax;
   void main() {
-    vec4 c0 = texture2D(tColor, vUv);
+    vec4 c0 = textureLod(tColor, vUv, 0.0);
     float d = depthAt(vUv);
     // The sky (the far plane) moves only with the camera's turn, not its travel.
     vec4 p = (d >= 1.0 ? uReprojFar : uReproj) * vec4(vUv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
@@ -125,7 +125,7 @@ const motionFragment = /* glsl */ `
     if (len * uRes.y < 0.75) { gl_FragColor = c0; return; }
     vec3 acc = vec3(0.0);
     float j = ign(gl_FragCoord.xy);
-    for (int i = 0; i < 12; i++) acc += texture2D(tColor, vUv + v * ((float(i) + j) / 12.0 - 0.5)).rgb;
+    for (int i = 0; i < 12; i++) acc += textureLod(tColor, vUv + v * ((float(i) + j) / 12.0 - 0.5), 0.0).rgb;
     gl_FragColor = vec4(acc / 12.0, c0.a);
   }`;
 
