@@ -10,6 +10,7 @@ import {
 import { ProgressClock } from './clock.ts';
 import { fetchChorus, fetchLyric, fetchWiki, getAudio, loadCover, songCacheDir, SourceError } from './source.ts';
 import { alignSong, applyAlignment, cachedAlignment, checkPack, needsAlignment } from './aligner.ts';
+import { startUpdates } from './update.ts';
 import { isRecordingKeys, keyCombo, loadConfig, mvButton, Overlay, pixelRatio, settingsView, type BarSection, type Config, type QueueTrack } from './ui.ts';
 import type { SectionLabel } from '../types.ts';
 
@@ -39,6 +40,8 @@ const sketch = (id: string) => {
 const changed = (c: Config) => listeners.forEach(fn => fn(c));
 plugin.onConfig(() => settingsView(config, changed, sketch));
 void checkPack();
+// Older BetterMV packages beside this one go; a newer version is looked for once a day.
+startUpdates(config.autoUpdate);
 
 /** A song being prepared: the one to show (urgent), or the next one ahead. */
 interface Job { id: number; cancelled: boolean; urgent: boolean; progress?: (stage: Stage, progress: number) => void }

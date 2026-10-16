@@ -71,3 +71,13 @@
 - 路径第二个字符不是 `:` 时按 BetterNCM 数据目录的相对路径处理，所以 `\NAS\…` 这类网络路径会被拼错。`readFileText` 读不存在的文件返回空字符串，不报错。
 - 数据目录 `/local` 和 `mount_dir` 挂出来的目录不需要 API Key，但端口每次启动都变。
 
+## 插件包的解压与更新（2026-10-17 读 BetterNCM 源码并实测）
+
+- 每次网易云启动，BetterNCM 先清空 `plugins_runtime`（原生插件的 dll 占用时保留），再按文件名顺序把 `plugins\*.plugin` 逐个解压到 `plugins_runtime\tmp`，读 manifest，写 `.plugin.path.meta`（包相对数据目录的路径，如 `/plugins\BetterMV-0.9.1.plugin`），改名为 `plugins_runtime\<slug>`；同 slug 已存在就先删掉。所以同 slug 的多个包，只有文件名排在最后的生效：`BetterMV-0.10.0.plugin` 排在 `BetterMV-0.9.3.plugin` 前面，旧版会覆盖新版。
+- 前端先加载 `plugins_runtime`，再加载 `plugins_dev`，同 slug 先到先得：`plugins` 里有 BetterMV 的包时，开发目录里的不会加载。开发插件没有 `.plugin.path.meta`。
+- BetterNCM 自带的“删除插件”：读 `.plugin.path.meta`、删掉那个包，manifest 有 `require_restart`（BetterMV 有）就调 `betterncm_native.app.restart()` 重启网易云（不会带上原来的命令行参数）。
+- 插件管理器在启动时就为每个插件调 `_getConfigElement()` 生成设置页并一直缓存，所以设置页在没打开时就已建好，状态变化要一直跟着更新，不能在页面没挂上时退订。
+- 页面里调 `betterncm.app.reloadPlugins()`（`/app/reload_plugin`，重新解压）在网易云运行中不可靠：实测 `plugins_runtime` 没有重新解压（应是插件文件正被占用，原因未细查）；随后的 `betterncm.reload()` 把加载遮罩调成不透明后页面没有重载，界面被盖住，只能重启网易云。所以 BetterMV 的更新只走重启。
+- BetterMV 的做法（`src/plugin/update.ts`）：启动 8 秒后读 `plugins` 里每个 `.plugin` 的 manifest（不看文件名），slug 为 `ncm-better-mv` 且比自己旧或同版本的删掉；比自己新的保留、删掉自己的包，设置里提示重启。每天（或刚换了版本时）查一次 `api.github.com/repos/xiaoming6680/NCM-BetterMV/releases`（带 `Access-Control-Allow-Origin: *`，未登录每小时 60 次），有新版本时齿轮上出现红点；点“更新”下载 `BetterMV-版本号.plugin` 到 `plugins`，核对大小和 manifest，删掉旧包，“重启网易云”后生效。开发安装只打开发布页。
+- 实测（网易云 3.1.37 + BetterNCM 1.3.4）：0.9.0 和新版 0.9.1 同放，新版删掉 0.9.0；0.10.0 和 0.9.1 同放，按文件名 0.9.1 生效，它删掉自己的包并提示“已安装 0.10.0，重启网易云后生效”；用 0.9.0 版本号的新代码，自动查到 0.9.1，点“更新” 1.5 秒下载完、替换旧包，点“重启网易云”后运行的是 0.9.1。客户端里从 GitHub 下载发布附件没有跨域问题。
+- 测试方法：网易云带 `--remote-debugging-port=9222` 启动后，可用 CDP（`http://127.0.0.1:9222/json` 找 `orpheus://orpheus/pub/app.html`，`Runtime.evaluate`）在页面里直接执行代码；`window.__betterMv` 有 `open()`、`close()`、`player`。

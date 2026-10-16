@@ -33,6 +33,8 @@ export interface Config {
   fpsCap: 0 | 240 | 120 | 60 | 30;
   /** Analyse the play list's next track in the background while one plays. */
   prefetch: boolean;
+  /** Ask GitHub once a day whether a newer version is out. */
+  autoUpdate: boolean;
   /** The key of each action, as `Ctrl+Shift+KeyM`: the modifiers, then the key's code. */
   keys: Keys;
 }
@@ -83,6 +85,7 @@ export function loadConfig(): Config {
     arrange: plugin.getConfig('arrange', 'random' as Config['arrange']) === 'fixed' ? 'fixed' : 'random',
     fpsCap: (() => { const n = Number(plugin.getConfig('fpsCap', 0)); return n === 240 || n === 120 || n === 60 || n === 30 ? n : 0; })(),
     prefetch: plugin.getConfig<boolean>('prefetch', false) as unknown === true,
+    autoUpdate: plugin.getConfig<boolean>('autoUpdate', true) as unknown !== false,
     keys: (() => {
       const keys = { ...DEFAULT_KEYS };
       try {

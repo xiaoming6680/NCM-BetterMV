@@ -34,9 +34,16 @@ declare const betterncm: {
     /** Starts a command line (it doesn't wait for it to finish). */
     exec(cmd: string, elevate?: boolean, showWindow?: boolean): Promise<boolean>;
   };
+  ncm: {
+    /** Opens a page in the system's browser. */
+    openUrl(url: string): void;
+  };
 };
 
 interface Window {
   APP_CONF?: { domain?: string };
   webpackJsonp?: unknown[];
 }
+
+/** BetterNCM's native bindings (its own plugin manager restarts NetEase through them); absent outside the client. */
+declare const betterncm_native: { app?: { restart?(): void } } | undefined;
