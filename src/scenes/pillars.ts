@@ -9,7 +9,7 @@
 // from above, turning (top).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { rng, smooth } from './types.ts';
+import { freeGraph, rng, smooth } from './types.ts';
 import { LyricBlocks, Stands, voiceFor } from './lyricBlock.ts';
 import { lastIndex, type Music } from '../director/music.ts';
 import type { LyricLine, SectionLabel } from '../types.ts';
@@ -370,6 +370,12 @@ export class Pillars implements MvScene {
       renderer.setRenderTarget(prev);
     };
     this.resize(init.aspect);
+  }
+
+  /** The ring state's buffer and pass (MvScene.dispose). */
+  dispose(): void {
+    this.stateRT.dispose();
+    freeGraph(this.stateScene);
   }
 
   resize(aspect: number): void {

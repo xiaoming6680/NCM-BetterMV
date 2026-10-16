@@ -89,6 +89,21 @@ export interface MvScene {
    * FullScreenQuad): compiled along with it before the MV shows (Engine.compile).
    */
   readonly offscreen?: readonly THREE.Object3D[];
+  /**
+   * Frees what the plate made off its scene graph (render targets, scenes of its own); MvPlayer.unload disposes the
+   * scene graph itself. Without it each song left these behind (a lyric layer's words and buffer, the canvas's paint
+   * maps, the march buffers): GPU memory grew with every song.
+   */
+  dispose?(): void;
+}
+
+/** Disposes the geometries and materials under root, not their textures (a plate's may be shared or cached). */
+export function freeGraph(root: THREE.Object3D): void {
+  root.traverse(o => {
+    const m = o as THREE.Mesh;
+    m.geometry?.dispose();
+    for (const mat of Array.isArray(m.material) ? m.material : m.material ? [m.material] : []) mat.dispose();
+  });
 }
 
 /** Small deterministic PRNG (mulberry32). */

@@ -15,7 +15,7 @@ import type { LyricLine } from '../types.ts';
 import type { Palette } from '../render/palette.ts';
 import { tokenize } from '../lyrics/parse.ts';
 import { LyricRig, paintWord, type RigStyle } from './lyricRig.ts';
-import { clamp01, outExpo, smooth, snap } from './types.ts';
+import { clamp01, freeGraph, outExpo, smooth, snap } from './types.ts';
 
 type TextMesh = THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
 
@@ -582,6 +582,12 @@ export class LyricLayer {
     c.updateProjectionMatrix();
     const w = Math.round(rw >= rh ? px : (px * rw) / rh), h = Math.round(rw >= rh ? (px * rh) / rw : px);
     if (this.target.width !== w || this.target.height !== h) this.target.setSize(w, h);
+  }
+
+  /** Its words and buffer (they hang off no plate's scene graph). */
+  dispose(): void {
+    freeGraph(this.scene);
+    this.target.dispose();
   }
 
   render(renderer: THREE.WebGLRenderer): void {

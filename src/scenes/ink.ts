@@ -123,6 +123,9 @@ export class Ink implements MvScene {
     return g;
   }
 
+  /** The lyric layer's own scene and buffer (MvScene.dispose). */
+  dispose(): void { this.layer.dispose(); }
+
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();

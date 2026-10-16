@@ -377,6 +377,12 @@ export class Clouds implements MvScene {
     this.resize(init.aspect);
   }
 
+  /** The march's buffer and material (MvScene.dispose; the noise it reads is kept for the next song). */
+  dispose(): void {
+    this.rt.dispose();
+    this.march.dispose();
+  }
+
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();

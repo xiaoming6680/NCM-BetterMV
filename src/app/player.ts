@@ -173,7 +173,7 @@ export class MvPlayer {
 
   unload(): void {
     const keep = this.song?.cover;
-    for (const s of Object.values(this.scenes)) if (s && keep) disposeScene(s.scene, keep);
+    for (const s of Object.values(this.scenes)) if (s && keep) { disposeScene(s.scene, keep); s.dispose?.(); }
     if (this.director && keep) disposeScene(this.director.overlay.scene, keep);
     this.scenes = {};
     this.director = null;

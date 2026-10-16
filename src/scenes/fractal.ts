@@ -329,6 +329,12 @@ export abstract class FractalPlate implements MvScene {
     this.resize(init.aspect);
   }
 
+  /** The march's buffer and material (MvScene.dispose). */
+  dispose(): void {
+    this.rt.dispose();
+    this.quad.material.dispose();
+  }
+
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();

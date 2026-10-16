@@ -15,7 +15,7 @@
 // the brush is. Beyond the sheet, paper-coloured mist. The song leaves more of the paper blank (留白).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { rng, smooth, clamp01, lerp } from './types.ts';
+import { rng, smooth, clamp01, lerp, freeGraph } from './types.ts';
 import { LyricBlocks, Stands, voiceFor } from './lyricBlock.ts';
 import { INK_BLACK, ricePaper } from './ink.ts';
 import type { Music } from '../director/music.ts';
@@ -712,6 +712,12 @@ export class CanvasScene implements MvScene {
 
     this.scene.onBeforeRender = renderer => this.paint(renderer);
     this.resize(init.aspect);
+  }
+
+  /** The paint maps and the stamp passes' scenes (MvScene.dispose). */
+  dispose(): void {
+    for (const t of this.targets) t.dispose();
+    for (const sc of this.passes) freeGraph(sc);
   }
 
   resize(aspect: number): void {
