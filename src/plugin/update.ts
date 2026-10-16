@@ -19,11 +19,16 @@ export type UpdateState =
   | { kind: 'idle' }
   | { kind: 'checking' }
   | { kind: 'latest'; at: number }
-  /** `installable`: this plugin was installed from a package (a dev install is pointed to the page instead). */
-  | { kind: 'available'; release: Release; installable: boolean }
+  /**
+   * `installable`: this plugin was installed from a package (a dev install is pointed to the page instead). `auto`:
+   * found by the daily check (or by one before this start), not by a check asked for in the settings.
+   */
+  | { kind: 'available'; release: Release; installable: boolean; auto: boolean }
   | { kind: 'downloading'; release: Release; done: number; total: number }
-  /** A newer package is in place: NetEase's next start runs it. */
-  | { kind: 'ready'; version: string }
+  /** Downloaded: the package is checked, written into the plugins folder, and the older ones removed. */
+  | { kind: 'installing'; release: Release }
+  /** A newer package is in place: NetEase's next start runs it. `auto`: found there at start, not installed just now. */
+  | { kind: 'ready'; version: string; auto?: boolean }
   | { kind: 'failed'; message: string; release?: Release };
 
 let state: UpdateState = { kind: 'idle' };
@@ -109,17 +114,34 @@ async function tidyPackages(): Promise<void> {
   for (const p of others) if (p !== keep) await removePackage(p.path);
   if (keep) {
     await removePackage(own);
-    set({ kind: 'ready', version: keep.version });
+    set({ kind: 'ready', version: keep.version, auto: true });
   }
+}
+
+/** A connection to GitHub can hang without failing: a request is given up after `ms` with nothing coming (`poke` on each piece). */
+function deadline(ms: number) {
+  const abort = new AbortController();
+  let timer = 0;
+  const poke = () => { clearTimeout(timer); timer = window.setTimeout(() => abort.abort(), ms); };
+  poke();
+  return { signal: abort.signal, poke, late: () => abort.signal.aborted, stop: () => clearTimeout(timer) };
+}
+
+/** `p`, or `message` as an error once `ms` pass without it settling (BetterNCM's file server can stall under load). */
+function within<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer = 0;
+  return Promise.race([p, new Promise<never>((_, no) => { timer = window.setTimeout(() => no(new Error(message)), ms); })])
+    .finally(() => clearTimeout(timer));
 }
 
 /** The newest version published with a package (pre-releases, and the aligner pack's release, are not). */
 async function latestRelease(): Promise<Release | null> {
-  const r = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=20`, { cache: 'no-store' }).catch(() => null);
-  if (!r) throw new Error('无法连接 GitHub，请检查网络后重试');
-  if (r.status === 403 || r.status === 429) throw new Error('查询过于频繁，请稍后再试');
-  if (!r.ok) throw new Error(`无法查询新版本（HTTP ${r.status}）`);
-  const list: unknown = await r.json().catch(() => null);
+  const wait = deadline(15000);
+  const r = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=20`, { cache: 'no-store', signal: wait.signal }).catch(() => null);
+  if (!r) { wait.stop(); throw new Error(wait.late() ? '连接 GitHub 超时，请检查网络后重试' : '无法连接 GitHub，请检查网络后重试'); }
+  if (r.status === 403 || r.status === 429) { wait.stop(); throw new Error('查询过于频繁，请稍后再试'); }
+  if (!r.ok) { wait.stop(); throw new Error(`无法查询新版本（HTTP ${r.status}）`); }
+  const list: unknown = await r.json().catch(() => null).finally(wait.stop);
   if (!Array.isArray(list)) throw new Error('版本信息无法读取，请稍后重试');
   let best: Release | null = null;
   for (const x of list) {
@@ -137,7 +159,7 @@ async function latestRelease(): Promise<Release | null> {
 
 /** Asks GitHub for a newer version. `quiet` (the daily check): a failure leaves things as they were. */
 export async function checkUpdate(quiet = false): Promise<void> {
-  if (state.kind === 'checking' || state.kind === 'downloading' || state.kind === 'ready') return;
+  if (state.kind === 'checking' || state.kind === 'downloading' || state.kind === 'installing' || state.kind === 'ready') return;
   const before = state;
   set({ kind: 'checking' });
   try {
@@ -147,7 +169,7 @@ export async function checkUpdate(quiet = false): Promise<void> {
     plugin.setConfig('updateCheckedBy', VERSION);
     if (release && compareVersions(release.version, VERSION) > 0) {
       plugin.setConfig('updateRelease', JSON.stringify(release));
-      set({ kind: 'available', release, installable: !!(await ownPackage()) });
+      set({ kind: 'available', release, installable: !!(await ownPackage()), auto: quiet });
     } else {
       plugin.setConfig('updateRelease', '');
       set({ kind: 'latest', at });
@@ -159,49 +181,80 @@ export async function checkUpdate(quiet = false): Promise<void> {
 }
 
 async function download(url: string, size: number, onBytes: (done: number) => void): Promise<Blob> {
-  const r = await fetch(url, { cache: 'no-store' }).catch(() => { throw new Error('下载中断，请检查网络后重试'); });
-  if (!r.ok || !r.body) throw new Error(`下载失败（HTTP ${r.status}）`);
-  const reader = r.body.getReader();
-  const chunks: BlobPart[] = [];
-  let got = 0, shown = 0;
-  for (;;) {
-    const { done, value } = await reader.read().catch(() => { throw new Error('下载中断，请检查网络后重试'); });
-    if (done) break;
-    chunks.push(value as Uint8Array<ArrayBuffer>);
-    got += value.length;
-    // The page redraws a few times a second, not on every chunk.
-    if (Date.now() - shown > 200) { shown = Date.now(); onBytes(got); }
-  }
-  if (size && got !== size) throw new Error('下载不完整，请重试');
-  return new Blob(chunks);
+  // 20 s without a byte (connecting, or midway) and the download is given up.
+  const wait = deadline(20000);
+  try {
+    const r = await fetch(url, { cache: 'no-store', signal: wait.signal }).catch(() => {
+      throw new Error(wait.late() ? '连接 GitHub 超时，请检查网络后重试' : '无法连接 GitHub，请检查网络后重试');
+    });
+    if (!r.ok || !r.body) throw new Error(`下载失败（HTTP ${r.status}）`);
+    const reader = r.body.getReader();
+    const chunks: BlobPart[] = [];
+    let got = 0, shown = 0;
+    for (;;) {
+      const { done, value } = await reader.read().catch(() => { throw new Error(wait.late() ? '下载超时，请检查网络后重试' : '下载中断，请检查网络后重试'); });
+      if (done) break;
+      wait.poke();
+      chunks.push(value as Uint8Array<ArrayBuffer>);
+      got += value.length;
+      // The page redraws a few times a second, not on every chunk.
+      if (Date.now() - shown > 200) { shown = Date.now(); onBytes(got); }
+    }
+    onBytes(got);
+    if (size && got !== size) throw new Error('下载不完整，请重试');
+    return new Blob(chunks);
+  } finally { wait.stop(); }
 }
 
 /**
  * Downloads a release's package into the plugins folder and removes the older BetterMV packages (this one's own
  * included); NetEase's next start runs the new one. A dev install gets the release page instead.
  */
+let busy = false;
 export async function installUpdate(release: Release): Promise<void> {
-  if (state.kind === 'downloading' || state.kind === 'ready') return;
-  const own = await ownPackage();
-  if (!own) { openPage(release.page); return; }
+  if (busy || state.kind === 'downloading' || state.kind === 'installing' || state.kind === 'ready') return;
+  // A dev install (known since the version was found) gets the page.
+  if (state.kind === 'available' && !state.installable) { openPage(release.page); return; }
+  busy = true;
+  // Under way at once, and a second press does nothing: this plugin's own package is looked up through BetterNCM's
+  // file server, which can take seconds to answer while a song is being read.
   set({ kind: 'downloading', release, done: 0, total: release.size });
   try {
+    if (!(await within(ownPackage(), 20000, '读取插件文件夹超时，请稍后重试'))) {
+      set({ kind: 'available', release, installable: false, auto: false });
+      openPage(release.page);
+      return;
+    }
     const blob = await download(release.asset, release.size, done => set({ kind: 'downloading', release, done, total: release.size }));
-    const m = manifestOf(new Uint8Array(await blob.arrayBuffer()));
-    if (!m || slugOf(m) !== SLUG || m.version !== release.version) throw new Error('安装包校验失败，请重试');
-    const target = `${await dataPath()}\\plugins\\${/^[\w.-]+\.plugin$/i.test(release.name) ? release.name : `BetterMV-${release.version}.plugin`}`;
-    if (!(await betterncm.fs.writeFile(target, blob)) || !(await betterncm.fs.exists(target))) throw new Error('无法写入插件文件夹');
-    for (const p of await otherPackages(target)) if (compareVersions(p.version, release.version) <= 0) await removePackage(p.path);
+    set({ kind: 'installing', release });
+    await within((async () => {
+      const m = manifestOf(new Uint8Array(await blob.arrayBuffer()));
+      if (!m || slugOf(m) !== SLUG || m.version !== release.version) throw new Error('安装包校验失败，请重试');
+      const target = `${await dataPath()}\\plugins\\${/^[\w.-]+\.plugin$/i.test(release.name) ? release.name : `BetterMV-${release.version}.plugin`}`;
+      if (!(await betterncm.fs.writeFile(target, blob)) || !(await betterncm.fs.exists(target))) throw new Error('无法写入插件文件夹');
+      for (const p of await otherPackages(target)) if (compareVersions(p.version, release.version) <= 0) await removePackage(p.path);
+    })(), 60000, '安装超时，请稍后重试');
     plugin.setConfig('updateRelease', '');
     set({ kind: 'ready', version: release.version });
   } catch (e) {
     set({ kind: 'failed', message: String((e as Error)?.message || e), release });
+  } finally {
+    busy = false;
   }
 }
 
 /** Opens a page in the system's browser. */
 export function openPage(url: string): void {
   try { betterncm.ncm.openUrl(url); } catch { window.open(url); }
+}
+
+/** A version's release page (where it is downloaded by hand). */
+export const releasePage = (version: string) => `https://github.com/${REPO}/releases/tag/v${version}`;
+
+/** BetterNCM's plugins folder, where a package downloaded by hand goes. */
+export const pluginsFolder = async () => `${await dataPath()}\\plugins`;
+export async function openPluginsFolder(): Promise<void> {
+  try { await betterncm.app.exec(`explorer "${await pluginsFolder()}"`); } catch (e) { console.warn('[BetterMV] 无法打开插件文件夹', e); }
 }
 
 const nativeApp = () => (typeof betterncm_native === 'undefined' ? undefined : betterncm_native?.app);
@@ -220,11 +273,12 @@ export function startUpdates(auto: boolean): void {
   try {
     const r: Release | null = JSON.parse(String(plugin.getConfig('updateRelease', '')) || 'null');
     if (r && typeof r.version === 'string' && compareVersions(r.version, VERSION) > 0) {
-      void ownPackage().then(own => { if (state.kind === 'idle') set({ kind: 'available', release: r, installable: !!own }); });
+      void ownPackage().then(own => { if (state.kind === 'idle') set({ kind: 'available', release: r, installable: !!own, auto: true }); });
     } else if (last) set({ kind: 'latest', at: last });
   } catch { /* checked anew */ }
   window.setTimeout(async () => {
-    try { await tidyPackages(); } catch (e) { console.warn('[BetterMV] 检查旧版插件包失败', e); }
+    // (A stalled file server holds up the tidying, not the check.)
+    try { await within(tidyPackages(), 30000, '超时'); } catch (e) { console.warn('[BetterMV] 检查旧版插件包失败', e); }
     if (auto && Date.now() - last > DAY) void checkUpdate(true);
   }, 8000);
 }

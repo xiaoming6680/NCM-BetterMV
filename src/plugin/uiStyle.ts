@@ -359,6 +359,52 @@ const CSS = `
 .bmv-card-note{margin-top:4px;font-size:12px;line-height:1.55;color:rgba(235,235,245,.78)}
 .bmv-card-foot{margin-top:7px;font-size:11px;color:rgba(235,235,245,.5)}
 
+/* The update window (src/plugin/updatePrompt.ts): a card at the top right of the MV page, moving over with the
+   controls when a sheet opens; a dialog over the settings page, in its theme. The icon on the left, the rest in one
+   column beside it; the page to update by hand along the bottom. */
+.bmv-upd-slot.is-mv{position:absolute;top:52px;right:10px;width:340px;max-width:calc(100% - 20px);transition:transform .45s var(--ease);
+  --t1:#fff;--t2:rgba(235,235,245,.68);--t3:rgba(235,235,245,.4);--ctl:rgba(255,255,255,.14);--ctl-hover:rgba(255,255,255,.22);--line:rgba(255,255,255,.1);
+  --sep:rgba(255,255,255,.12);--track:rgba(255,255,255,.16)}
+.bmv-root.has-sheet .bmv-upd-slot.is-mv{transform:translateX(-400px)}
+.bmv-set.is-page{position:relative}
+.bmv-upd-scrim{position:absolute;inset:0;z-index:3;background:rgba(0,0,0,.14)}
+.bmv-set[data-theme=dark] .bmv-upd-scrim{background:rgba(0,0,0,.36)}
+.bmv-upd-slot.is-dialog{position:absolute;left:50%;top:72px;z-index:4;width:380px;max-width:calc(100% - 32px);transform:translateX(-50%)}
+.bmv-upd{padding:14px 14px 0;border-radius:14px;color:var(--t1);font-size:13px;line-height:1.45;text-align:left}
+.bmv-upd.no-foot{padding-bottom:14px}
+.bmv-upd-slot.is-mv .bmv-upd{background:rgba(28,28,31,.74);-webkit-backdrop-filter:blur(30px) saturate(180%);backdrop-filter:blur(30px) saturate(180%);
+  box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14),0 18px 50px rgba(0,0,0,.45)}
+.bmv-upd-slot.is-dialog .bmv-upd{background:#fff;box-shadow:0 0 0 .5px rgba(0,0,0,.1),0 24px 64px rgba(0,0,0,.24)}
+.bmv-set[data-theme=dark] .bmv-upd-slot.is-dialog .bmv-upd{background:#2c2c2e;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12),0 24px 64px rgba(0,0,0,.5)}
+.bmv-upd-head{display:flex;align-items:flex-start;gap:12px}
+.bmv-upd-icon{flex:none;width:40px;height:40px;border-radius:9px;box-shadow:0 1px 3px rgba(0,0,0,.2),0 0 0 .5px rgba(0,0,0,.08)}
+.bmv-upd-titles{flex:1;min-width:0;padding-top:1px}
+.bmv-upd-title{font:600 14px/1.35 var(--display)}
+.bmv-upd-sub{margin-top:1px;font-size:12px;color:var(--t2);overflow-wrap:anywhere}
+.bmv-upd-sub.is-error{color:#ff453a}
+.bmv-set[data-theme=light] .bmv-upd-sub.is-error{color:#d70015}
+.bmv-upd-x{flex:none;display:flex;align-items:center;justify-content:center;width:22px;height:22px;margin:-1px -2px 0 0;border-radius:50%;background:var(--track);color:var(--t2);
+  transition:background-color .15s,color .15s,transform .2s var(--ease)}
+.bmv-upd-x:hover{background:var(--ctl-hover);color:var(--t1)}
+.bmv-upd-x:active{transform:scale(.9)}
+.bmv-upd-main{padding-left:52px}
+.bmv-upd-body{min-height:34px;margin-top:10px}
+.bmv-upd-text{font-size:12px;line-height:1.5;color:var(--t2);overflow-wrap:anywhere}
+/* The line of progress moves by transform (eased both ways: each step of the download glides, none jumps). */
+.bmv-upd-bar{position:relative;height:4px;margin-top:5px;border-radius:2px;background:var(--track);overflow:hidden}
+.bmv-upd-bar>i{position:absolute;inset:0;border-radius:2px;background:var(--accent);transform:translateX(-100%);transition:transform .45s cubic-bezier(.25,.1,.25,1)}
+.bmv-upd-step{display:flex;justify-content:space-between;gap:12px;margin-top:7px;font-size:12px;color:var(--t2);font-variant-numeric:tabular-nums}
+.bmv-upd-step b{font-weight:400}
+.bmv-upd-actions{display:flex;align-items:center;gap:8px;margin-top:12px}
+.bmv-upd-aside{flex:1;min-width:0;display:flex}
+.bmv-upd-btns{flex:none;display:flex;gap:8px}
+.bmv-upd .bmv-btn{height:28px;padding:0 14px;border-radius:7px;font-size:13px}
+.bmv-upd-quiet{font-size:12px;color:var(--t2);white-space:nowrap;transition:color .15s}
+.bmv-upd-quiet:hover{color:var(--t1)}
+.bmv-upd-foot{display:flex;align-items:center;gap:2px;width:calc(100% + 28px);margin:14px -14px 0;padding:10px 14px 11px 66px;border-radius:0 0 14px 14px;
+  box-shadow:inset 0 .5px 0 var(--sep);font-size:12px;color:var(--accent-text);text-align:left;transition:background-color .15s}
+.bmv-upd-foot:hover{background:rgba(127,127,127,.1)}
+
 @media (prefers-reduced-motion:reduce){
   .bmv-bd,.bmv-eq i{animation:none}
   .bmv-ui *{transition-duration:.01ms!important}

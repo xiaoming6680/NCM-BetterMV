@@ -9,6 +9,7 @@ import { installPack, removePack, watchPack, type PackState } from './aligner.ts
 import type { PlayMode } from './client.ts';
 import { appIcon, icon, type IconName } from './icons.ts';
 import { canRestart, checkUpdate, installUpdate, openPage, restartNetEase, VERSION, watchUpdate, type UpdateState } from './update.ts';
+import { updateWindowOn } from './updatePrompt.ts';
 import { ensureStyles } from './uiStyle.ts';
 
 export interface Config {
@@ -633,7 +634,9 @@ export class Overlay {
           ? Array.from(this.panelBody.querySelectorAll('.bmv-pg.is-current .bmv-sec')).slice(0, 6)
           : this.rows.filter(r => r.offsetTop + r.offsetHeight > this.panelBody.scrollTop && r.offsetTop < this.panelBody.scrollTop + this.panelBody.clientHeight).slice(0, 14);
         arrive(items, this.open === 'settings' ? 45 : 22, 80);
-        // The scrim stays across the window (the sheet covers its end); only the controls move over.
+        // The scrim stays across the window (the sheet covers its end); only the controls (and an update window
+        // at the top right) move over.
+        this.root.classList.add('has-sheet');
         this.shift(() => {
           this.bar.style.paddingRight = PANEL_ROOM + 28 + 'px';
           this.topButtons.style.right = PANEL_ROOM + 10 + 'px';
@@ -651,6 +654,7 @@ export class Overlay {
     this.open = null;
     if (this.panel.classList.contains('is-open')) {
       this.panel.classList.remove('is-open');
+      this.root.classList.remove('has-sheet');
       this.shift(() => {
         this.bar.style.paddingRight = '';
         this.topButtons.style.right = '';
@@ -811,6 +815,8 @@ export class Overlay {
     this.root.style.display = 'block';
     if (!was) play(this.root, [{ opacity: 0 }, { opacity: 1 }], { duration: 320, easing: 'ease-out' });
     this.wake();
+    // A newer version found by the daily check is offered here (or on the settings page, whichever comes first).
+    updateWindowOn('mv', this.root);
     // The settings' first layout (its many glyphs shaped for the first time) takes tens of ms: done once, out of
     // sight, while the MV is being made, so the first opening of the panel doesn't stall.
     if (!this.warmed) {
@@ -829,6 +835,7 @@ export class Overlay {
   hide(): void {
     this.closePanel();
     this.visible = false;
+    updateWindowOn('mv', null);
     const r = this.root;
     if (typeof r.animate !== 'function' || r.style.display !== 'block') { r.style.display = 'none'; return; }
     // A short fade out; gone at once if it is shown again meanwhile.
@@ -1433,6 +1440,10 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
         line = `正在下载 ${st.release.version}`;
         const size = (n: number) => (n / 1048576).toFixed(1);
         ctl.append(meter(st.total ? `${size(st.done)} / ${size(st.total)} MB` : '正在下载…', st.total ? st.done / st.total : 0));
+      } else if (st.kind === 'installing') {
+        kind = 'new';
+        line = `正在安装 ${st.release.version}`;
+        ctl.append(meter('正在安装…', 1));
       } else if (st.kind === 'ready') {
         kind = 'new';
         line = `已安装 ${st.version}，重启网易云后生效`;
@@ -1458,15 +1469,15 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
 
   let updateState: UpdateState = { kind: 'idle' };
   watchUpdate(st => { updateState = st; });
-  const fresh = () => updateState.kind === 'available' || updateState.kind === 'ready' || updateState.kind === 'downloading';
-  page('update', '更新', () => (updateState.kind === 'available' || updateState.kind === 'downloading' ? `新版本 ${updateState.release.version}`
+  const fresh = () => updateState.kind === 'available' || updateState.kind === 'ready' || updateState.kind === 'downloading' || updateState.kind === 'installing';
+  page('update', '更新', () => (updateState.kind === 'available' || updateState.kind === 'downloading' || updateState.kind === 'installing' ? `新版本 ${updateState.release.version}`
     : updateState.kind === 'ready' ? '重启后生效' : VERSION), fresh);
   const updates = group(section('更新'));
   const upCtl = el('div', 'bmv-row-c');
   upCtl.style.margin = '0';
   const upRow = row(updates, '版本', upCtl, ' ');
   updateInto(upRow, upCtl, upRow.querySelector('.bmv-row-sub') as HTMLElement);
-  row(updates, '自动检查更新', toggle('autoUpdate', '自动检查更新'), '每天查询一次 GitHub 上是否有新版本');
+  row(updates, '自动检查更新', toggle('autoUpdate', '自动检查更新'), '每天查询一次 GitHub，有新版本时弹出提醒');
   const about = group(section('关于'));
   const REPO = 'https://github.com/xiaoming6680/NCM-BetterMV';
   row(about, '项目主页', link('打开', () => openPage(REPO)), '使用说明、下载与源代码');
@@ -1882,9 +1893,12 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
         const theme = hostIsDark(view) ? 'dark' : 'light';
         if (view.dataset.theme !== theme) view.dataset.theme = theme;
         fit();
+        // A newer version found by the daily check is offered here (or on the MV page, whichever comes first).
+        updateWindowOn('settings', view.getClientRects().length ? view : null);
         window.setTimeout(look, 1000);
       } else {
         seen = false;
+        updateWindowOn('settings', null);
         if (tries++ < 240) requestAnimationFrame(look); else { tries = 0; window.setTimeout(look, 1000); }
       }
     };
