@@ -21,6 +21,7 @@ import * as THREE from 'three';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import type { Palette } from './palette.ts';
 import { hasCjk } from './text.ts';
+import { finish } from '../scenes/types.ts';
 
 /** Riso ink sets (sRGB hex): the paper, then the inks. The song's set is the one nearest its signal colour. */
 const RISO_INKS: Array<{ paper: string; inks: string[] }> = [
@@ -83,6 +84,44 @@ const MONO = '"Cascadia Mono", Consolas, "Courier New", monospace';
 const CJK = '"Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif';
 const LATIN_RAMP = " .'`,:;-~=+*!?/|()[]{}<>il1tfjrxnuvczXYUJCLQ0OZmwqpdbkhao#MW&8%B@$";
 
+interface Glyphs { font: string; AW: number; AH: number; useCjk: boolean; measured: Array<{ ch: string; c: number }> }
+
+/**
+ * The atlas's candidates and their measured ink, 64 between yields (up to 400 CJK characters drawn and read back:
+ * 60–70 ms in NetEase's Chromium).
+ */
+function* glyphsOf(text: string): Generator<void, Glyphs> {
+  const AH = 64;
+  const cjk = [...new Set(Array.from(text).filter(ch => hasCjk(ch)))];
+  const useCjk = cjk.length >= 24;
+  const family = useCjk ? CJK : MONO;
+  const weight = useCjk ? 500 : 600;
+  const font = `${weight} ${Math.round(AH * (useCjk ? 0.8 : 0.86))}px ${family}`;
+  const m = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
+  m.font = font;
+  const cand = useCjk ? ['·', '、', '一', ...cjk.slice(0, 400)] : Array.from(LATIN_RAMP);
+  const adv = useCjk ? AH * 0.92 : Math.max(...cand.map(ch => m.measureText(ch).width), AH * 0.4);
+  const AW = Math.ceil(adv);
+  const probe = document.createElement('canvas');
+  probe.width = AW; probe.height = AH;
+  const pc = probe.getContext('2d', { willReadFrequently: true })!;
+  const cover = (ch: string) => {
+    pc.clearRect(0, 0, AW, AH);
+    pc.font = font; pc.fillStyle = '#fff'; pc.textAlign = 'center'; pc.textBaseline = 'middle';
+    pc.fillText(ch, AW / 2, AH * 0.54);
+    const d = pc.getImageData(0, 0, AW, AH).data;
+    let s = 0;
+    for (let i = 3; i < d.length; i += 4) s += d[i];
+    return s / (255 * AW * AH);
+  };
+  const all: Array<{ ch: string; c: number }> = [];
+  for (const [i, ch] of cand.entries()) {
+    all.push({ ch, c: ch === ' ' ? 0 : cover(ch) });
+    if (i % 64 === 63) yield;
+  }
+  return { font, AW, AH, useCjk, measured: all.filter(g => g.c > 0.002).sort((a, b) => a.c - b.c) };
+}
+
 /**
  * Glyphs sorted by measured ink coverage, white on transparent in one row of cells (64 px tall). From the song's
  * lyrics when it has enough distinct CJK characters (about 24 spread over the ink range, a few light marks under
@@ -94,32 +133,14 @@ export class GlyphAtlas {
   /** Cell width / height. */
   readonly aspect: number;
 
-  constructor(text: string) {
-    const AH = 64;
-    const cjk = [...new Set(Array.from(text).filter(ch => hasCjk(ch)))];
-    const useCjk = cjk.length >= 24;
-    const family = useCjk ? CJK : MONO;
-    const weight = useCjk ? 500 : 600;
-    const font = `${weight} ${Math.round(AH * (useCjk ? 0.8 : 0.86))}px ${family}`;
-    const m = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
-    m.font = font;
-    const cand = useCjk ? ['·', '、', '一', ...cjk.slice(0, 400)] : Array.from(LATIN_RAMP);
-    const adv = useCjk ? AH * 0.92 : Math.max(...cand.map(ch => m.measureText(ch).width), AH * 0.4);
-    const AW = Math.ceil(adv);
+  /** The atlas made in steps, its glyphs measured between yields. */
+  static *building(text: string): Generator<void, GlyphAtlas> {
+    return new GlyphAtlas(text, yield* glyphsOf(text));
+  }
+
+  constructor(text: string, glyphs = finish(glyphsOf(text))) {
+    const { font, AW, AH, useCjk, measured } = glyphs;
     this.aspect = AW / AH;
-    const probe = document.createElement('canvas');
-    probe.width = AW; probe.height = AH;
-    const pc = probe.getContext('2d', { willReadFrequently: true })!;
-    const cover = (ch: string) => {
-      pc.clearRect(0, 0, AW, AH);
-      pc.font = font; pc.fillStyle = '#fff'; pc.textAlign = 'center'; pc.textBaseline = 'middle';
-      pc.fillText(ch, AW / 2, AH * 0.54);
-      const d = pc.getImageData(0, 0, AW, AH).data;
-      let s = 0;
-      for (let i = 3; i < d.length; i += 4) s += d[i];
-      return s / (255 * AW * AH);
-    };
-    const measured = cand.map(ch => ({ ch, c: ch === ' ' ? 0 : cover(ch) })).filter(g => g.c > 0.002).sort((a, b) => a.c - b.c);
     let ramp: Array<{ ch: string; c: number }> = [];
     if (useCjk) {
       // Even steps over the measured range: the lightest marks, then ~24 characters spread across it.
@@ -369,7 +390,10 @@ export class LookPass extends Pass {
   }
 
   /** Per song: the riso inks nearest its palette and the glyphs from its lyrics. */
-  setSong(palette: Palette, lyricText: string): void {
+  setSong(palette: Palette, lyricText: string): void { finish(this.settingSong(palette, lyricText)); }
+
+  /** setSong in steps (the glyphs measured between yields). */
+  *settingSong(palette: Palette, lyricText: string): Generator<void, void> {
     const ink = palette.ink.clone().convertLinearToSRGB();
     (this.material.uniforms.uBoxInk.value as THREE.Vector3).set(ink.r, ink.g, ink.b);
     const k = risoInksFor(palette);
@@ -387,8 +411,9 @@ export class LookPass extends Pass {
       (u.risoDeep.value as THREE.Vector3).copy(inks[0]);
       (u.risoSecond.value as THREE.Vector3).copy(inks[1] ?? inks[0]);
     }
+    const atlas = yield* GlyphAtlas.building(lyricText);
     this.atlas?.dispose();
-    this.atlas = new GlyphAtlas(lyricText);
+    this.atlas = atlas;
     const u = this.material.uniforms;
     u.tAtlas.value = this.atlas.texture;
     u.uGlyphs.value = this.atlas.n;

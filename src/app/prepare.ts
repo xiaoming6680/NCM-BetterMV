@@ -109,14 +109,22 @@ async function decodeStereo(buffer: ArrayBuffer, rate: number): Promise<{ left: 
   return { left, right: audio.numberOfChannels > 1 ? audio.getChannelData(1) : left };
 }
 
-/** 16-bit channels scaled together to their peak, every `step`-th pair of samples averaged in (step 1 or 2). */
-function toStereo(left: Float32Array, right: Float32Array, rate: number, step: number): Stereo {
+/** The louder channel's peak. */
+function peakOf(left: Float32Array, right: Float32Array): number {
   let peak = 1e-6;
   for (let i = 0; i < left.length; i++) {
     const a = Math.abs(left[i]), b = Math.abs(right[i]);
     if (a > peak) peak = a;
     if (b > peak) peak = b;
   }
+  return peak;
+}
+
+/**
+ * 16-bit channels scaled together to their peak, every `step`-th pair of samples averaged in (step 1 or 2). (The peak
+ * can be found first, in a task of its own: the two passes took 50 ms a song in NetEase's Chromium.)
+ */
+function toStereo(left: Float32Array, right: Float32Array, rate: number, step: number, peak = peakOf(left, right)): Stereo {
   const n = Math.floor(left.length / step), l = new Int16Array(n), r = new Int16Array(n), k = 32767 / peak / step;
   // Math.round for |x| ≤ 32767 as floor(x + 0.5) by truncating a positive number (Math.round took 0.1 s a song here).
   const round = (x: number) => ((x + 32768.5) | 0) - 32768;
@@ -157,6 +165,9 @@ export async function prepareSong(input: SongInput, opts: PrepareOptions): Promi
   const choice = chooseStyle(analysis, input.wiki, lines.length > 0);
 
   const palette = paletteFromImage(input.cover);
+  // (Between the steps of the end too: together they held the page up for 0.1 s in NetEase's Chromium.)
+  await opts.pause();
+  check();
   const coverSize = 256;
   const cv = document.createElement('canvas');
   cv.width = cv.height = coverSize;
@@ -173,7 +184,14 @@ export async function prepareSong(input: SongInput, opts: PrepareOptions): Promi
     check();
     xy = xyMusic(both.left, both.right, XY_RATE).xy;
     stereo = toStereo(both.left, both.right, XY_RATE, xy ? 1 : XY_RATE / WAVE_RATE);
-  } else stereo = toStereo(left, right, WAVE_RATE, 1);
+  } else {
+    await opts.pause();
+    check();
+    const peak = peakOf(left, right);
+    await opts.pause();
+    check();
+    stereo = toStereo(left, right, WAVE_RATE, 1, peak);
+  }
   return {
     id: input.id, name: input.name, artists: input.artists, duration, lines, analysis, wiki: input.wiki, choice,
     palette, cover: coverTexture(input.cover), coverPixels, coverSize, stereo, xyMusic: xy, ms: Math.round(performance.now() - t0),

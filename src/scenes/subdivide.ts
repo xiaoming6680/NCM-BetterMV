@@ -5,7 +5,7 @@
 // ball that breathes with the bass, a ripple running over it on each kick. Beside it, the level and the count.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, lerp, rng, smooth } from './types.ts';
+import { clamp01, finish, lerp, rng, smooth } from './types.ts';
 import { SEEDS, type Vec } from '../sigil/polyhedron.ts';
 import { textMesh } from '../render/text.ts';
 import { LyricOrbit } from './lyricSpace.ts';
@@ -62,6 +62,79 @@ const fragmentShader = /* glsl */ `
 
 interface Level { geo: THREE.BufferGeometry; tris: number }
 
+/**
+ * The plate's levels of subdivision, a level between yields (the last ones are most of building the plate: 0.1 s and
+ * more in NetEase's Chromium).
+ */
+function* levelsOf(music: SceneInit['music']): Generator<void, Level[]> {
+  const levels: Level[] = [];
+  // Level 0: a Platonic solid picked by the tempo, slow songs round and fast ones sharp (under 80 BPM the
+  // dodecahedron, under 100 the icosahedron, under 115 the octahedron, under 130 the cube, faster — or three beats
+  // in a bar — the tetrahedron), in the unit sphere, its faces as triangles. Each level splits every triangle in four.
+  const a = music.a, bpm = a.bpm;
+  const poly = SEEDS[a.meter === 3 ? 'T' : bpm < 80 ? 'D' : bpm < 100 ? 'I' : bpm < 115 ? 'O' : bpm < 130 ? 'C' : 'T']();
+  const reach = Math.max(...poly.v.map(v => Math.hypot(v[0], v[1], v[2])));
+  poly.v = poly.v.map(v => [v[0] / reach, v[1] / reach, v[2] / reach] as Vec);
+  let tris: Array<[V, V, V]> = [];
+  // (Faces of more than three sides are cut round their centre, not fanned from a corner: fans leave slivers that
+  // subdivide into a visible crease.)
+  for (const f of poly.f) {
+    if (f.length === 3) { tris.push([poly.v[f[0]], poly.v[f[1]], poly.v[f[2]]]); continue; }
+    const c: V = [0, 0, 0];
+    for (const i of f) for (let a = 0; a < 3; a++) c[a] += poly.v[i][a] / f.length;
+    for (let k = 0; k < f.length; k++) tris.push([c, poly.v[f[k]], poly.v[f[(k + 1) % f.length]]]);
+  }
+  // For each level: where every vertex starts (on the level before's surface) and where it springs to, and which
+  // of each triangle's edges are new.
+  let from = tris.map(t => t.map(v => [...v] as V) as [V, V, V]);
+  let fresh: Array<[V, V, V]> = tris.map(() => [[0, 0, 0], [0, 0, 0], [0, 0, 0]]);
+  let depth = 0;
+  const maxDepth = Math.max(1, Math.floor(Math.log(MAX_TRIS / tris.length) / Math.log(4)));
+  for (;;) {
+    levels.push({ geo: levelGeometry(from, tris, fresh), tris: tris.length });
+    if (depth >= maxDepth) break;
+    yield;
+    depth++;
+    const toward = depth / maxDepth; // how far this level goes towards the sphere
+    const mid = (a: V, b: V): V => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+    const out = (p: V): V => { const l = Math.hypot(p[0], p[1], p[2]) || 1, r = lerp(l, 1, toward); return [p[0] / l * r, p[1] / l * r, p[2] / l * r]; };
+    const nextFrom: Array<[V, V, V]> = [], nextTo: Array<[V, V, V]> = [], nextFresh: Array<[V, V, V]> = [];
+    const N1: V = [1, 0, 0], N0: V = [0, 0, 0], ALL: V = [1, 1, 1];
+    for (const [a, b, c] of tris) {
+      const ab = mid(a, b), bc = mid(b, c), ca = mid(c, a);
+      // Corner triangles: the new edge is the one opposite the corner (bary x = 0 there); the middle one is all new.
+      for (const t of [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]] as Array<[V, V, V]>) {
+        nextFrom.push(t);
+        nextTo.push(t.map(out) as [V, V, V]);
+      }
+      nextFresh.push([N1, N0, N0], [N0, N1, N0], [N0, N0, N1], [ALL, ALL, ALL]);
+    }
+    // (The corners' masks: marking the vertex opposite the new edge makes that edge the one where its bary is 0.)
+    from = nextFrom; tris = nextTo; fresh = nextFresh;
+    yield;
+  }
+  return levels;
+}
+
+/** A level's triangles: where they are (`to`), where their vertices start (`from`), their bary and new-edge masks. */
+function levelGeometry(from: Array<[V, V, V]>, to: Array<[V, V, V]>, fresh: Array<[V, V, V]>): THREE.BufferGeometry {
+  const n = to.length, pos = new Float32Array(n * 9), fr = new Float32Array(n * 9), bary = new Float32Array(n * 9), nw = new Float32Array(n * 9);
+  const B: V[] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  for (let t = 0; t < n; t++) for (let k = 0; k < 3; k++) {
+    const o = t * 9 + k * 3;
+    pos.set(to[t][k], o); fr.set(from[t][k], o); bary.set(B[k], o);
+    // The edge opposite vertex j is new when mask j is set: every vertex of the triangle carries the same mask.
+    const m = fresh[t];
+    nw.set([m[0][0] || m[0][1] || m[0][2] ? 1 : 0, m[1][0] || m[1][1] || m[1][2] ? 1 : 0, m[2][0] || m[2][1] || m[2][2] ? 1 : 0], o);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('aFrom', new THREE.BufferAttribute(fr, 3));
+  g.setAttribute('aBary', new THREE.BufferAttribute(bary, 3));
+  g.setAttribute('aNew', new THREE.BufferAttribute(nw, 3));
+  return g;
+}
+
 export class SubdivideScene implements MvScene {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(40, 16 / 9, 0.05, 100);
@@ -74,56 +147,19 @@ export class SubdivideScene implements MvScene {
   private specData = new Uint8Array(NB);
   private specTex = new THREE.DataTexture(this.specData, NB, 1, THREE.RedFormat, THREE.UnsignedByteType);
 
-  constructor(private init: SceneInit, look: 'pulse' | 'ballad' = 'pulse') {
+  /** The plate built in steps, a level of subdivision between yields (for MvPlayer.loadInSlices). */
+  static *building(init: SceneInit, look: 'pulse' | 'ballad' = 'pulse'): Generator<void, SubdivideScene> {
+    return new SubdivideScene(init, look, yield* levelsOf(init.music));
+  }
+
+  constructor(private init: SceneInit, look: 'pulse' | 'ballad' = 'pulse', levels = finish(levelsOf(init.music))) {
     const { palette } = init;
     this.soft = look === 'ballad';
     this.spec = Spectrogram.of(init.stereo, init.music.duration + 8, NB, 30);
     this.specTex.minFilter = this.specTex.magFilter = THREE.LinearFilter;
     this.specTex.needsUpdate = true;
     this.scene.background = palette.ink.clone();
-    // Level 0: a Platonic solid picked by the tempo, slow songs round and fast ones sharp (under 80 BPM the
-    // dodecahedron, under 100 the icosahedron, under 115 the octahedron, under 130 the cube, faster — or three beats
-    // in a bar — the tetrahedron), in the unit sphere, its faces as triangles. Each level splits every triangle in four.
-    const a = init.music.a, bpm = a.bpm;
-    const poly = SEEDS[a.meter === 3 ? 'T' : bpm < 80 ? 'D' : bpm < 100 ? 'I' : bpm < 115 ? 'O' : bpm < 130 ? 'C' : 'T']();
-    const reach = Math.max(...poly.v.map(v => Math.hypot(v[0], v[1], v[2])));
-    poly.v = poly.v.map(v => [v[0] / reach, v[1] / reach, v[2] / reach] as Vec);
-    let tris: Array<[V, V, V]> = [];
-    // (Faces of more than three sides are cut round their centre, not fanned from a corner: fans leave slivers that
-    // subdivide into a visible crease.)
-    for (const f of poly.f) {
-      if (f.length === 3) { tris.push([poly.v[f[0]], poly.v[f[1]], poly.v[f[2]]]); continue; }
-      const c: V = [0, 0, 0];
-      for (const i of f) for (let a = 0; a < 3; a++) c[a] += poly.v[i][a] / f.length;
-      for (let k = 0; k < f.length; k++) tris.push([c, poly.v[f[k]], poly.v[f[(k + 1) % f.length]]]);
-    }
-    // For each level: where every vertex starts (on the level before's surface) and where it springs to, and which
-    // of each triangle's edges are new.
-    let from = tris.map(t => t.map(v => [...v] as V) as [V, V, V]);
-    let fresh: Array<[V, V, V]> = tris.map(() => [[0, 0, 0], [0, 0, 0], [0, 0, 0]]);
-    let depth = 0;
-    const maxDepth = Math.max(1, Math.floor(Math.log(MAX_TRIS / tris.length) / Math.log(4)));
-    for (;;) {
-      this.levels.push({ geo: this.build(from, tris, fresh), tris: tris.length });
-      if (depth >= maxDepth) break;
-      depth++;
-      const toward = depth / maxDepth; // how far this level goes towards the sphere
-      const mid = (a: V, b: V): V => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
-      const out = (p: V): V => { const l = Math.hypot(p[0], p[1], p[2]) || 1, r = lerp(l, 1, toward); return [p[0] / l * r, p[1] / l * r, p[2] / l * r]; };
-      const nextFrom: Array<[V, V, V]> = [], nextTo: Array<[V, V, V]> = [], nextFresh: Array<[V, V, V]> = [];
-      const N1: V = [1, 0, 0], N0: V = [0, 0, 0], ALL: V = [1, 1, 1];
-      for (const [a, b, c] of tris) {
-        const ab = mid(a, b), bc = mid(b, c), ca = mid(c, a);
-        // Corner triangles: the new edge is the one opposite the corner (bary x = 0 there); the middle one is all new.
-        for (const t of [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]] as Array<[V, V, V]>) {
-          nextFrom.push(t);
-          nextTo.push(t.map(out) as [V, V, V]);
-        }
-        nextFresh.push([N1, N0, N0], [N0, N1, N0], [N0, N0, N1], [ALL, ALL, ALL]);
-      }
-      // (The corners' masks: marking the vertex opposite the new edge makes that edge the one where its bary is 0.)
-      from = nextFrom; tris = nextTo; fresh = nextFresh;
-    }
+    this.levels = levels;
     this.mesh = new THREE.Mesh(this.levels[0].geo, new THREE.ShaderMaterial({
       vertexShader, fragmentShader,
       uniforms: {
@@ -146,25 +182,6 @@ export class SubdivideScene implements MvScene {
     this.orbit = new LyricOrbit(palette, { style: this.soft ? 'poem' : 'hook', em: 0.17, radius: 1.32, mode: 'band', trans: { em: 0.085, radius: 1.32 }, ...voiceOpts(look, init.seed) });
     this.scene.add(this.orbit.group);
     this.resize(init.aspect);
-  }
-
-  /** A level's triangles: where they are (`to`), where their vertices start (`from`), their bary and new-edge masks. */
-  private build(from: Array<[V, V, V]>, to: Array<[V, V, V]>, fresh: Array<[V, V, V]>): THREE.BufferGeometry {
-    const n = to.length, pos = new Float32Array(n * 9), fr = new Float32Array(n * 9), bary = new Float32Array(n * 9), nw = new Float32Array(n * 9);
-    const B: V[] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
-    for (let t = 0; t < n; t++) for (let k = 0; k < 3; k++) {
-      const o = t * 9 + k * 3;
-      pos.set(to[t][k], o); fr.set(from[t][k], o); bary.set(B[k], o);
-      // The edge opposite vertex j is new when mask j is set: every vertex of the triangle carries the same mask.
-      const m = fresh[t];
-      nw.set([m[0][0] || m[0][1] || m[0][2] ? 1 : 0, m[1][0] || m[1][1] || m[1][2] ? 1 : 0, m[2][0] || m[2][1] || m[2][2] ? 1 : 0], o);
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    g.setAttribute('aFrom', new THREE.BufferAttribute(fr, 3));
-    g.setAttribute('aBary', new THREE.BufferAttribute(bary, 3));
-    g.setAttribute('aNew', new THREE.BufferAttribute(nw, 3));
-    return g;
   }
 
   resize(aspect: number): void {

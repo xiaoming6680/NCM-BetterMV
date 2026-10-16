@@ -98,6 +98,8 @@ export class MvPlayer {
    */
   seed = 0;
   private seedFor = -1;
+  /** Counts the loads begun: one built in slices (loadInSlices) stops when another begins. */
+  private loads = 0;
   /** Whether the last frame drew a transition (both plates). */
   transitioning = false;
 
@@ -119,6 +121,37 @@ export class MvPlayer {
    * (development): rewrites the planned shots before the scenes are built (a film's own cuts, film/reel.ts).
    */
   load(song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId> = new Set(), only?: { scene: SceneId; variants: string[] }, forceLook?: LookId | 'none', lyricDelay = 0, seed?: number, retake?: (shots: Shot[], music: Music) => Shot[]): void {
+    const steps = this.build(song, style, off, only, forceLook, lyricDelay, seed, retake);
+    while (!steps.next().done) { /* all at once */ }
+  }
+
+  /**
+   * load() in slices, a `pause` before it, after the shots are planned, after each plate is built and after the looks'
+   * glyphs are drawn: a song's plates took 0.25–0.3 s in one go, a stall on the waiting view. True once built; false
+   * when `cancelled` said so (what was built is unloaded) or another load took over meanwhile (true if that one built
+   * this song).
+   */
+  async loadInSlices(pause: () => Promise<void>, cancelled: () => boolean, song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId>, lyricDelay: number, seed: number): Promise<boolean> {
+    // (Not in the same task as what came before: the end of prepareSong.)
+    await pause();
+    if (cancelled()) return false;
+    const steps = this.build(song, style, off, undefined, undefined, lyricDelay, seed);
+    let step = steps.next();
+    const token = this.loads;
+    while (!step.done) {
+      await pause();
+      if (this.loads !== token) return this.song === song && this.director !== null;
+      if (cancelled()) {
+        this.unload();
+        return false;
+      }
+      step = steps.next();
+    }
+    return true;
+  }
+
+  private *build(song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId>, only: { scene: SceneId; variants: string[] } | undefined, forceLook: LookId | 'none' | undefined, lyricDelay: number, seed: number | undefined, retake?: (shots: Shot[], music: Music) => Shot[]): Generator<void, void> {
+    const token = ++this.loads;
     if (this.seedFor !== song.id || seed !== undefined) {
       this.seed = seed ?? (Math.random() * 4294967296) >>> 0;
       this.seedFor = song.id;
@@ -158,10 +191,24 @@ export class MvPlayer {
       menger: () => new Menger(init, look), sierpinski: () => new Sierpinski(init, look), cantor: () => new Cantor(init, look),
       papercut: () => new PaperCut(init), rain: () => new RainScene(init), lanterns: () => new LanternScene(init), neon: () => new NeonScene(init),
     };
-    for (const id of new Set(shots.map(s => s.scene))) this.scenes[id] = make[id]();
+    // (The plates slow to build even alone, built in steps of their own: the canvas's stroke plan, the subdivided
+    // ball's levels; 0.1–0.25 s each in NetEase's Chromium.)
+    const stepped: Partial<Record<SceneId, () => Generator<void, MvScene>>> = {
+      canvas: () => CanvasScene.building(init, paper, init.seed), subdivide: () => SubdivideScene.building(init, look),
+    };
+    yield;
+    if (this.loads !== token) return;
+    for (const id of new Set(shots.map(s => s.scene))) {
+      const steps = stepped[id];
+      this.scenes[id] = steps ? yield* steps() : make[id]();
+      yield;
+      if (this.loads !== token) return;
+    }
     const sections = song.analysis.sections;
     const looks = song.xyMusic || forceLook === 'none' ? [] : forceLook ? sections.map(s => (s.label === 'drop' ? null : forceLook)) : planLooks(sections, style, this.seed, off);
-    this.engine.setLooks(song.palette, song.lines.map(l => l.text + (l.translation ?? '')).join(''));
+    yield* this.engine.settingLooks(song.palette, song.lines.map(l => l.text + (l.translation ?? '')).join(''));
+    yield;
+    if (this.loads !== token) return;
     this.director = new Director(style, shots, this.scenes, music, lyrics, song.palette, init.armillary, song.cover, !only && song.xyMusic, looks);
     this.hud.sigilLabel = this.director.sigil?.label ?? '';
     const last = lines[lines.length - 1];
@@ -232,27 +279,31 @@ export class MvPlayer {
   async warm(pause: () => Promise<void>, cancelled: () => boolean = () => false): Promise<void> {
     const director = this.director, music = this.music, song = this.song;
     if (!director || !music || !song) return;
+    const stop = () => cancelled() || this.director !== director;
     const lyrics = new LyricTrack(this.lines), aspect = this.engine.aspect;
-    const posed: MvScene[] = [];
+    const posed: MvScene[] = [], compiling: Array<Promise<unknown>> = [];
+    // Every plate's shaders compile together off the page's thread (Engine.compile), each set going once the plate is
+    // posed, a plate between pauses (posing them all in one go — their words drawn — held the page up for 0.2 s).
     for (const [id, scene] of Object.entries(this.scenes) as Array<[SceneId, MvScene]>) {
       const shot = director.shots.find(s => s.scene === id);
       if (!shot) continue;
       const t = Math.min(shot.start + 0.2, (shot.start + shot.end) / 2);
       scene.update({ t, dt: 1 / 60, music, lyrics, palette: song.palette, shot, shotT: t - shot.start, aspect, fx: defaultFx() });
       posed.push(scene);
-    }
-    // Every plate's shaders compile together off the page's thread (Engine.compile), then each plate is drawn once.
-    await Promise.all([
-      ...posed.map(s => this.engine.compile(s.scene, s.camera, s.offscreen)),
-      this.engine.compile(director.overlay.scene, director.overlay.camera), this.engine.compilePost(),
-    ]);
-    if (cancelled() || this.director !== director) return;
-    for (const scene of posed) {
-      this.engine.warm(scene.scene, scene.camera);
+      compiling.push(this.engine.compile(scene.scene, scene.camera, scene.offscreen));
       await pause();
-      if (cancelled() || this.director !== director) return;
+      if (stop()) return;
     }
-    this.engine.warm(director.overlay.scene, director.overlay.camera);
+    compiling.push(this.engine.compile(director.overlay.scene, director.overlay.camera), this.engine.compilePost());
+    await Promise.all(compiling);
+    if (stop()) return;
+    // Then each plate is drawn once, the next only when the GPU is done with the last (Engine.idle): drawn right
+    // behind it, a plate's first use of its programs waited on the page's thread for the one before, 50–110 ms each.
+    for (const { scene, camera } of [...posed, director.overlay]) {
+      this.engine.warm(scene, camera);
+      await this.engine.idle(pause);
+      if (stop()) return;
+    }
     this.engine.warm();
   }
 

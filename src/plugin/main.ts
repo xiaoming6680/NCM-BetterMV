@@ -167,6 +167,14 @@ function start(client: Client): void {
     player!.load(song, styleFor(song, p.style), new Set(p.off as Array<SceneId | LookId>), undefined, undefined, p.lyricDelay, p.seed);
     pushState();
   };
+  /** plan() for the song the waiting view is readying: built a plate between pauses. False when the job was dropped. */
+  const planInSlices = async (song: PreparedSong, c: Config, job: Job): Promise<boolean> => {
+    plannedWith = planKey(c, song.id);
+    const p = planFor(song, c);
+    if (!await player!.loadInSlices(yieldToPage, () => job.cancelled, song, styleFor(song, p.style), new Set(p.off as Array<SceneId | LookId>), p.lyricDelay, p.seed)) return false;
+    pushState();
+    return true;
+  };
   /** The MV's style beside the volume (and why, when chosen automatically), and how the lyrics' word times stand. */
   const describe = (song: PreparedSong) => overlay.mvInfo({
     style: player!.style!.name, why: config.style === 'auto' ? song.choice.reason : null, bpm: song.analysis.namedBpm ?? song.analysis.bpm, lyrics: aligned.get(song) ?? null,
@@ -193,6 +201,8 @@ function start(client: Client): void {
     const file = obsFile(song);
     obsSong = { song, file };
     pushState();
+    // (The song file is made in a task of its own: right after the song's preparation, the two held the page up.)
+    await yieldToPage();
     if (await obs.sendSong(song, file)) pushState(true);
   }
   function obsState(): ObsState {
@@ -253,8 +263,9 @@ function start(client: Client): void {
       if (last && now - last > 250) governor?.reset();
       const dt = last ? Math.min(0.1, (now - last) / 1000) : 1 / 60;
       last = now;
-      // Only draw the song the MV was made for; while NetEase switches songs the last frame stays.
-      if (player.song && (clock.songId === player.song.id || !clock.playId)) {
+      // Only draw the song the MV was made for; while NetEase switches songs the last frame stays. Not while it is
+      // still being readied behind the waiting view either: a frame then waited for its plate's shaders, 0.2–1 s.
+      if (player.song && preparing?.id !== player.song.id && (clock.songId === player.song.id || !clock.playId)) {
         const gov = config.quality === 'auto' && governed ? governor : null;
         gov?.begin();
         const shot = player.frame(clock.now(), dt);
@@ -363,9 +374,11 @@ function start(client: Client): void {
     if (!song) { overlay.song(null); overlay.mvInfo(null); overlay.status('请先在网易云音乐中播放歌曲'); resting = false; pushState(); return; }
     // (With only the OBS output on, the MV page is closed: no renderer is made here.)
     if (overlay.visible) livePlayer();
-    // Already showing this song (reopened after closing): just take the loading note away.
-    if (player?.song?.id === song.id) { overlay.status(null); resting = false; void obsPublish(player.song); return; }
-    if (preparing?.id === song.id) return;
+    // Already showing this song (reopened after closing): just take the loading note away. (Not while it is still
+    // being built or warmed: the player has it from the start of the build.)
+    if (player?.song?.id === song.id && preparing?.id !== song.id) { overlay.status(null); resting = false; void obsPublish(player.song); return; }
+    // (A job for it dropped meanwhile — the MV page closed and opened again — is still winding down: begun anew.)
+    if (preparing?.id === song.id && !preparing.cancelled) return;
     if (preparing) preparing.cancelled = true;
     // The song prepared ahead is this one: it goes on at full speed. Ahead of another song, it is dropped.
     const taken = ahead?.job.id === song.id ? ahead : null;
@@ -395,10 +408,14 @@ function start(client: Client): void {
       void obsPublish(prepared);
       // Only the OBS output wants it (the MV page is closed): done here.
       if (!player || !overlay.visible) { preparing = null; prefetchNext(); return; }
-      plan(prepared, config);
       // The progress bar shows the song's structure: its sections, the choruses and drops in the cover's colour.
       overlay.setStructure(prepared.analysis.sections.map((x): BarSection => ({ start: x.start, end: x.end, name: SECTION[x.label], loud: x.label === 'chorus' || x.label === 'drop' })), prepared.palette.css.signal);
       overlay.status('正在准备画面…', { progress: 0.9 });
+      if (!await planInSlices(prepared, config, job)) {
+        if (job.cancelled) return;
+        // (Another load took the player over meanwhile: this song built at once instead.)
+        plan(prepared, config);
+      }
       await player.warm(yieldToPage, () => job.cancelled);
       if (job.cancelled) return;
       overlay.status(null);
@@ -534,6 +551,8 @@ function start(client: Client): void {
 
   (window as any)[KEY] = {
     open, close, clock, obs, client, get player() { return player; },
+    // (For tools/bench: the song being readied, and the one being prepared ahead.)
+    get preparing() { return preparing; }, get ahead() { return ahead?.job ?? null; },
     get governor() { return governor; }, get governed() { return governed; }, set governed(on: boolean) { governed = on; },
   };
 }

@@ -412,6 +412,9 @@ export class Engine {
   /** Per song: the riso inks for its palette, the glyphs from its lyrics. */
   setLooks(palette: Palette, lyricText: string): void { this.look.setSong(palette, lyricText); }
 
+  /** setLooks in steps (the glyphs measured between yields). */
+  settingLooks(palette: Palette, lyricText: string): Generator<void, void> { return this.look.settingSong(palette, lyricText); }
+
   /** The cover, for transitions that wipe through its shapes. */
   setCover(cover: THREE.Texture | null): void { this.shots.setCover(cover); }
 
@@ -425,7 +428,16 @@ export class Engine {
     const target = this.warmTarget ??= new THREE.WebGLRenderTarget(64, 64, { type: THREE.HalfFloatType, samples: 4 });
     if (scene && camera) {
       const hidden: THREE.Object3D[] = [];
-      scene.traverse(o => { if (!o.visible) { hidden.push(o); o.visible = true; } });
+      // (A program's first use reads its info log and uniforms, waiting until the GPU is done with what came before:
+      // done for all of the scene's compiled programs first, before its draws give the GPU work — a texture to upload,
+      // a variant of a shader to compile — that the next first use would wait behind, up to 80 ms.)
+      scene.traverse(o => {
+        if (!o.visible) { hidden.push(o); o.visible = true; }
+        const m = (o as THREE.Mesh).material;
+        for (const x of Array.isArray(m) ? m : m ? [m] : []) {
+          if (r.properties.has(x)) (r.properties.get(x) as { currentProgram?: THREE.WebGLProgram }).currentProgram?.getUniforms();
+        }
+      });
       r.setRenderTarget(target);
       r.render(scene, camera);
       for (const o of hidden) o.visible = false;
@@ -435,6 +447,27 @@ export class Engine {
     }
     r.setRenderTarget(prev);
   }
+
+  /**
+   * Resolves after a `pause` once the GPU has done what it was given so far (a WebGL2 fence, looked at between pauses;
+   * at most a second). Whatever next waits on it on the page's thread (a program's first use reads its info log, a
+   * read-back) then finds it idle instead of holding the page up meanwhile.
+   */
+  async idle(pause: () => Promise<void>): Promise<void> {
+    const gl = this.renderer.getContext() as WebGL2RenderingContext;
+    const fence = gl.isContextLost() || this.fenceTimeouts >= 3 ? null : gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    gl.flush();
+    const t0 = performance.now();
+    try {
+      do await pause();
+      while (fence && !gl.isContextLost() && gl.getSyncParameter(fence, gl.SYNC_STATUS) !== gl.SIGNALED && performance.now() - t0 < 1000);
+      // (A browser whose fences never seem to signal: after a few of those, just the pause.)
+      if (fence && performance.now() - t0 >= 1000) this.fenceTimeouts++;
+    } finally {
+      if (fence) gl.deleteSync(fence);
+    }
+  }
+  private fenceTimeouts = 0;
 
   /**
    * Starts compiling a scene's shaders (hidden objects too) and resolves when they are ready, so warm() then only

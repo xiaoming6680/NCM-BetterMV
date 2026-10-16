@@ -47,8 +47,18 @@ const kindOf = (v: ArrayBufferView): Kind | null => {
   return null;
 };
 
-/** The cover as a JPEG data URL, at its own size (the palette and the pixels the plates read travel exactly). */
+const coverUrls = new WeakMap<PreparedSong, string>();
+/**
+ * The cover as a JPEG data URL, at its own size (the palette and the pixels the plates read travel exactly). Encoded
+ * once a song: a song is sent again once its word times are found.
+ */
 function coverUrl(song: PreparedSong): string {
+  let url = coverUrls.get(song);
+  if (!url) coverUrls.set(song, url = encodeCover(song));
+  return url;
+}
+
+function encodeCover(song: PreparedSong): string {
   const img = song.cover.image as HTMLImageElement | HTMLCanvasElement;
   const w = (img as HTMLImageElement).naturalWidth || img.width, h = (img as HTMLImageElement).naturalHeight || img.height;
   const c = document.createElement('canvas');
@@ -67,7 +77,9 @@ export function songFile(song: PreparedSong): Blob {
   const parts: BlobPart[] = [];
   let size = 0;
   const styles = new Set<object>(Object.values(STYLES));
-  const meta = JSON.stringify({ v: OBS_VERSION, song, coverUrl: coverUrl(song) }, function (this: any, key, value) {
+  // (The song without its cover texture: JSON.stringify calls a value's toJSON before the replacer sees it, and a
+  // texture's draws its whole image into a PNG data URL — 50–75 ms in NetEase's Chromium — for the replacer to drop.)
+  const meta = JSON.stringify({ v: OBS_VERSION, song: { ...song, cover: undefined }, coverUrl: coverUrl(song) }, function (this: any, key, value) {
     // (The holder's own value: JSON has already turned a THREE.Color into its hex by its toJSON.)
     const raw = this[key];
     if (raw instanceof THREE.Texture) return undefined;

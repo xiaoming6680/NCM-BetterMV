@@ -106,6 +106,17 @@ export function freeGraph(root: THREE.Object3D): void {
   });
 }
 
+/**
+ * Runs a plate's work made in steps (a generator yielding between them) to its end at once: the plate built in one go,
+ * as load() does; MvPlayer.loadInSlices instead gives the page a breath at each step (a plate's static `building`).
+ */
+export function finish<T>(steps: Generator<void, T>): T {
+  for (;;) {
+    const r = steps.next();
+    if (r.done) return r.value;
+  }
+}
+
 /** Small deterministic PRNG (mulberry32). */
 export function rng(seed: number): () => number {
   let a = seed >>> 0;

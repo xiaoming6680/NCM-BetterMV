@@ -15,7 +15,7 @@
 // the brush is. Beyond the sheet, paper-coloured mist. The song leaves more of the paper blank (留白).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { rng, smooth, clamp01, lerp, freeGraph } from './types.ts';
+import { rng, smooth, clamp01, lerp, freeGraph, finish } from './types.ts';
 import { LyricBlocks, Stands, voiceFor } from './lyricBlock.ts';
 import { INK_BLACK, ricePaper } from './ink.ts';
 import type { Music } from '../director/music.ts';
@@ -118,8 +118,13 @@ function liftsOf(music: Music): Lift[] {
   return out;
 }
 
-/** `share`: how much of the canvas the song should cover. */
-function plan(music: Music, lines: LyricLine[], sal: Float32Array, seed: number, soft: boolean, share = 0.8): { plan: Plan; lifts: Lift[] } {
+type Planned = { plan: Plan; lifts: Lift[] };
+
+/**
+ * `share`: how much of the canvas the song should cover. Yields every 1024 steps of the stroke (the whole song took
+ * 0.15–0.25 s in NetEase's Chromium).
+ */
+function* planning(music: Music, lines: LyricLine[], sal: Float32Array, seed: number, soft: boolean, share = 0.8): Generator<void, Planned> {
   const n = Math.ceil((music.duration + 2) * RATE) + 1;
   const p: Plan = {
     n, x: new Float32Array(n), z: new Float32Array(n), dx: new Float32Array(n), dz: new Float32Array(n),
@@ -234,6 +239,7 @@ function plan(music: Music, lines: LyricLine[], sal: Float32Array, seed: number,
     }
     p.x[k] = x; p.z[k] = z; p.dx[k] = Math.cos(heading); p.dz[k] = Math.sin(heading);
     p.w[k] = width; p.th[k] = thick;
+    if ((k & 1023) === 1023) yield;
   }
   return { plan: p, lifts };
 }
@@ -617,14 +623,21 @@ export class CanvasScene implements MvScene {
   private ink: boolean;
   private duration: number;
 
-  constructor(init: SceneInit, look: 'pulse' | 'ballad' | 'ink' = 'pulse', seed = 1) {
+  /** The plate built in steps, its stroke planned between yields (for MvPlayer.loadInSlices). */
+  static *building(init: SceneInit, look: 'pulse' | 'ballad' | 'ink' = 'pulse', seed = 1): Generator<void, CanvasScene> {
+    return new CanvasScene(init, look, seed, yield* CanvasScene.planned(init, look, seed));
+  }
+
+  private static planned(init: SceneInit, look: 'pulse' | 'ballad' | 'ink', seed: number): Generator<void, Planned> {
+    return planning(init.music, init.lyrics.lines, saliency(init.coverPixels, init.coverSize), seed, look !== 'pulse', look === 'ink' ? 0.62 : 0.8);
+  }
+
+  constructor(init: SceneInit, look: 'pulse' | 'ballad' | 'ink' = 'pulse', seed = 1, planned = finish(CanvasScene.planned(init, look, seed))) {
     const { palette, music } = init;
     this.soft = look !== 'pulse';
     this.ink = look === 'ink';
     const paper = ricePaper(palette);
     this.scene.background = this.ink ? paper.clone() : palette.ink.clone().multiplyScalar(0.3);
-    const sal = saliency(init.coverPixels, init.coverSize);
-    const planned = plan(music, init.lyrics.lines, sal, seed, this.soft, this.ink ? 0.62 : 0.8);
     this.plan = planned.plan;
     this.stamps = stampsOf(this.plan, music, planned.lifts, seed, this.soft);
     this.duration = music.duration;
