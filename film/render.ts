@@ -127,7 +127,7 @@ async function still(url: string, width: number, height: number, scale = 1) {
 }
 
 async function images(): Promise<void> {
-  // Written straight to where they are used. The README shows its pictures 880 wide (620 for the settings page), so
+  // Written straight to where they are used. The README shows its pictures 880 wide (760 for the settings page), so
   // they are shot at 2x. Below quality 100 Chrome's JPEG encoder leaves blotches in the dark glows.
   const docs = path.join(ROOT, 'docs', 'images');
   fs.mkdirSync(docs, { recursive: true });
@@ -144,16 +144,13 @@ async function images(): Promise<void> {
     console.log(file);
     await page.close();
   }
-  // The settings page as BetterNCM shows it on a dark theme (the dev page puts it on a light and a dark panel), from
-  // the top to the first row of scene sketches (the scene overview above shows them all).
-  const page = await still('/settings.html', 700, 1400, 2);
+  // The settings page as BetterNCM shows it on a dark theme, on its first section: the dev page's dark panel, a box of
+  // the pane's visible height, at its full 800 wide (the page must be wider than that plus its 16px margins). Square
+  // corners: rounded ones show the dev page's grey.
+  const page = await still('/settings.html', 880, 1200, 2);
+  await page.addStyleTag({ content: '#dark { border-radius: 0; }' });
   await page.waitForTimeout(600);
-  const clip = await page.evaluate(() => {
-    const dark = document.getElementById('dark')!.getBoundingClientRect();
-    const tiles = document.querySelector('#dark .bmv-tiles')?.getBoundingClientRect();
-    return { x: dark.x, y: dark.y + scrollY, width: dark.width, height: tiles ? tiles.bottom - dark.y + 12 : dark.height };
-  });
-  await page.screenshot({ path: path.join(docs, 'settings.jpg'), type: 'jpeg', quality: 92, clip, fullPage: true });
+  await page.locator('#dark').screenshot({ path: path.join(docs, 'settings.jpg'), type: 'jpeg', quality: 92 });
   console.log(path.join(docs, 'settings.jpg'));
   await page.close();
   // The MV page's controls with the play list open, over the plugin's push tunnel (the dev page's ?mv&demo).

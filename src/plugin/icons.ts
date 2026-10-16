@@ -29,6 +29,10 @@ const G = {
   plus: { line: '<path d="M12 6.5v11M6.5 12h11"/>' },
   note: { line: '<path d="M9 17.5V5.6l10-2v11.9"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/>' },
   warning: { line: '<path d="M12 4.2l8.6 15.1H3.4zM12 10v4.2"/>', fill: '<circle cx="12" cy="16.9" r="1.05"/>' },
+  exclaim: { line: '<path d="M12 6v7.4"/>', fill: '<circle cx="12" cy="17.6" r="1.5"/>' },
+  arrowUp: { line: '<path d="M12 18.5V6M6.5 11.5L12 6l5.5 5.5"/>' },
+  chevronLeft: { line: '<path d="M14.8 5.6L8.4 12l6.4 6.4"/>' },
+  chevronRight: { line: '<path d="M9.2 5.6l6.4 6.4-6.4 6.4"/>' },
 } satisfies Record<string, Glyph>;
 
 export type IconName = keyof typeof G;

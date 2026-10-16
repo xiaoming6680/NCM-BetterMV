@@ -47,9 +47,12 @@
 
 ## 设置
 
-两个入口：MV 页右上角的齿轮，播放中调整即时生效；或在 BetterNCM 的插件管理界面中选择 BetterMV，快捷键在这里修改。
+两个入口，设置相同：
 
-<p align="center"><img src="docs/images/settings.jpg" alt="设置页" width="620"></p>
+- **BetterNCM 的插件管理界面中选择 BetterMV**：左侧按分区排列，“开始使用”列出打开方式和运行状态（歌曲缓存、显卡、对齐包、版本），其余分区一次显示一个。
+- **MV 页右上角的齿轮**：播放中调整即时生效。首页是当前歌曲和常用设置，其余设置在“全部设置”中点击进入。
+
+<p align="center"><img src="docs/images/settings.jpg" alt="设置页" width="760"></p>
 
 | 需要 | 设置方法 |
 |---|---|

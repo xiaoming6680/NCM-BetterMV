@@ -6,21 +6,24 @@
   <style>
     html, body { margin: 0; background: #888; }
     main { display: flex; flex-wrap: wrap; gap: 16px; padding: 16px; align-items: flex-start; }
-    .panel { flex: 1 1 640px; padding: 20px 24px; border-radius: 8px; }
+    /* Each host is BetterNCM's settings pane as it is: a box of the panel's visible height that scrolls, 16px in. */
+    .panel { flex: 1 1 760px; max-width: 800px; height: 560px; box-sizing: border-box; padding: 16px; overflow-x: hidden; overflow-y: scroll; border-radius: 8px; }
+    .panel.narrow { flex: none; width: 500px; height: 430px; }
     .light { background: #fff; color: #333; }
     .dark { background: #1f1f23; color: #e8e8e8; }
     /* BetterNCM on NetEase's dark skin, as it really is: the dark ground is painted by a layer that is not the page's
        ancestor, the page's container hands down no colour (black), only the host's own words beside it are light. */
-    .bncm { position: relative; flex: 1 1 100%; display: flex; gap: 24px; padding: 20px 24px; }
+    .bncm { position: relative; flex: 1 1 100%; display: flex; height: 600px; }
     .bncm-ground { position: absolute; inset: 0; border-radius: 8px; background: #1f1f23; }
-    .bncm-list { position: relative; flex: none; width: 160px; color: #fff; line-height: 2.6; font: 15px/2.6 sans-serif; }
-    .bncm-page { position: relative; flex: 1; }
+    .bncm-list { position: relative; flex: none; width: 256px; box-sizing: border-box; padding: 8px; border-right: 1px solid #8885; color: #fff; font: 15px/2.6 "Microsoft YaHei", sans-serif; }
+    .bncm-page { position: relative; flex: 1; box-sizing: border-box; padding: 16px; overflow-x: hidden; overflow-y: scroll; }
   </style>
 </head>
 <body>
   <main>
     <div class="panel light" id="light"></div><div class="panel dark" id="dark"></div>
-    <div class="bncm"><div class="bncm-ground"></div><div class="bncm-list">PluginMarket<br>BetterDownload<br>BetterMV<br>RevivedSource</div><div class="bncm-page" id="bncm"></div></div>
+    <div class="bncm"><div class="bncm-ground"></div><div class="bncm-list">PluginMarket<br>BetterMV<br>BetterDownload<br>RevivedSource</div><div class="bncm-page" id="bncm"></div></div>
+    <div class="panel light narrow" id="narrow"></div>
   </main>
   <script type="module" src="/src/dev/settings.ts"></script>
 </body>

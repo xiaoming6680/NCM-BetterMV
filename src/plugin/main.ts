@@ -38,7 +38,11 @@ const sketch = (id: string) => {
   return url;
 };
 const changed = (c: Config) => listeners.forEach(fn => fn(c));
-plugin.onConfig(() => settingsView(config, changed, sketch));
+/** NetEase's internals, once found (the settings page shows where its song cache is). */
+let found: Client | null = null;
+plugin.onConfig(() => settingsView(config, changed, sketch, false, undefined, {}, {
+  cacheDir: () => (found ? songCacheDir(found) : Promise.resolve(undefined)),
+}));
 void checkPack();
 // Older BetterMV packages beside this one go; a newer version is looked for once a day.
 startUpdates(config.autoUpdate);
@@ -54,6 +58,7 @@ function start(client: Client): void {
   clock.offset = config.latencyMs / 1000;
   client.bridge.appendRegisterCall('PlayProgress', 'audioplayer', clock.onProgress);
   client.bridge.appendRegisterCall('PlayState', 'audioplayer', clock.onState);
+  found = client;
   void songCacheDir(client); // records the client's cache folder for the dev tools
 
   let player: MvPlayer | null = null;

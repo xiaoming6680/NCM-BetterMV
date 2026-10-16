@@ -84,8 +84,13 @@ if (params.has('mv')) {
   }
   (window as any).overlay = overlay;
 } else {
-  for (const id of ['light', 'dark', 'bncm']) {
+  // Each host shows a state of the song cache: found (the dark one is the README's picture), none found, NetEase not
+  // found yet.
+  const caches: Record<string, string | null | undefined> = { light: 'E:/NetEaseCache/Cache', dark: 'D:/CloudMusic/Cache', bncm: undefined, narrow: null };
+  for (const id of ['light', 'dark', 'bncm', 'narrow']) {
     const config = loadConfig();
-    document.getElementById(id)!.append(settingsView(config, c => console.log('config', JSON.stringify(c)), sketch));
+    document.getElementById(id)!.append(settingsView(config, c => console.log('config', JSON.stringify(c)), sketch, false, undefined, {}, {
+      cacheDir: () => Promise.resolve(caches[id]),
+    }));
   }
 }

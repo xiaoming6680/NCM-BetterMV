@@ -74,6 +74,8 @@ const CSS = `
 .bmv-g.is-play{width:48px;height:48px}
 .bmv-g.is-quiet{color:var(--l2)}
 .bmv-g.is-quiet:hover{color:var(--l1)}
+.bmv-g.has-dot{position:relative}
+.bmv-g.has-dot::after{content:"";position:absolute;top:9px;right:8px;width:7px;height:7px;border-radius:50%;background:#ff453a;box-shadow:0 0 0 1.5px rgba(0,0,0,.25)}
 .bmv-g.is-on{opacity:1;color:var(--l1);background:var(--fill)}
 
 .bmv-top{position:absolute;left:0;right:0;top:0;height:96px;pointer-events:none;transition:opacity .35s var(--ease),transform .45s var(--ease);will-change:opacity,transform;
@@ -183,14 +185,44 @@ const CSS = `
 .bmv-set[data-theme=dark]{--t1:#f5f5f7;--t2:rgba(235,235,245,.66);--t3:rgba(235,235,245,.4);--group:rgba(255,255,255,.055);--line:rgba(255,255,255,.07);
   --sep:rgba(255,255,255,.09);--ctl:rgba(255,255,255,.17);--ctl-hover:rgba(255,255,255,.24);--apply:rgba(50,50,54,.97);--page:#1f1f22;--track:rgba(118,118,128,.26);--on:#68686d;
   --off:rgba(120,120,128,.38);--accent:#5e5ce6;--accent-text:#a5a3ff;--focus:rgba(165,163,255,.8)}
-.bmv-set.is-page{max-width:700px;padding:18px 18px 28px;border-radius:14px;background:var(--page);box-shadow:inset 0 0 0 .5px var(--line)}
+/* The plugin page: a sidebar of sections and the current one beside it, in a column that scrolls on its own; the page
+   fills the height BetterNCM's panel shows (set from script). Narrow, the sidebar becomes a row above the section. */
+.bmv-set.is-page{--side:rgba(0,0,0,.025);display:flex;min-height:320px;border-radius:14px;background:var(--page);box-shadow:inset 0 0 0 .5px var(--line);overflow:hidden}
+.bmv-set.is-page[data-theme=dark]{--side:rgba(255,255,255,.025)}
 .bmv-set.is-compact{padding:0 16px 28px}
-.bmv-set-head{display:flex;align-items:center;gap:14px;padding:6px 4px 4px}
-.bmv-appicon{flex:none;width:56px;height:56px;border-radius:13px;box-shadow:0 2px 6px rgba(0,0,0,.18),0 0 0 .5px rgba(0,0,0,.08)}
-.bmv-set-name{display:flex;align-items:baseline;gap:8px;font:700 22px/1.2 var(--display)}
-.bmv-set-ver{font:400 13px var(--font);color:var(--t2);font-variant-numeric:tabular-nums}
-.bmv-set-desc{margin-top:3px;color:var(--t2)}
+.bmv-appicon{flex:none;width:36px;height:36px;border-radius:9px;box-shadow:0 1px 3px rgba(0,0,0,.16),0 0 0 .5px rgba(0,0,0,.08)}
+.bmv-side{position:relative;flex:none;display:flex;flex-direction:column;width:168px;padding:16px 10px;background:var(--side);box-shadow:inset -.5px 0 0 var(--sep)}
+.bmv-side-app{display:flex;align-items:center;gap:10px;padding:2px 8px 16px}
+.bmv-side-name{font:700 16px/1.2 var(--display)}
+.bmv-side-ver{margin-top:2px;font-size:11px;line-height:1.2;color:var(--t2);font-variant-numeric:tabular-nums}
+.bmv-side-list{display:flex;flex-direction:column;gap:2px}
+.bmv-side-item{display:flex;align-items:center;gap:8px;width:100%;min-height:30px;padding:5px 10px;border-radius:7px;color:var(--t1);text-align:left;transition:background-color .15s}
+.bmv-side-item:hover{background:var(--track)}
+.bmv-side-item[aria-current=page]{background:var(--accent);color:#fff;font-weight:600}
+.bmv-side-label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bmv-nav-dot{flex:none;width:7px;height:7px;border-radius:50%;background:#ff453a}
+.bmv-side-item[aria-current=page] .bmv-nav-dot{background:#fff}
+.bmv-main{position:relative;flex:1;min-width:0;padding:20px 20px 28px;overflow-y:auto;overscroll-behavior:contain}
+.bmv-pg{display:none;max-width:760px}
+.bmv-pg.is-current{display:block}
+.bmv-pg[data-page=start],.bmv-pg[data-page=scenes],.bmv-pg[data-page=looks],.bmv-set.is-compact .bmv-pg{max-width:none}
+.bmv-pg-title{display:flex;align-items:baseline;gap:12px;padding:0 4px;font:700 20px/1.2 var(--display)}
+.bmv-pg-title .bmv-sec-aside{font:400 12px/1.4 var(--font)}
+.bmv-pg-lead{padding:4px 4px 0;color:var(--t2)}
+.bmv-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(236px,1fr));column-gap:20px;align-items:start}
+.bmv-set.is-page.is-narrow{flex-direction:column}
+.bmv-set.is-narrow .bmv-side{width:auto;padding:8px 10px;box-shadow:inset 0 -.5px 0 var(--sep)}
+.bmv-set.is-narrow .bmv-side-app{display:none}
+.bmv-set.is-narrow .bmv-side-list{flex-direction:row;flex-wrap:nowrap;overflow-x:auto}
+.bmv-set.is-narrow .bmv-side-list::-webkit-scrollbar{display:none}
+.bmv-set.is-narrow .bmv-side-list.has-more{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent)}
+.bmv-side-flag{display:none;position:absolute;right:6px;top:50%;margin-top:-3.5px}
+.bmv-set:not(.is-narrow) .bmv-side-flag{display:none!important}
+.bmv-set.is-narrow .bmv-side-item{width:auto;min-height:28px;padding:4px 6px;white-space:nowrap}
+.bmv-set.is-narrow .bmv-main{padding:16px 16px 24px}
 .bmv-sec{margin-top:24px}
+.bmv-pg-title+.bmv-sec,.bmv-pg-lead+.bmv-sec{margin-top:18px}
+.bmv-col>.bmv-sec:first-child{margin-top:18px}
 .bmv-set.is-compact .bmv-sec:first-child{margin-top:4px}
 .bmv-sec-h{display:flex;align-items:center;gap:10px;min-height:22px;padding:0 4px 7px}
 .bmv-sec-title{font-size:13px;font-weight:600}
@@ -242,6 +274,37 @@ const CSS = `
 .bmv-pack-progress .bmv-meter{width:160px}
 .bmv-state.is-error{color:#ff453a}
 .bmv-set[data-theme=light] .bmv-state.is-error{color:#d70015}
+.bmv-row-note.is-error{color:#ff453a}
+.bmv-set[data-theme=light] .bmv-row-note.is-error{color:#d70015}
+/* The running state on 开始使用: a mark for how each thing stands (works, needs attention, not set up, news). */
+.bmv-row.is-status{column-gap:12px}
+.bmv-mark{flex:none;display:flex;align-items:center;justify-content:center;align-self:flex-start;width:20px;height:20px;margin-top:1px;border-radius:50%;color:#fff}
+.bmv-mark.is-ok{background:#30d158}
+.bmv-mark.is-warn{background:#ff9f0a}
+.bmv-mark.is-off{background:var(--off);color:var(--t1)}
+.bmv-mark.is-new{background:var(--accent)}
+.bmv-mark.is-none{background:transparent}
+.bmv-set[data-theme=light] .bmv-mark.is-ok{background:#28a745}
+.bmv-set[data-theme=light] .bmv-mark.is-warn{background:#e07800}
+.bmv-row.is-status .bmv-row-sub{overflow-wrap:anywhere}
+/* The MV button as it looks above NetEase's play bar (a picture of it, not a control). */
+.bmv-mvbtn-sample{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 12px 0 10px;border-radius:14px;background:rgba(28,28,30,.86);color:#fff;
+  font-size:12px;font-weight:600;letter-spacing:.02em;line-height:1;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.16),0 4px 12px rgba(0,0,0,.18)}
+.bmv-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;width:100%;padding:12px 12px 8px}
+.bmv-strip-img{display:block;aspect-ratio:16/9;border-radius:6px;overflow:hidden;background:var(--track);box-shadow:inset 0 0 0 .5px var(--line)}
+.bmv-strip-img img{display:block;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .3s,transform .3s var(--ease)}
+.bmv-strip:hover .bmv-strip-img img{transform:scale(1.045)}
+.bmv-strip-img img.is-ready{opacity:1}
+.bmv-strip-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 14px 12px;font-size:12px;color:var(--t2)}
+/* The MV page's panel: rows that open a section, its current value and a chevron. */
+.bmv-row.is-nav{flex-wrap:nowrap;column-gap:8px;width:100%;color:var(--t1);text-align:left;transition:background-color .15s}
+.bmv-row.is-nav:hover{background:rgba(127,127,127,.12)}
+.bmv-row.is-nav:first-child{border-radius:10px 10px 0 0}
+.bmv-row.is-nav:last-child{border-radius:0 0 10px 10px}
+.bmv-row.is-nav .bmv-row-label{flex:1;min-width:0}
+.bmv-nav-value{min-width:0;max-width:55%;font-size:12px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.bmv-nav-chevron{flex:none;display:flex;color:var(--t3)}
+.bmv-back{margin-left:-6px}
 .bmv-kbds{display:flex;align-items:center;gap:4px}
 /* A key that is set by pressing it: its caps, a ring and a prompt while it waits. */
 .bmv-keycap{display:inline-flex;align-items:center;gap:4px;min-height:30px;padding:3px 6px;border-radius:8px;color:var(--t2);font-size:12px;

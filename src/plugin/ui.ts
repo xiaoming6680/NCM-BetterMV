@@ -5,13 +5,11 @@ import { STYLES, type StyleId } from '../style/style.ts';
 import type { LookId, SceneId } from '../scenes/types.ts';
 import { LOOKS, SCENE_GROUPS, SCENES } from '../scenes/catalog.ts';
 import { SECTION_LABELS, type Section } from '../types.ts';
-import { installPack, removePack, watchPack } from './aligner.ts';
+import { installPack, removePack, watchPack, type PackState } from './aligner.ts';
 import type { PlayMode } from './client.ts';
 import { appIcon, icon, type IconName } from './icons.ts';
+import { canRestart, checkUpdate, installUpdate, openPage, restartNetEase, VERSION, watchUpdate, type UpdateState } from './update.ts';
 import { ensureStyles } from './uiStyle.ts';
-
-/** The plugin's version (plugin/manifest.json, put in at build time). */
-export const VERSION = typeof __VERSION__ === 'string' ? __VERSION__ : '';
 
 export interface Config {
   style: 'auto' | StyleId;
@@ -247,6 +245,8 @@ export class Overlay {
   private maxEl!: HTMLButtonElement;
   private panel = el('div', 'bmv-sheet');
   private panelTitle = el('div', 'bmv-sheet-title');
+  /** Back from a settings section to the settings' home. */
+  private panelBack = el('button', 'bmv-x bmv-back');
   private panelAside = el('div', 'bmv-sheet-aside');
   private panelBody = el('div', 'bmv-sheet-body bmv-scroll');
   /** Which panel slides in from the right: the settings or the play list (the controls and the cursor then stay up). */
@@ -391,6 +391,12 @@ export class Overlay {
   private buildTop(): void {
     const g = this.topButtons;
     this.gearEl = this.button('sliders', '设置', () => this.togglePanel('settings'), 20);
+    // A newer version found (or downloaded and waiting for a restart): a dot on the gear, the settings say more.
+    watchUpdate(s => {
+      const news = s.kind === 'available' || s.kind === 'ready';
+      this.gearEl.classList.toggle('has-dot', news);
+      this.gearEl.title = news ? '设置（有新版本）' : '设置';
+    });
     this.maxEl = this.button('maximize', '最大化', () => this.handlers.onToggleMaximize(), 18);
     this.closeEl = this.button('close', '退出 MV', () => this.handlers.onClose(), 18);
     g.append(this.gearEl, el('div', 'bmv-rule'), this.button('minimize', '最小化', () => this.handlers.onMinimize(), 18), this.maxEl, this.closeEl);
@@ -566,12 +572,26 @@ export class Overlay {
     close.title = '收起（Esc）';
     close.setAttribute('aria-label', '收起');
     close.onclick = () => this.closePanel();
-    head.append(this.panelTitle, this.panelAside, close);
+    this.panelBack.innerHTML = icon('chevronLeft', 16, 2.2);
+    this.panelBack.title = '返回';
+    this.panelBack.setAttribute('aria-label', '返回');
+    this.panelBack.style.display = 'none';
+    head.append(this.panelBack, this.panelTitle, this.panelAside, close);
     this.panel.append(head, this.panelBody);
   }
 
   private togglePanel(which: 'settings' | 'queue'): void {
     if (this.open === which) this.closePanel(); else this.openPanel(which);
+  }
+
+  /** The sheet's header for the settings' home (`title` null) or one of their sections, with back. */
+  private panelNav(title: string | null, back?: () => void): void {
+    this.panelTitle.textContent = title ?? '设置';
+    this.panelBack.style.display = title && back ? '' : 'none';
+    this.panelBack.onclick = back ? () => back() : null;
+    this.panelAside.style.visibility = title ? 'hidden' : '';
+    // Focus goes with the panel into a section (the row that opened it is gone).
+    if (title && back) this.panelBack.focus({ preventScroll: true });
   }
 
   /** Open the settings (built anew, so they show the settings as they are now) or the play list, in place of the other. */
@@ -583,11 +603,18 @@ export class Overlay {
     body.scrollTop = 0;
     body.style.paddingBottom = which === 'queue' ? '12px' : '';
     if (which === 'settings') {
-      this.panelTitle.textContent = '设置';
       this.panelAside.innerHTML = appIcon(18);
       this.panelAside.append(VERSION ? `BetterMV ${VERSION}` : 'BetterMV');
-      body.append(this.handlers.settings());
+      this.panelNav(null);
+      // A section of the settings opened from their home takes the header: its title, and back.
+      const view = this.handlers.settings();
+      view.addEventListener('bmv-nav', e => {
+        const d = (e as CustomEvent<{ title: string | null; back?: () => void }>).detail;
+        this.panelNav(d.title, d.back);
+      });
+      body.append(view);
     } else {
+      this.panelNav(null);
       this.panelTitle.textContent = '播放列表';
       this.rowsFor = null;
       this.drawQueue();
@@ -603,7 +630,7 @@ export class Overlay {
         this.panel.classList.add('is-open');
         // Its contents arrive in turn behind it: the settings' sections, or the rows in sight of the play list.
         const items = this.open === 'settings'
-          ? Array.from(this.panelBody.querySelectorAll('.bmv-sec')).slice(0, 6)
+          ? Array.from(this.panelBody.querySelectorAll('.bmv-pg.is-current .bmv-sec')).slice(0, 6)
           : this.rows.filter(r => r.offsetTop + r.offsetHeight > this.panelBody.scrollTop && r.offsetTop < this.panelBody.scrollTop + this.panelBody.clientHeight).slice(0, 14);
         arrive(items, this.open === 'settings' ? 45 : 22, 80);
         // The scrim stays across the window (the sheet covers its end); only the controls move over.
@@ -1086,50 +1113,80 @@ function hostIsDark(view: HTMLElement): boolean {
   return !!window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
+/** What the settings page shows about the running plugin, from outside the view. */
+export interface SettingsStatus {
+  /** The client's song cache folder; null when none was found, undefined while NetEase's modules aren't found yet. */
+  cacheDir?: () => Promise<string | null | undefined>;
+}
+
+/** The GPU as WebGL 2 sees it, asked once (a throwaway context, released at once). */
+let gpu: { webgl2: boolean; name: string } | null = null;
+function gpuInfo(): { webgl2: boolean; name: string } {
+  if (gpu) return gpu;
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    if (!gl) return (gpu = { webgl2: false, name: '' });
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const raw = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : '';
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    // “ANGLE (NVIDIA, NVIDIA GeForce RTX 5070 Ti Laptop GPU (0x00002F58) Direct3D11 vs_5_0 ps_5_0, D3D11)” → the model.
+    const m = raw.match(/^ANGLE \([^,]*, (.+?)(?: \(0x[0-9a-f]+\))?(?: Direct3D[^,]*)?, [^,]*\)$/i);
+    return (gpu = { webgl2: true, name: (m ? m[1] : raw).trim().slice(0, 64) });
+  } catch { return (gpu = { webgl2: false, name: '' }); }
+}
+
+type PageId = 'start' | 'picture' | 'perf' | 'lyrics' | 'scenes' | 'looks' | 'keys' | 'update';
+
 /**
- * Settings page for BetterNCM's plugin panel, or (`compact`) the MV page's own settings panel: narrower, without the
- * header and the keys, the sketches shown beside the panel. `preview` gives a scene's sketch (an image URL), or null
- * when there is none.
+ * The settings, in sections that are pages of their own. On BetterNCM's plugin page a sidebar shows one at a time
+ * (开始使用 first: how to open the MV and whether everything works); in the MV page's panel (`compact`), a home page of
+ * what is tuned while watching leads to them, and the panel's header takes a section's title and a back button
+ * (the view says so with a `bmv-nav` event). `preview` gives a scene's sketch (an image URL), or null when there is none.
  */
-export function settingsView(config: Config, onChange: (c: Config) => void, preview: (id: string) => Promise<string | null>, compact = false, song?: { id: number; name: string }, actions: { reroll?: () => void } = {}): HTMLElement {
+export function settingsView(config: Config, onChange: (c: Config) => void, preview: (id: string) => Promise<string | null>, compact = false, song?: { id: number; name: string }, actions: { reroll?: () => void } = {}, status: SettingsStatus = {}): HTMLElement {
   ensureStyles();
   const view = el('div', 'bmv-ui bmv-set ' + (compact ? 'is-compact' : 'is-page'));
   view.dataset.bmvSettings = '';
   view.dataset.theme = 'dark';
-  if (!compact) {
-    // The host's theme is known once the page is in it, and followed while it is (NetEase's theme can change).
-    view.dataset.theme = 'light';
-    let tries = 0, shown = false;
-    const look = () => {
-      if (view.isConnected) {
-        shown = true;
-        const theme = hostIsDark(view) ? 'dark' : 'light';
-        if (view.dataset.theme !== theme) view.dataset.theme = theme;
-        window.setTimeout(look, 1000);
-      } else if (!shown && tries++ < 240) requestAnimationFrame(look);
-    };
-    requestAnimationFrame(look);
 
-    const head = el('div', 'bmv-set-head');
-    const mark = el('div', 'bmv-appicon');
-    mark.innerHTML = appIcon(56);
-    const text = el('div');
-    const name = el('div', 'bmv-set-name', 'BetterMV');
-    if (VERSION) name.append(el('span', 'bmv-set-ver', VERSION));
-    text.append(name, el('div', 'bmv-set-desc', '为正在播放的歌曲实时生成 3D MV：以封面构建场景，按歌曲结构剪辑镜头，按曲风自动选择风格。'));
-    head.append(mark, text);
-    view.append(head);
-  }
+  /** A section of the settings as a page: its rows, and on the MV page's home its current value. */
+  interface Page { id: PageId; title: string; root: HTMLDivElement; value?: () => string; dot?: () => boolean }
+  const pages: Page[] = [];
+  let into: HTMLElement = view;
+  let current: Page | null = null;
+  const page = (id: PageId, title: string, value?: () => string, dot?: () => boolean) => {
+    const root = el('div', 'bmv-pg');
+    root.dataset.page = id;
+    if (!compact) root.append(el('div', 'bmv-pg-title', title));
+    const p: Page = { id, title, root, value, dot };
+    pages.push(p);
+    into = root;
+    current = p;
+    return p;
+  };
+  /** Everything shown twice (on 开始使用 or the MV page's home, and in its own section) follows a change made in either. */
+  const synced: Array<() => void> = [];
+  const sync = () => synced.forEach(fn => fn());
 
-  /** A titled section; returns the place for its rows (a rounded group) unless `bare`. */
+  /**
+   * A section; returns it (rows go in a rounded group made with `group`). A section named as its page shows no title of
+   * its own (the page's is above it, or in the panel's header).
+   */
   const section = (title: string, aside?: HTMLElement, note?: string) => {
     const sec = el('div', 'bmv-sec');
-    const h = el('div', 'bmv-sec-h');
-    h.append(el('div', 'bmv-sec-title', title));
-    if (aside) { aside.classList.add('bmv-sec-aside'); h.append(aside); }
-    sec.append(h);
+    const named = title && title !== current?.title;
+    // (Untitled, its aside goes on the page's title line rather than a line of its own.)
+    const head = !named && aside && current ? current.root.querySelector('.bmv-pg-title') : null;
+    if (aside) aside.classList.add('bmv-sec-aside');
+    if (head && aside) head.append(aside);
+    else if (named || aside) {
+      const h = el('div', 'bmv-sec-h');
+      if (named) h.append(el('div', 'bmv-sec-title', title));
+      if (aside) h.append(aside);
+      sec.append(h);
+    }
     if (note) sec.append(el('div', 'bmv-sec-note', note));
-    view.append(sec);
+    into.append(sec);
     return sec;
   };
   const group = (host: HTMLElement) => { const g = el('div', 'bmv-group'); host.append(g); return g; };
@@ -1155,22 +1212,24 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   const segmented = <K extends 'style' | 'quality' | 'arrange' | 'fpsCap'>(key: K, options: Array<[Config[K], string]>, then?: () => void) => {
     const g = el('div', 'bmv-segc');
     g.setAttribute('role', 'group');
-    const paint = () => g.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.value === String(config[key]))));
+    const paint = () => { g.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.value === String(config[key])))); then?.(); };
     for (const [value, text] of options) {
       const b = el('button', '', text);
       b.dataset.value = String(value);
-      b.onclick = () => { config[key] = value; plugin.setConfig(key, value); paint(); then?.(); onChange(config); };
+      b.onclick = () => { config[key] = value; plugin.setConfig(key, value); sync(); onChange(config); };
       g.append(b);
     }
+    synced.push(paint);
     paint();
     return g;
   };
-  const toggle = (key: 'button' | 'controls' | 'prefetch', label: string) => {
+  const toggle = (key: 'button' | 'controls' | 'prefetch' | 'autoUpdate', label: string) => {
     const b = el('button', 'bmv-switch');
     b.setAttribute('role', 'switch');
     b.setAttribute('aria-label', label);
     const paint = () => b.setAttribute('aria-checked', String(config[key]));
-    b.onclick = () => { config[key] = !config[key]; plugin.setConfig(key, config[key]); paint(); onChange(config); };
+    b.onclick = () => { config[key] = !config[key]; plugin.setConfig(key, config[key]); sync(); onChange(config); };
+    synced.push(paint);
     paint();
     return b;
   };
@@ -1191,6 +1250,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
       ms = Math.max(min, Math.min(max, Math.round(ms)));
       if (ms !== get()) set(ms);
       show();
+      sync();
     };
     const step = (name: IconName, d: number, title: string) => {
       const b = el('button');
@@ -1221,73 +1281,197 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     input.onfocus = () => input.select();
     stepper.append(step('minus', -by, less), input, step('plus', by, more));
     host.append(stepper, el('span', 'bmv-unit', 'ms'), zero);
+    // (Not while it is being typed in.)
+    synced.push(() => { if (document.activeElement !== input) show(); });
     show();
     return host;
   };
 
-  const picture = group(section('画面'));
-  const styleNote = el('div', '', STYLE_NOTE[config.style]);
-  row(picture, '风格', segmented('style', [['auto', '自动'], ['pulse', '律动'], ['ballad', '抒情'], ['word', '字'], ['ink', '墨']], () => { styleNote.textContent = STYLE_NOTE[config.style]; }), undefined, styleNote);
-  row(picture, '画面编排', segmented('arrange', [['random', '每次不同'], ['fixed', '固定']]), '同一首歌再次播放时，场景、镜头与画风是否重新编排');
+  // The rows shown in more than one place (the MV page's home, and their own section) are made by these; `brief` (on
+  // the home) leaves out the longer notes, which their section has.
+  const styleRow = (host: HTMLElement, brief = false) => {
+    const note = el('div', '', STYLE_NOTE[config.style]);
+    return row(host, '风格', segmented('style', [['auto', '自动'], ['pulse', '律动'], ['ballad', '抒情'], ['word', '字'], ['ink', '墨']], () => { note.textContent = STYLE_NOTE[config.style]; }), undefined, brief ? undefined : note);
+  };
+  // Picture delay, no slider: − and + step 10 ms (held, they repeat), the number can be typed, and back to zero.
+  const latencyRow = (host: HTMLElement, brief = false) => row(host, '画面延迟', msStepper(() => config.latencyMs, ms => { config.latencyMs = ms; plugin.setConfig('latencyMs', ms); onChange(config); },
+    LATENCY_MIN, LATENCY_MAX, 10, '画面提前 10 ms', '画面推后 10 ms'), brief ? '画面早于声音时调大' : undefined,
+  brief ? undefined : compact ? '画面早于声音时调大（蓝牙耳机通常需 +150～250 ms），可在播放中实时调整' : '画面早于声音时调大（蓝牙耳机通常需 +150～250 ms）；也可在 MV 页右上角的设置中实时调整');
+  const qualityRow = (host: HTMLElement) => row(host, '画质', segmented('quality', [['high', '高'], ['mid', '中'], ['low', '低']]), '画面卡顿时调低');
   // On the MV page: the playing song arranged anew, at once.
-  if (actions.reroll) {
+  const rerollRow = (host: HTMLElement) => {
     const again = button('换一种', () => {
       actions.reroll!();
       again.textContent = '已重新编排';
       window.setTimeout(() => { again.textContent = '换一种'; }, 1400);
     });
-    row(picture, '当前歌曲', again, '立即重新编排正在播放的歌曲');
-  }
-  // Picture delay, no slider: − and + step 10 ms (held, they repeat), the number can be typed, and back to zero.
-  row(picture, '画面延迟', msStepper(() => config.latencyMs, ms => { config.latencyMs = ms; plugin.setConfig('latencyMs', ms); onChange(config); },
-    LATENCY_MIN, LATENCY_MAX, 10, '画面提前 10 ms', '画面推后 10 ms'), undefined,
-  compact ? '画面早于声音时调大（蓝牙耳机通常需 +150～250 ms），可在播放中实时调整' : '画面早于声音时调大（蓝牙耳机通常需 +150～250 ms）；也可在 MV 页右上角的设置中实时调整');
+    return row(host, '重新编排', again, '立即重新编排正在播放的歌曲');
+  };
+  // On the MV page: this song's own lyric delay (some songs' lyrics run late or early on NetEase's side).
+  const lyricDelayRow = (host: HTMLElement, s: { id: number; name: string }, brief = false) => {
+    const key = String(s.id);
+    return row(host, '歌词延迟', msStepper(() => config.lyricDelays[key] ?? 0, ms => {
+      if (ms) config.lyricDelays[key] = ms; else delete config.lyricDelays[key];
+      plugin.setConfig('lyricDelays', JSON.stringify(config.lyricDelays));
+      onChange(config);
+    }, -3000, 3000, 50, '歌词提前 50 ms', '歌词推后 50 ms'), brief ? '仅对这首歌生效' : undefined,
+    brief ? undefined : `仅对当前歌曲（${s.name}）生效：歌词晚于演唱时调小，早于演唱时调大`);
+  };
+  const QUALITY_NAME: Record<Config['quality'], string> = { high: '高', mid: '中', low: '低' };
 
+  page('picture', '画面', () => (config.style === 'auto' ? '自动' : STYLES[config.style].name));
+  const picture = group(section('画面'));
+  styleRow(picture);
+  row(picture, '画面编排', segmented('arrange', [['random', '每次不同'], ['fixed', '固定']]), '同一首歌再次播放时，场景、镜头与画风是否重新编排');
+  latencyRow(picture);
+
+  page('perf', '性能', () => `${QUALITY_NAME[config.quality]}画质` + (config.fpsCap ? `，${config.fpsCap} 帧` : ''));
   const perf = group(section('性能'));
-  row(perf, '画质', segmented('quality', [['high', '高'], ['mid', '中'], ['low', '低']]), '画面卡顿时调低');
-  row(perf, '帧率上限', segmented('fpsCap', [[0, '不限'], [240, '240'], [120, '120'], [60, '60'], [30, '30']]), '限制每秒绘制的帧数；高刷新率屏幕可选 120 或 240，30 帧可明显降低显卡占用');
+  qualityRow(perf);
+  row(perf, '帧率上限', segmented('fpsCap', [[0, '不限'], [240, '240'], [120, '120'], [60, '60'], [30, '30']]), undefined, '限制每秒绘制的帧数；高刷新率屏幕可选 120 或 240，30 帧可明显降低显卡占用');
   row(perf, '提前分析下一首', toggle('prefetch', '提前分析下一首'), '播放时在后台分析播放列表中的下一首，切歌后无需等待；会占用部分 CPU');
 
+  const keysPage = page('keys', '界面与快捷键', () => keyLabel(config.keys.toggle));
   const shell = group(section('界面'));
   const mvButtonRow = row(shell, 'MV 按钮', toggle('button', 'MV 按钮'), `显示在播放栏上方；关闭后可用 ${keyLabel(config.keys.toggle)} 打开`);
   row(shell, '控制栏', toggle('controls', '控制栏'), 'MV 页底部的播放控制，鼠标静止时自动隐藏');
 
   // The optional aligner pack: its state follows the download while the page is open.
-  const words = group(section('歌词'));
-  // On the MV page: this song's own lyric delay (some songs' lyrics run late or early on NetEase's side).
-  if (song) {
-    const key = String(song.id);
-    row(words, '歌词延迟', msStepper(() => config.lyricDelays[key] ?? 0, ms => {
-      if (ms) config.lyricDelays[key] = ms; else delete config.lyricDelays[key];
-      plugin.setConfig('lyricDelays', JSON.stringify(config.lyricDelays));
-      onChange(config);
-    }, -3000, 3000, 50, '歌词提前 50 ms', '歌词推后 50 ms'), undefined, `仅对当前歌曲（${song.name}）生效：歌词晚于演唱时调小，早于演唱时调大`);
-  }
+  let packState: PackState = { kind: 'checking' };
+  page('lyrics', '歌词与对齐', () => (packState.kind === 'ready' ? '对齐包已安装' : packState.kind === 'installing' ? '正在下载对齐包' : '对齐包未安装'));
+  const words = group(section('歌词与对齐'));
+  if (song) lyricDelayRow(words, song);
+  // The MV page's panel is built anew each time it opens, so an old one stops listening once it is gone; BetterNCM's
+  // page is built once, at startup before anyone opens it (its plugin list asks every plugin for its page then), and
+  // kept: it follows every change.
+  const gone = () => compact && !view.isConnected;
+  const follow = <S,>(watch: (fn: (s: S) => void) => () => void, render: (s: S) => void) => {
+    let first = true;
+    const stop = watch(s => {
+      if (!first && gone()) { stop(); return; }
+      first = false;
+      render(s);
+    });
+  };
+  const meter = (label: string, part: number) => {
+    const box = el('div', 'bmv-pack-progress');
+    const m = el('div', 'bmv-meter');
+    const fill = el('i');
+    fill.style.width = `${(Math.max(0, Math.min(1, part)) * 100).toFixed(1)}%`;
+    m.append(fill);
+    box.append(el('span', 'bmv-state', label), m);
+    return box;
+  };
+  const primary = (text: string, fn: () => void) => { const b = button(text, fn); b.classList.add('is-primary'); return b; };
+  /** How a thing stands, as the mark before a row of the running state. */
+  type Standing = 'ok' | 'warn' | 'off' | 'new' | 'none';
+  const MARK: Record<Exclude<Standing, 'none'>, IconName> = { ok: 'check', warn: 'exclaim', off: 'minus', new: 'arrowUp' };
+  /** A row of the running state: a mark for how it stands, the label and a line under it, an action on the right. */
+  const statusRow = (host: HTMLElement, label: string) => {
+    const ctl = el('div', 'bmv-row-c');
+    ctl.style.margin = '0';
+    const r = row(host, label, ctl, ' ');
+    r.classList.add('is-status');
+    const mark = el('span', 'bmv-mark');
+    r.prepend(mark);
+    const sub = r.querySelector('.bmv-row-sub') as HTMLElement;
+    const set = (kind: Standing, line: string) => {
+      mark.className = 'bmv-mark is-' + kind;
+      mark.innerHTML = kind === 'none' ? '' : icon(MARK[kind], 12, 2.6);
+      sub.textContent = line;
+    };
+    return { r, ctl, sub, set };
+  };
+
+  /** The aligner pack into `ctl`: download, its progress, installed (`full`: and remove), or what failed and a retry. */
+  const packInto = (ctl: HTMLElement, full: boolean, set?: (kind: Standing, line: string) => void) => follow(watchPack, st => {
+    packState = st;
+    ctl.textContent = '';
+    const state = (t: string, error = false) => ctl.append(el('span', 'bmv-state' + (error ? ' is-error' : ''), t));
+    const mb = (n: number) => Math.round(n / 1048576);
+    if (st.kind === 'checking') { state('正在检查…'); set?.('off', '正在检查'); }
+    else if (st.kind === 'none') {
+      ctl.append(button(full ? '下载对齐包（约 400 MB）' : '下载（约 400 MB）', () => void installPack()));
+      set?.('off', '未安装：仅有逐句歌词的歌曲按音节估算每个字的时间');
+    } else if (st.kind === 'installing') {
+      const downloading = st.total && st.note.indexOf('正在下载') === 0;
+      ctl.append(meter(downloading ? `正在下载 ${mb(st.done)} / ${mb(st.total)} MB` : st.note, st.total ? st.done / st.total : 0));
+      set?.('off', '正在安装');
+    } else if (st.kind === 'ready') {
+      if (full) { state('已安装'); ctl.append(button('删除', () => void removePack())); }
+      set?.('ok', '已安装：仅有逐句歌词的歌曲按音频对齐每个字');
+    } else if (st.kind === 'removing') { state('正在删除…'); set?.('off', '正在删除'); }
+    else {
+      state('安装失败：' + st.message, true);
+      ctl.append(button('重试', () => void installPack()));
+      set?.('warn', '安装失败：' + st.message);
+    }
+    sync();
+  });
+
+  /**
+   * The version into a row: its line, a check (also once a day by itself), a newer one downloaded into the plugins
+   * folder in place of this one, then a restart of NetEase to bring it in; what failed below the row.
+   */
+  const updateInto = (r: HTMLElement, ctl: HTMLElement, sub: HTMLElement, set?: (kind: Standing, line: string) => void) => {
+    const note = el('div', 'bmv-row-note is-error');
+    follow(watchUpdate, st => {
+      ctl.textContent = '';
+      note.remove();
+      const check = () => button('检查更新', () => void checkUpdate());
+      let kind: Standing = 'ok', line = VERSION ? `当前版本 ${VERSION}` : '当前版本';
+      if (st.kind === 'idle') { kind = 'none'; ctl.append(check()); }
+      else if (st.kind === 'checking') { kind = 'none'; ctl.append(el('span', 'bmv-state', '正在检查…')); }
+      else if (st.kind === 'latest') { line = '已是最新版本'; ctl.append(check()); }
+      else if (st.kind === 'available') {
+        kind = 'new';
+        // (The version in use is beside the page's and the panel's titles.)
+        line = `新版本 ${st.release.version} 已发布`;
+        ctl.append(link('更新内容', () => openPage(st.release.page)), primary(st.installable ? '更新' : '前往下载', () => void installUpdate(st.release)));
+      } else if (st.kind === 'downloading') {
+        kind = 'new';
+        line = `正在下载 ${st.release.version}`;
+        const size = (n: number) => (n / 1048576).toFixed(1);
+        ctl.append(meter(st.total ? `${size(st.done)} / ${size(st.total)} MB` : '正在下载…', st.total ? st.done / st.total : 0));
+      } else if (st.kind === 'ready') {
+        kind = 'new';
+        line = `已安装 ${st.version}，重启网易云后生效`;
+        if (canRestart()) ctl.append(primary('重启网易云', restartNetEase));
+      } else {
+        kind = 'warn';
+        note.textContent = st.message;
+        r.append(note);
+        const again = st.release;
+        ctl.append(button('重试', () => void (again ? installUpdate(again) : checkUpdate())));
+      }
+      sub.textContent = line;
+      set?.(kind, line);
+      sync();
+    });
+  };
+
   const pack = el('div', 'bmv-row-c');
   pack.style.margin = '0';
-  const mb = (n: number) => `${Math.round(n / 1048576)} MB`;
-  const stopWatching = watchPack(st => {
-    if (!view.isConnected && pack.childElementCount) { stopWatching(); return; }
-    pack.textContent = '';
-    const state = (t: string, error = false) => pack.append(el('span', 'bmv-state' + (error ? ' is-error' : ''), t));
-    if (st.kind === 'checking') state('正在检查…');
-    else if (st.kind === 'none') pack.append(button('下载对齐包（约 400 MB）', () => void installPack()));
-    else if (st.kind === 'installing') {
-      const pct = st.total ? st.done / st.total : 0;
-      const box = el('div', 'bmv-pack-progress');
-      const meter = el('div', 'bmv-meter');
-      const fill = el('i');
-      fill.style.width = `${(pct * 100).toFixed(1)}%`;
-      meter.append(fill);
-      const downloading = st.total && st.note.indexOf('正在下载') === 0;
-      box.append(el('span', 'bmv-state', downloading ? `正在下载 ${Math.round(st.done / 1048576)} / ${mb(st.total)}` : st.note), meter);
-      pack.append(box);
-    } else if (st.kind === 'ready') { state('已安装'); pack.append(button('删除', () => void removePack())); }
-    else if (st.kind === 'removing') state('正在删除…');
-    else { state('安装失败：' + st.message, true); pack.append(button('重试', () => void installPack())); }
-  });
+  packInto(pack, true);
   row(words, '逐字对齐', pack, undefined,
     '适用于仅有逐句歌词的歌曲：按音频识别每个字的演唱时间，替代按音节的估算。首次播放时在本机后台分析，耗时数秒至半分钟，结果缓存后复用。全程本地运行，不上传数据。');
+
+  let updateState: UpdateState = { kind: 'idle' };
+  watchUpdate(st => { updateState = st; });
+  const fresh = () => updateState.kind === 'available' || updateState.kind === 'ready' || updateState.kind === 'downloading';
+  page('update', '更新', () => (updateState.kind === 'available' || updateState.kind === 'downloading' ? `新版本 ${updateState.release.version}`
+    : updateState.kind === 'ready' ? '重启后生效' : VERSION), fresh);
+  const updates = group(section('更新'));
+  const upCtl = el('div', 'bmv-row-c');
+  upCtl.style.margin = '0';
+  const upRow = row(updates, '版本', upCtl, ' ');
+  updateInto(upRow, upCtl, upRow.querySelector('.bmv-row-sub') as HTMLElement);
+  row(updates, '自动检查更新', toggle('autoUpdate', '自动检查更新'), '每天查询一次 GitHub 上是否有新版本');
+  const about = group(section('关于'));
+  const REPO = 'https://github.com/xiaoming6680/NCM-BetterMV';
+  row(about, '项目主页', link('打开', () => openPage(REPO)), '使用说明、下载与源代码');
+  row(about, '更新记录', link('查看', () => openPage(`${REPO}/blob/main/CHANGELOG.md`)), '每个版本的变化');
+  row(about, '问题反馈', link('反馈', () => openPage(`${REPO}/issues`)), '附上歌曲名和截图更容易查明原因');
 
   // The keys: a click on one, then the new keys pressed; one already in use by another action trades places with it.
   const KEY_ROWS: Array<[KeyAction, string, string?]> = [
@@ -1309,6 +1493,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     plugin.setConfig('keys', JSON.stringify(config.keys));
     onChange(config);
     refreshKeys();
+    sync();
     // Where the opening key is named: the MV button's row and the button's own tip.
     const sub = mvButtonRow.querySelector('.bmv-row-sub');
     if (sub) sub.textContent = `显示在播放栏上方；关闭后可用 ${keyLabel(config.keys.toggle)} 打开`;
@@ -1365,6 +1550,8 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     document.addEventListener('pointerdown', away, true);
     stopRecording = stop;
   };
+  into = keysPage.root;
+  current = keysPage;
   const keysSec = section('快捷键', (() => { const x = el('div'); x.append(resetKeys); return x; })());
   keysSec.append(keysNote);
   const keyGroup = group(keysSec);
@@ -1386,6 +1573,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   const allOn = link('全部开启', () => { off.clear(); refresh(); });
   const aside = el('div');
   aside.append(count, allOn);
+  page('scenes', '场景', () => `已开启 ${SCENES.length - config.off.length} / ${SCENES.length}`);
   const scenes = section('场景', aside, '点击选择开启或关闭，再点击底部的“应用”生效；鼠标悬停可查看说明。关闭的场景由同一段落的其他场景替代。');
   const paints: Array<() => void> = [];
   let warnTimer = 0;
@@ -1413,6 +1601,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     plugin.setConfig('offScenes', config.off.join(','));
     plugin.setConfig('offLooks', config.offLooks.join(','));
     onChange(config);
+    sync();
     // Said done for a moment before the bar goes.
     refresh();
     applyBar.classList.add('is-on', 'is-done');
@@ -1517,6 +1706,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   }
 
   // Looks: each one on or off, like the scenes (applied with them).
+  page('looks', '画风', () => `已开启 ${LOOKS.length - config.offLooks.length} / ${LOOKS.length}`);
   const looks = section('画风', undefined, '部分段落会改用另一种画风呈现，使整首歌不止一种面貌。关闭的画风不再使用。');
   const lookCard = (info: typeof LOOKS[number], b: HTMLElement) => showSketch(info, `look-${info.id}`, info.styles, offLooks.has(info.id), b);
   group(looks).append(tiles(LOOKS, info => `look-${info.id}`, info => offLooks.has(info.id), (info, b) => {
@@ -1526,8 +1716,238 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   }, lookCard));
   refresh();
 
-  // Last, so it can stay in sight at the bottom while the page scrolls.
-  view.append(applyBar);
+  /** Opens a section (from 开始使用's scene strip, the sidebar, the MV page's home). */
+  let go: (id: PageId) => void = () => {};
+  /** What 开始使用 checks each time it is shown. */
+  let checkStatus = () => {};
+  const caps = (combo: string) => {
+    const k = el('span', 'bmv-kbds');
+    for (const c of keyCaps(combo)) k.append(el('span', 'bmv-kbd', c));
+    return k;
+  };
+  const shown = (root: HTMLElement) => play(root, [{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' });
+  const ORDER: PageId[] = ['start', 'picture', 'perf', 'lyrics', 'scenes', 'looks', 'keys', 'update'];
+  const inOrder = (a: Page, b: Page) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id);
+
+  if (!compact) {
+    // 开始使用: how to open the MV, whether everything it needs works, the two most-used settings, the scenes.
+    const start = page('start', '开始使用');
+    pages.unshift(pages.pop()!);
+    start.root.append(el('div', 'bmv-pg-lead', '为正在播放的歌曲实时生成 3D MV：以封面构建场景，按歌曲结构剪辑镜头，按曲风自动选择风格。'));
+    const cols = el('div', 'bmv-cols');
+    const colA = el('div', 'bmv-col'), colB = el('div', 'bmv-col');
+    cols.append(colA, colB);
+    start.root.append(cols);
+
+    into = colA;
+    const open = group(section('打开 MV', undefined, '先在网易云中播放一首歌。首次打开一首歌时会先分析整首歌曲，约需数秒。'));
+    // The button as it looks above NetEase's play bar.
+    const sample = el('span', 'bmv-mvbtn-sample');
+    sample.innerHTML = `${icon('play', 11)}<span>MV</span>`;
+    const buttonRow = row(open, '点击播放栏上方的按钮', sample, ' ');
+    const buttonSub = buttonRow.querySelector('.bmv-row-sub') as HTMLElement;
+    const keyHost = el('div', 'bmv-row-c');
+    const exitHost = el('div', 'bmv-row-c');
+    keyHost.style.margin = exitHost.style.margin = '0';
+    row(open, '或按快捷键', keyHost, '任何页面都可用');
+    row(open, '退出 MV 页', exitHost, '音乐继续播放');
+    synced.push(() => {
+      sample.style.display = config.button ? '' : 'none';
+      buttonSub.textContent = config.button ? '' : '按钮已关闭，可在“界面与快捷键”中开启';
+      buttonSub.style.display = config.button ? 'none' : '';
+      keyHost.replaceChildren(caps(config.keys.toggle));
+      exitHost.replaceChildren(caps(config.keys.exit));
+    });
+
+    into = colB;
+    const running = group(section('运行状态'));
+    const cache = statusRow(running, '歌曲缓存');
+    const gpuRow = statusRow(running, '显卡');
+    const packRow = statusRow(running, '逐字对齐包');
+    packInto(packRow.ctl, false, packRow.set);
+    const ver = statusRow(running, '版本');
+    updateInto(ver.r, ver.ctl, ver.sub, ver.set);
+    checkStatus = () => {
+      if (updateState.kind === 'idle' && config.autoUpdate) void checkUpdate(true);
+      const g = gpuInfo();
+      gpuRow.set(g.webgl2 ? 'ok' : 'warn', g.webgl2 ? (g.name ? `WebGL 2 可用：${g.name}` : 'WebGL 2 可用') : '不支持 WebGL 2，无法生成画面；请更新显卡驱动');
+      if (!status.cacheDir) { cache.set('off', '在网易云中查看'); return; }
+      void status.cacheDir().then(dir => {
+        if (dir === undefined) cache.set('off', '网易云尚未就绪，稍后再查看');
+        else if (dir) cache.set('ok', dir.replace(/\//g, '\\'));
+        else cache.set('warn', '未找到缓存目录：将改为在线获取整首歌，需登录网易云账号');
+      }, () => cache.set('warn', '无法读取缓存目录：将改为在线获取整首歌'));
+    };
+    cache.set('off', '正在查找…');
+    gpuRow.set('off', '正在检查…');
+
+    into = colA;
+    const strip = group(section('场景与画风'));
+    const shots = el('button', 'bmv-strip');
+    shots.title = '管理场景';
+    shots.onclick = () => go('scenes');
+    for (const id of ['drive', 'city', 'channel', 'canvas'] as SceneId[]) {
+      const f = el('span', 'bmv-strip-img');
+      const img = el('img');
+      img.alt = '';
+      img.decoding = 'async';
+      img.onload = () => img.classList.add('is-ready');
+      void preview(id).then(url => { if (url) img.src = url; });
+      f.append(img);
+      shots.append(f);
+    }
+    const foot = el('div', 'bmv-strip-foot');
+    const told = el('span');
+    foot.append(told, link('管理场景', () => go('scenes')));
+    strip.append(shots, foot);
+    synced.push(() => {
+      told.textContent = `场景 ${SCENES.length - config.off.length} / ${SCENES.length}，画风 ${LOOKS.length - config.offLooks.length} / ${LOOKS.length}`;
+    });
+
+    // The sidebar: the app, then the sections; one shows at a time beside it, in a column that scrolls on its own.
+    pages.sort(inOrder);
+    const side = el('div', 'bmv-side');
+    const app = el('div', 'bmv-side-app');
+    const mark = el('div', 'bmv-appicon');
+    mark.innerHTML = appIcon(36);
+    const names = el('div');
+    names.append(el('div', 'bmv-side-name', 'BetterMV'));
+    if (VERSION) names.append(el('div', 'bmv-side-ver', VERSION));
+    app.append(mark, names);
+    const list = el('div', 'bmv-side-list');
+    // Narrow, when the row of sections runs past its end: its edge fades, and a dot at the end stands for one out of
+    // sight that has news (the update).
+    const flag = el('span', 'bmv-nav-dot bmv-side-flag');
+    side.append(app, list, flag);
+    const edges = () => {
+      const narrow = view.classList.contains('is-narrow');
+      const end = list.scrollLeft + list.clientWidth;
+      list.classList.toggle('has-more', narrow && end < list.scrollWidth - 2);
+      let hidden = false;
+      items.forEach((b, k) => {
+        const p = pages.find(x => x.id === k);
+        if (narrow && p?.dot?.() && b.offsetLeft + b.offsetWidth / 2 > end) hidden = true; // (most of it out of sight)
+      });
+      flag.style.display = hidden ? 'block' : 'none';
+    };
+    list.addEventListener('scroll', edges, { passive: true });
+    synced.push(() => edges());
+    const items = new Map<PageId, HTMLButtonElement>();
+    for (const p of pages) {
+      const b = el('button', 'bmv-side-item');
+      const dot = el('span', 'bmv-nav-dot');
+      b.append(el('span', 'bmv-side-label', p.title), dot);
+      b.onclick = () => go(p.id);
+      synced.push(() => { dot.style.display = p.dot?.() ? '' : 'none'; });
+      items.set(p.id, b);
+      list.append(b);
+    }
+    const main = el('div', 'bmv-main bmv-scroll');
+    for (const p of pages) main.append(p.root);
+    main.append(applyBar);
+    view.append(side, main);
+    go = id => {
+      for (const p of pages) p.root.classList.toggle('is-current', p.id === id);
+      items.forEach((b, k) => b.setAttribute('aria-current', k === id ? 'page' : 'false'));
+      // Narrow, the sections are a row that scrolls sideways: the current one in sight.
+      if (view.classList.contains('is-narrow')) items.get(id)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      main.scrollTop = 0;
+      hideSketch();
+      if (id === 'start') checkStatus();
+      const p = pages.find(x => x.id === id);
+      if (p) shown(p.root);
+    };
+    go('start');
+
+    // The host's theme is known once the page is in it, and followed while it is (NetEase's theme can change). The
+    // page fills the height BetterNCM's panel shows (its container scrolls; only the section column scrolls here), and
+    // narrow, the sidebar becomes a row above the section.
+    view.dataset.theme = 'light';
+    const fit = () => {
+      view.classList.toggle('is-narrow', view.clientWidth < 620);
+      edges();
+      const host = view.parentElement;
+      if (!host) return;
+      const cs = getComputedStyle(host);
+      const room = host.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+      const h = /(auto|scroll)/.test(cs.overflowY) && room > 0 ? Math.max(320, Math.floor(room)) + 'px' : '';
+      if (view.style.height !== h) view.style.height = h;
+    };
+    let tries = 0, seen = false;
+    const look = () => {
+      if (view.isConnected) {
+        // Each time BetterNCM shows the page again, 开始使用 looks again.
+        if (!seen) checkStatus();
+        seen = true;
+        const theme = hostIsDark(view) ? 'dark' : 'light';
+        if (view.dataset.theme !== theme) view.dataset.theme = theme;
+        fit();
+        window.setTimeout(look, 1000);
+      } else {
+        seen = false;
+        if (tries++ < 240) requestAnimationFrame(look); else { tries = 0; window.setTimeout(look, 1000); }
+      }
+    };
+    requestAnimationFrame(look);
+  } else {
+    // The MV page's panel: a home of what is tuned while watching, then a row for each section, opened in its place.
+    const home = el('div', 'bmv-pg is-current');
+    home.dataset.page = 'home';
+    into = home;
+    current = null;
+    if (song || actions.reroll) {
+      const now = group(section('当前歌曲'));
+      if (actions.reroll) rerollRow(now);
+      if (song) lyricDelayRow(now, song, true);
+    }
+    const common = group(section('常用'));
+    styleRow(common, true);
+    latencyRow(common, true);
+    qualityRow(common);
+    const all = group(section('全部设置'));
+    pages.sort(inOrder);
+    for (const p of pages) {
+      const r = el('button', 'bmv-row is-nav');
+      const value = el('span', 'bmv-nav-value');
+      const dot = el('span', 'bmv-nav-dot');
+      const chevron = el('span', 'bmv-nav-chevron');
+      chevron.innerHTML = icon('chevronRight', 14, 2);
+      r.append(el('span', 'bmv-row-label', p.title), value, dot, chevron);
+      r.onclick = () => { from = r; go(p.id); };
+      synced.push(() => {
+        value.textContent = p.value?.() ?? '';
+        dot.style.display = p.dot?.() ? '' : 'none';
+      });
+      all.append(r);
+    }
+    view.append(home);
+    for (const p of pages) view.append(p.root);
+    view.append(applyBar);
+    const top = () => (view.parentElement as HTMLElement | null)?.scrollTo(0, 0);
+    /** The row a section was opened from: focus returns to it. */
+    let from: HTMLElement | null = null;
+    const back = () => {
+      for (const p of pages) p.root.classList.remove('is-current');
+      home.classList.add('is-current');
+      hideSketch();
+      top();
+      shown(home);
+      view.dispatchEvent(new CustomEvent('bmv-nav', { detail: { title: null } }));
+      from?.focus({ preventScroll: true });
+    };
+    go = id => {
+      const p = pages.find(x => x.id === id);
+      if (!p) return;
+      home.classList.remove('is-current');
+      for (const x of pages) x.root.classList.toggle('is-current', x === p);
+      hideSketch();
+      top();
+      shown(p.root);
+      view.dispatchEvent(new CustomEvent('bmv-nav', { detail: { title: p.title, back } }));
+    };
+  }
+  sync();
+
   // The sketches load in the background while the page is read.
   for (const s of SCENES) void preview(s.id);
   for (const l of LOOKS) void preview(`look-${l.id}`);
