@@ -44,6 +44,7 @@ const CSS = `
 .bmv-obs-more{margin-top:14px}
 .bmv-obs-steps{margin:10px 0 0;padding:0 4px 0 22px;list-style:decimal outside;font-size:12px;line-height:1.7;color:var(--t2)}
 .bmv-obs-steps>li{display:list-item}
+.bmv-obs-note{margin:6px 0 0;padding:0 4px;font-size:12px;line-height:1.7;color:var(--t2)}
 `;
 let styled = false;
 
@@ -168,7 +169,8 @@ export function obsSettings(kit: SettingsKit, config: Config, onChange: (c: Conf
     '把地址拖到 OBS 的预览区并确认。',
     '声音由 OBS 的“桌面音频”采集。',
   ]) steps.append(el('li', '', s));
-  sec.append(steps);
+  // (OBS opened first finds no server and doesn't try again: the user refreshes it once. docs/OBS.md, 已知限制.)
+  sec.append(steps, el('div', 'bmv-obs-note', 'OBS 先于网易云打开时，画面不会自动出现，需在 OBS 中右键该来源，选择“刷新”。'));
 
   function paint(): void {
     onSwitch.setAttribute('aria-checked', String(config.obs));
