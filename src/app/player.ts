@@ -98,6 +98,8 @@ export class MvPlayer {
    */
   seed = 0;
   private seedFor = -1;
+  /** Whether the last frame drew a transition (both plates). */
+  transitioning = false;
 
   constructor(container: HTMLElement, pixelRatio?: number) {
     this.engine = new Engine(container, pixelRatio);
@@ -214,6 +216,7 @@ export class MvPlayer {
     if (!this.director) return null;
     this.director.overlay.showBadge = this.hud.visible;
     const { scene, fx, shot, transition } = this.director.frame(t, dt, this.engine.aspect);
+    this.transitioning = transition !== null;
     for (const s of Object.values(this.scenes)) s?.keepUp?.(t, this.engine.renderer);
     this.engine.render(scene.scene, scene.camera, fx, t, transition, this.director.overlay);
     const info = this.music!.at(t);

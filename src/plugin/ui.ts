@@ -16,7 +16,8 @@ import { obsSettings } from './obsSettings.ts';
 
 export interface Config {
   style: 'auto' | StyleId;
-  quality: 'high' | 'mid' | 'low';
+  /** auto: 高, with fewer pixels while the GPU can't keep up (src/app/governor.ts). */
+  quality: 'auto' | 'high' | 'mid' | 'low';
   /** Shifts the picture against the sound (positive = later), for Bluetooth or other laggy outputs. */
   latencyMs: number;
   button: boolean;
@@ -80,7 +81,7 @@ export const isRecordingKeys = () => recordingKeys;
 export function loadConfig(): Config {
   return {
     style: plugin.getConfig('style', 'auto' as Config['style']),
-    quality: plugin.getConfig('quality', 'high' as Config['quality']),
+    quality: plugin.getConfig('quality', 'auto' as Config['quality']),
     latencyMs: Number(plugin.getConfig('latencyMs', 0)) || 0,
     button: plugin.getConfig<boolean>('button', true) as unknown !== false,
     controls: plugin.getConfig<boolean>('controls', true) as unknown !== false,
@@ -107,7 +108,7 @@ export function loadConfig(): Config {
 }
 
 export const pixelRatio = (q: Config['quality']) =>
-  q === 'high' ? Math.min(window.devicePixelRatio || 1, 2) : q === 'mid' ? 1 : 0.7;
+  q === 'high' || q === 'auto' ? Math.min(window.devicePixelRatio || 1, 2) : q === 'mid' ? 1 : 0.7;
 
 /** NetEase's play modes, in the order its own button steps through them (心动模式 and 私人 FM are entered elsewhere). */
 const MODES: Record<PlayMode, { icon: IconName; name: string }> = {
@@ -1322,7 +1323,8 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   const latencyRow = (host: HTMLElement, brief = false) => row(host, '画面延迟', msStepper(() => config.latencyMs, ms => { config.latencyMs = ms; plugin.setConfig('latencyMs', ms); onChange(config); },
     LATENCY_MIN, LATENCY_MAX, 10, '画面提前 10 ms', '画面推后 10 ms'), brief ? '画面早于声音时调大' : undefined,
   brief ? undefined : '画面早于声音时调大，蓝牙耳机通常需 +150～250 ms');
-  const qualityRow = (host: HTMLElement) => row(host, '画质', segmented('quality', [['high', '高'], ['mid', '中'], ['low', '低']]), '画面卡顿时调低');
+  const qualityRow = (host: HTMLElement, brief = false) => row(host, '画质', segmented('quality', [['auto', '自动'], ['high', '高'], ['mid', '中'], ['low', '低']]), '画面卡顿时调低',
+    brief ? undefined : '“自动”在显卡吃力时降低清晰度，最低为一半像素');
   // On the MV page: the playing song arranged anew, at once.
   const rerollRow = (host: HTMLElement) => {
     const again = button('换一种', () => {
@@ -1342,7 +1344,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     }, -3000, 3000, 50, '歌词提前 50 ms', '歌词推后 50 ms'), brief ? '仅对这首歌生效' : undefined,
     brief ? undefined : `仅对“${s.name}”生效，歌词晚于演唱时调小`);
   };
-  const QUALITY_NAME: Record<Config['quality'], string> = { high: '高', mid: '中', low: '低' };
+  const QUALITY_NAME: Record<Config['quality'], string> = { auto: '自动', high: '高', mid: '中', low: '低' };
 
   page('picture', '画面', () => (config.style === 'auto' ? '自动' : STYLES[config.style].name));
   const picture = group(section('画面'));
@@ -1941,7 +1943,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     const common = group(section('常用'));
     styleRow(common, true);
     latencyRow(common, true);
-    qualityRow(common);
+    qualityRow(common, true);
     const all = group(section('全部设置'));
     pages.sort(inOrder);
     for (const p of pages) {

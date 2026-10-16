@@ -84,6 +84,9 @@ function poll(): void {
 /** Wraps the plugin's player once: its frame (timing, the cap), the renderer's draws and the post passes (labels). */
 function install(): void {
   if (installed) return;
+  // (The plugin's 画质 自动 rests from here on: its timer query can't nest with these, and the runs set the resolution
+  // themselves; the suites that watch the plugin play by itself see it as 高.)
+  if ('governed' in mv()) (mv() as any).governed = false;
   const player = mv().player;
   const engine = player.engine, renderer = engine.renderer;
   gl = renderer.getContext();

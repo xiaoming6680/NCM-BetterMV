@@ -3,6 +3,7 @@
 import { loadFonts } from '../render/text.ts';
 import { prepareSong, styleFor, Cancelled, whenIdle, yieldToPage, type PreparedSong, type Stage } from '../app/prepare.ts';
 import { MvPlayer } from '../app/player.ts';
+import { Governor, ladder } from '../app/governor.ts';
 import {
   findClient, isMaximized, nextSong, liked, listTrack, minimizeWindow, playingIndex, playingSong, playItem, playList, playMode, seek, setPlayMode,
   setVolume, skip, toggleLike, toggleMaximize, togglePlay, volume, type Client, type PlayingSong,
@@ -15,7 +16,7 @@ import { isRecordingKeys, keyCombo, loadConfig, mvButton, Overlay, pixelRatio, s
 import { obs, obsKey } from './obs.ts';
 import { OBS_VERSION, type ObsPlan, type ObsState } from '../obs/snapshot.ts';
 import type { SectionLabel } from '../types.ts';
-import type { SceneId } from '../scenes/types.ts';
+import type { SceneId, Shot } from '../scenes/types.ts';
 import type { LookId } from '../director/director.ts';
 
 const KEY = '__betterMv';
@@ -81,6 +82,13 @@ function start(client: Client): void {
   let last = 0;
   /** With a frame cap: when the next picture is due (the schedule the cap keeps). */
   let due = 0;
+  /**
+   * 画质 自动: the player's governor (on its GL context) and the shot last drawn (the step changes at a cut). tools/bench
+   * turns it off (`governed`): its own GPU timing can't nest inside this one, and it sets the resolution itself.
+   */
+  let governor: Governor | null = null;
+  let governed = true;
+  let onScreen: Shot | null = null;
   /** NetEase's play list as the list panel shows it: its entries (to play one), their names, the playing one. */
   const queue = { list: [] as readonly any[], tracks: [] as QueueTrack[], at: -2 };
 
@@ -241,16 +249,38 @@ function start(client: Client): void {
     const cap = config.fpsCap, period = cap ? 1000 / cap : 0;
     if (!resting && (!cap || !last || now >= due - 1)) {
       if (cap) due = (now - due > period ? now : due) + period;
+      // (After a gap — the window hidden, the page held up — the frames before it say nothing about the next ones.)
+      if (last && now - last > 250) governor?.reset();
       const dt = last ? Math.min(0.1, (now - last) / 1000) : 1 / 60;
       last = now;
       // Only draw the song the MV was made for; while NetEase switches songs the last frame stays.
-      if (player.song && (clock.songId === player.song.id || !clock.playId)) player.frame(clock.now(), dt);
+      if (player.song && (clock.songId === player.song.id || !clock.playId)) {
+        const gov = config.quality === 'auto' && governed ? governor : null;
+        gov?.begin();
+        const shot = player.frame(clock.now(), dt);
+        if (gov) govern(gov, player, shot, now);
+        onScreen = shot;
+      }
     }
     overlay.progress(clock.time(), duration(), isPlaying());
     overlay.volume(volume(client.store));
     overlay.playState(liked(client.store), playMode(client.store));
     player.hud.visible = !(overlay.awake && overlay.showControls);
     raf = requestAnimationFrame(loop);
+  }
+
+  /**
+   * 画质 自动, after a frame: its GPU time noted (not under a transition, which draws two plates), and at a cut the step
+   * the frames call for. Not at the cuts inside a run, whose camera move carries on across them.
+   */
+  function govern(gov: Governor, p: MvPlayer, shot: Shot | null, now: number): void {
+    gov.end(now, !p.transitioning);
+    if (!shot || shot === onScreen || (shot.run && shot.run.start < shot.start)) return;
+    const step = gov.wanted(1000 / Math.min(config.fpsCap || 60, 60), now);
+    if (step === gov.step) return;
+    gov.go(step, now);
+    p.engine.setPixelRatio(gov.pixelRatio);
+    p.resize();
   }
 
   /**
@@ -401,6 +431,7 @@ function start(client: Client): void {
     }
     if (!player) {
       const p = player = new MvPlayer(overlay.stage, pixelRatio(config.quality));
+      governor = new Governor(p.engine.renderer.getContext() as WebGL2RenderingContext, ladder(pixelRatio('high')));
       p.resize();
       // Lost while playing: the song comes off it, and the waiting view offers to make the picture again.
       p.engine.renderer.domElement.addEventListener('webglcontextlost', () => {
@@ -422,6 +453,7 @@ function start(client: Client): void {
     await fonts;
     livePlayer().resize();
     last = due = 0;
+    governor?.reset();
     if (!raf) raf = requestAnimationFrame(loop);
     await prepareCurrent();
   }
@@ -483,7 +515,9 @@ function start(client: Client): void {
     overlay.setKeys(c.keys);
     if (c.button && !button) button = mvButton(() => open());
     if (!c.button && button) { button.remove(); button = null; }
-    const pr = pixelRatio(c.quality);
+    // (Out of 自动, the governor starts again from the top the next time it's chosen.)
+    if (c.quality !== 'auto' && governor) { governor.step = 0; governor.reset(); }
+    const pr = c.quality === 'auto' && governor ? governor.pixelRatio : pixelRatio(c.quality);
     if (player && pr !== player.engine.renderer.getPixelRatio()) { player.engine.setPixelRatio(pr); player.resize(); }
     if (!c.prefetch && ahead) { ahead.job.cancelled = true; ahead = null; }
     prefetchNext();
@@ -498,7 +532,10 @@ function start(client: Client): void {
     }, 350);
   });
 
-  (window as any)[KEY] = { open, close, clock, obs, client, get player() { return player; } };
+  (window as any)[KEY] = {
+    open, close, clock, obs, client, get player() { return player; },
+    get governor() { return governor; }, get governed() { return governed; }, set governed(on: boolean) { governed = on; },
+  };
 }
 
 plugin.onLoad(() => {
