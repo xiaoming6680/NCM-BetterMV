@@ -1,13 +1,15 @@
 // The GPU half of the bench without NetEase: the dev harness in headless Edge (ANGLE D3D11, as in the client), each
 // plate drawn frame by frame and timed on the GPU (tools/bench/inpage.ts drive). Frame pacing and the page's own
-// thread are not measured here (headless Edge throttles animation frames): those need the client (tools/bench/run.ts).
+// thread are not measured here (headless Edge throttles animation frames): those need the client (tools/bench/run.ts)
+// — except for what holds the page's thread up while a song is switched to (switch).
 // Starts its own frozen dev server on port 5195 and stops it at the end.
 //   bunx vite build --config tools/bench/vite.config.ts
 //   bun tools/bench/headless.ts <suite> [--id 1332041346] [--at 41] [--frames 240] [--size 1209x784@1.5] [--root <copy>]
 // Suites: scenes, passes, styles, res (GPU time per plate / pass / style / pixel ratio); stills (PNG frames for an A/B,
 // --plan <style> for a style's own plan, then tools/bench/diff.py); spikes (the slowest frames of a minute of each
 // style, and programs compiled during play); profile (CPU profile of a stretch); programs (D3D compiler warnings);
-// soak, resize, long, leaks, recheck (what reloading, resizing and long play leave behind).
+// soak, resize, long, leaks, recheck (what reloading, resizing and long play leave behind); switch (long tasks while
+// other songs are prepared and put on as the plugin does it, --songs a,b, --cpu for where their time went).
 import fs from 'node:fs';
 import path from 'node:path';
 import { createServer } from 'vite';
@@ -28,6 +30,56 @@ const out = path.resolve(root, opt('out', `dev/bench/headless-${suite}.json`));
 const PORT = 5195;
 // (--root: serve another checkout of the project, e.g. an export of HEAD for an A/B; the bench itself stays this one's.)
 const site = path.resolve(opt('root', root));
+
+/**
+ * In the dev page (suite switch): song `id` read from the NetEase cache, prepared at full speed and put on the player
+ * as the plugin does when the song changes, then a second of the MV. Its frames are drawn when the plugin's loop
+ * would: from the load on (it only skips a song NetEase is still switching to), or, in a version with loadInSlices,
+ * once it is warmed. Marks in ms from when its files were read.
+ */
+async function switchTo(id: string) {
+  const load = (p: string) => import(p);
+  const [P, W, S] = await Promise.all([load('/src/app/prepare.ts'), load('/src/meta/wiki.ts'), load('/src/plugin/source.ts')]);
+  const player = (window as any).bmv.player;
+  let drawing = false;
+  const own = Object.getPrototypeOf(player).frame;
+  player.frame = (t: number, dt: number) => (drawing ? own.call(player, t, dt) : null);
+  const long: number[][] = [], ticks: number[] = [];
+  const po = new PerformanceObserver(l => { for (const e of l.getEntries()) long.push([e.startTime, e.duration]); });
+  po.observe({ type: 'longtask' });
+  let on = true;
+  const tick = () => { ticks.push(performance.now()); if (on) requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+  // (A busy stretch the CPU profile is lined up by.)
+  function bmvClockMarker() { const t = performance.now(); while (performance.now() - t < 6) { /* spin */ } return t; }
+  const marker = bmvClockMarker();
+  const json = (url: string) => fetch(url).then(r => r.json()).catch(() => null);
+  const image = (url: string) => new Promise<HTMLImageElement>((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = url; });
+  const [detail, wiki, chorus, lyric, audio, cover] = await Promise.all([
+    json(`/ncm/detail/${id}`), json(`/ncm/wiki/${id}`), json(`/ncm/chorus/${id}`), json(`/ncm/lyric/${id}`),
+    fetch(`/ncm/audio/${id}`).then(r => r.arrayBuffer()), image(`/ncm/cover/${id}`),
+  ]);
+  const t0 = performance.now(), marks: Record<string, number> = {};
+  const song = await P.prepareSong(
+    { id: Number(id), name: detail?.name, artists: detail?.artists, audio, lyric, wiki: wiki ? W.parseWiki(wiki) : undefined, chorus: S.parseChorus(chorus, Number(id)), cover },
+    { pause: P.yieldToPage },
+  );
+  marks.prepared = performance.now() - t0;
+  const style = P.styleFor(song, 'auto'), sliced = typeof player.loadInSlices === 'function';
+  if (sliced) await player.loadInSlices(P.yieldToPage, () => false, song, style, new Set(), 0, 7);
+  else player.load(song, style, new Set(), undefined, undefined, 0, 7);
+  marks.built = performance.now() - t0;
+  drawing = !sliced;
+  await player.warm(P.yieldToPage);
+  marks.warmed = performance.now() - t0;
+  drawing = true;
+  await new Promise(r => setTimeout(r, 1000));
+  on = false;
+  po.disconnect();
+  delete player.frame;
+  const gaps = ticks.slice(1).map((t, i) => [ticks[i] - t0, t - ticks[i]]).filter(([, g]) => g > 50);
+  return { name: detail?.name ?? id, style: style.id, plates: Object.keys(player.scenes).length, t0, marker, marks, long: long.filter(([a]) => a >= t0), gaps };
+}
 
 const server = await createServer({ root: site, configFile: path.join(site, 'vite.frozen.config.ts'), server: { port: PORT, strictPort: true }, logLevel: 'warn' });
 await server.listen();
@@ -217,6 +269,48 @@ try {
       const urls: string[] = await page.evaluate((o: any) => (window as any).__bmvBench.capture(o), o);
       urls.forEach((u, i) => fs.writeFileSync(path.join(dir, `${plan ? plan : scene}-${ts[i]}.png`), Buffer.from(u.split(',')[1], 'base64')));
       console.log(scene, urls.length);
+    }
+  } else if (suite === 'switch') {
+    // Switching songs the plugin's way, into other songs of the NetEase cache (--songs a,b; else the first three):
+    // prepareSong at full speed, the plates built (loadInSlices where the code has it), warmed, the new song's frames
+    // drawn when the plugin's loop would draw them. The page's long tasks and animation-frame gaps per switch; --cpu
+    // adds what the longest tasks spent their time on (a CPU profile cut to each).
+    const cpu = argv.includes('--cpu');
+    const cdp = await page.context().newCDPSession(page);
+    if (cpu) { await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', { interval: 250 }); }
+    const list: string[] = await page.evaluate(() => fetch('/ncm/list').then(r => r.json()));
+    const songs = opt('songs', '').split(',').filter(Boolean);
+    for (const id of songs.length ? songs : list.filter(x => x !== ID).slice(0, 3)) {
+      if (cpu) await cdp.send('Profiler.start');
+      const r = await page.evaluate(switchTo, id);
+      const ms = (k: string) => Math.round(r.marks[k]);
+      console.log(`${r.name} (${id}) ${r.style}, ${r.plates} plates: prepared ${ms('prepared')}  built ${ms('built')}  warmed ${ms('warmed')} ms after reading`);
+      console.log(`  longest frame gap ${Math.round(Math.max(0, ...r.gaps.map((g: number[]) => g[1])))} ms; long tasks ${r.long.map(([a, d]: number[]) => `${Math.round(d)}@${Math.round(a - r.t0)}`).join(' ') || 'none'}`);
+      results.push({ id, ...r });
+      report();
+      if (!cpu) continue;
+      const { profile } = await cdp.send('Profiler.stop');
+      // (Sample times, on the profiler's clock, lined up with the page's by the marker's samples.)
+      const byId = new Map<number, any>(profile.nodes.map((n: any) => [n.id, n]));
+      const parent = new Map<number, number>();
+      for (const n of profile.nodes) for (const c of n.children ?? []) parent.set(c, n.id);
+      const stack = (id: number) => { const s: any[] = []; for (let p: number | undefined = id; p; p = parent.get(p)) s.push(byId.get(p).callFrame); return s; };
+      const times: number[] = [];
+      let t = profile.startTime;
+      for (const d of profile.timeDeltas) times.push((t += d) / 1000);
+      const at = profile.samples.findIndex((s: number) => stack(s).some((f: any) => f.functionName === 'bmvClockMarker'));
+      if (at < 0) { console.log('  (no marker in the profile)'); continue; }
+      const offset = times[at] - r.marker;
+      const where = (f: any) => `${f.functionName || '(anon)'} ${String(f.url).replace(/^.*\/src\//, 'src/').replace(/^.*\/deps\/.*$/, 'three').replace(/\?.*$/, '')}:${f.lineNumber + 1}`;
+      for (const [a, d] of [...r.long].sort((x: number[], y: number[]) => y[1] - x[1]).slice(0, 3)) {
+        const incl = new Map<string, number>();
+        profile.samples.forEach((s: number, i: number) => {
+          if (times[i] - offset < a || times[i] - offset > a + d) return;
+          for (const k of new Set(stack(s).map(where))) incl.set(k, (incl.get(k) ?? 0) + (profile.timeDeltas[i + 1] ?? 250) / 1000);
+        });
+        console.log(`  ${Math.round(d)} ms @${Math.round(a - r.t0)}:`);
+        for (const [k, v] of [...incl].filter(([k]) => !/^\((root|program)\)/.test(k)).sort((x, y) => y[1] - x[1]).slice(0, 12)) console.log(`    ${v.toFixed(1).padStart(6)} ${k}`);
+      }
     }
   } else throw new Error(`unknown suite ${suite}`);
   console.log(`→ ${path.relative(root, out)}`);
