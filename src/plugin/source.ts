@@ -44,21 +44,36 @@ export function loadCover(url: string): Promise<HTMLImageElement> {
   });
 }
 
-let cacheRoot: string | null | undefined;
+let cacheRoot: string | undefined;
 
-async function songCacheDir(client: Client): Promise<string | null> {
-  if (cacheRoot !== undefined) return cacheRoot;
-  const candidates: string[] = [];
-  if (client.storage?.cacheDir) candidates.push(client.storage.cacheDir.replace(/[\\/]+$/, '') + '/Cache');
-  try {
-    for (const entry of await betterncm.fs.readDir('C:/Users')) {
-      candidates.push(`C:/Users/${String(entry).split(/[\\/]/).pop()}/AppData/Local/NetEase/CloudMusic/Cache/Cache`);
-    }
-  } catch { /* no access */ }
-  for (const dir of candidates) {
-    try { if (await betterncm.fs.exists(dir)) return (cacheRoot = dir); } catch { /* next */ }
+/**
+ * Where the client caches songs: the Cache folder inside its 缓存目录 setting (设置 → 下载设置), as the client
+ * itself applied it at startup (Storage.cacheDir), else as stored in its settings. Recorded in the BetterNCM data
+ * folder (BetterMV\ncm-cache.json) so the dev tools outside the client follow the same setting.
+ */
+export async function songCacheDir(client: Client): Promise<string | null> {
+  if (cacheRoot) return cacheRoot;
+  const settings = [client.storage?.cacheDir, client.store.getState()?.setting?.cacheDir];
+  for (const base of settings) {
+    if (typeof base !== 'string' || !base) continue;
+    const dir = base.replace(/[\\/]+$/, '') + '/Cache';
+    try { if (!await betterncm.fs.exists(dir)) continue; } catch { continue; }
+    cacheRoot = dir;
+    void recordCacheDir(dir);
+    return dir;
   }
-  return (cacheRoot = null);
+  return null;
+}
+
+async function recordCacheDir(dir: string): Promise<void> {
+  try {
+    const folder = (await betterncm.app.getDataPath()).replace(/[\\/]+$/, '') + '\\BetterMV';
+    const file = folder + '\\ncm-cache.json';
+    const text = JSON.stringify({ songs: dir.replace(/\//g, '\\') });
+    if (await betterncm.fs.exists(file) && await betterncm.fs.readFileText(file) === text) return;
+    if (!await betterncm.fs.exists(folder)) await betterncm.fs.mkdir(folder);
+    await betterncm.fs.writeFileText(file, text);
+  } catch { /* the dev tools fall back to the default folder */ }
 }
 
 /** The client's complete cached copy of a song, decrypted (XOR 0xA3); null while it is still downloading. */

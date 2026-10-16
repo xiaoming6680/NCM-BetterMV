@@ -8,7 +8,7 @@ import {
   setVolume, skip, toggleLike, toggleMaximize, togglePlay, volume, type Client, type PlayingSong,
 } from './client.ts';
 import { ProgressClock } from './clock.ts';
-import { fetchChorus, fetchLyric, fetchWiki, getAudio, loadCover } from './source.ts';
+import { fetchChorus, fetchLyric, fetchWiki, getAudio, loadCover, songCacheDir } from './source.ts';
 import { alignSong, applyAlignment, cachedAlignment, checkPack, needsAlignment } from './aligner.ts';
 import { isRecordingKeys, keyCombo, loadConfig, mvButton, Overlay, pixelRatio, settingsView, type BarSection, type Config, type QueueTrack } from './ui.ts';
 import type { SectionLabel } from '../types.ts';
@@ -51,6 +51,7 @@ function start(client: Client): void {
   clock.offset = config.latencyMs / 1000;
   client.bridge.appendRegisterCall('PlayProgress', 'audioplayer', clock.onProgress);
   client.bridge.appendRegisterCall('PlayState', 'audioplayer', clock.onState);
+  void songCacheDir(client); // records the client's cache folder for the dev tools
 
   let player: MvPlayer | null = null;
   window.addEventListener('resize', () => player?.resize());

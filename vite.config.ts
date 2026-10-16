@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from 'vite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { ncmCacheDir } from './tools/ncm-cache.ts';
 
 // Dev harness only. Serves what the plugin will get inside NetEase: the client's cached audio of a song
 // (XOR 0xA3, read in place), its lyrics, details and cover from NetEase's public API, plus local test files.
@@ -23,7 +24,7 @@ function localFiles(prefix: string, root: string): Plugin {
   };
 }
 
-const CACHE = process.env.BMV_NCM_CACHE || path.join(process.env.LOCALAPPDATA || 'C:/Users/18961/AppData/Local', 'NetEase/CloudMusic/Cache/Cache');
+const CACHE = ncmCacheDir();
 const API = 'https://music.163.com';
 
 /** Complete cached copies: songId → file name (highest quality code wins). */

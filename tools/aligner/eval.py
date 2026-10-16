@@ -16,8 +16,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 import fa
+from ncm_cache import ncm_cache_dir
 
-CACHE = os.environ.get('BMV_NCM_CACHE') or os.path.expandvars(r'%LOCALAPPDATA%\NetEase\CloudMusic\Cache\Cache')
+CACHE = ncm_cache_dir()
 STORE = os.path.join(ROOT, 'dev', 'align-eval')
 MIN_CONF = 0.005  # src/plugin/aligner.ts
 

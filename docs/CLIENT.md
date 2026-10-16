@@ -44,7 +44,10 @@
 
 ## 整首歌的音频（分析用）
 
-- 客户端把正在播的歌完整缓存在 `%LOCALAPPDATA%\NetEase\CloudMusic\Cache\Cache\<歌曲ID>-<音质码>-<md5>.uc`，内容异或 0xA3 即原文件（实测是 FLAC）。`.idx` 是 JSON：`{"size":…, "zone":["0 size-1"]}`，zone 覆盖全长才算下载完。
+- 客户端把正在播的歌完整缓存在「缓存目录」下的 `Cache\<歌曲ID>-<音质码>-<md5>.uc`，内容异或 0xA3 即原文件（实测是 FLAC）。`.idx` 是 JSON：`{"size":…, "zone":["0 size-1"]}`，zone 覆盖全长才算下载完。
+- 缓存目录是「设置 → 下载设置 → 缓存目录」，默认 `%LOCALAPPDATA%\NetEase\CloudMusic\Cache`，所以歌默认在 `…\Cache\Cache`。客户端启动时用它调 `storage.init`，得到的路径就是 SDK 的 `Storage.cacheDir`；redux 的 `setting.cacheDir` 也是它。插件按这个顺序找，不写死路径（`src/plugin/source.ts`）。
+- 这项设置存在 `%LOCALAPPDATA%\NetEase\CloudMusic\webapp91x64\Local Storage\leveldb`，源 `orpheus://orpheus`，键 `setting`。值经原生 `EncryptData.encode` 加密（base64 套 base64 套 AES 密文），客户端外面读不了。插件找到缓存目录后，会把它记进 `<BetterNCM 数据目录>\BetterMV\ncm-cache.json`（`{"songs": "…\\Cache"}`）。开发工具（`vite.config.ts`、`tools/aligner/eval.py`，共用 `tools/ncm-cache.ts` / `tools/aligner/ncm_cache.py`）按这个顺序找：环境变量 `BMV_NCM_CACHE` → 这份记录 → 默认目录。BetterNCM 数据目录不在 `C:\betterncm` 时，设 `BETTERNCM_PROFILE`。
+- 改缓存目录（3.1.37，`orpheus.ntpk` 的 `59.chunk`）：弹窗提示「更改缓存目录将清空缓存并重启云音乐」，点确认后执行 `setting.update({cacheDir: 新, oldCacheDir: 旧})`，紧接着 `App.exitApp(restart)`。旧缓存不会搬过去，会被直接清空。2026-10-17 实测，点确认后十几秒内（启动是 00:04:29，旧 `Cache\Cache` 在 00:04:42 被清空），没等到重启就清完了，回收站里也没有。前端代码在这一步没有调 clearCache，所以应该是原生的 `exitApp(restart)` 清的。下次启动时，如果 `oldCacheDir` 非空，还会再对旧目录调一次 `Storage.clearCache({path})`，然后把 `oldCacheDir` 清空。想保留旧缓存，必须在点确认之前先把它复制出去。BetterNCM 环境下两次都没有自动重启：第一次的写入没进 leveldb，客户端照旧用旧目录；第二次写进去了。这个值的加密是按块确定性的，能比出改了哪一段，但解不出内容。
 - 实测《Clarity》：读 24 MB 用 281 ms、异或 17 ms、`OfflineAudioContext(1,1,22050).decodeAudioData` 440 ms。
 - 备选：带 cookie 请求 `https://music.163.com/api/song/enhance/player/url/v1?ids=[id]&level=standard&encodeType=mp3` 能拿到完整 128k 地址（不带 cookie 返回 404）。
 

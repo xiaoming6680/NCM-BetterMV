@@ -210,13 +210,8 @@
         const dirs = [];
         const push = d => { if (d && dirs.indexOf(d) < 0) dirs.push(d.replace(/[\\/]+$/, '')); };
         const stored = recordStorage(storage) || {};
-        for (const k of Object.keys(stored)) if (/cache/i.test(k)) push(stored[k]);
-        try {
-            for (const user of await betterncm.fs.readDir('C:/Users')) {
-                const name = String(user).split(/[\\/]/).pop();
-                push('C:/Users/' + name + '/AppData/Local/NetEase/CloudMusic/Cache/Cache');
-            }
-        } catch (e) { fail('readDir C:/Users', e); }
+        // The 缓存目录 setting (设置 → 下载设置) is the parent; songs are in its Cache folder.
+        for (const k of Object.keys(stored)) if (/cache/i.test(k) && typeof stored[k] === 'string' && stored[k]) push(stored[k].replace(/[\\/]+$/, '') + '/Cache');
         return dirs;
     }
     async function probeCache(id, storage) {
