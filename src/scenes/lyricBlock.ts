@@ -6,7 +6,7 @@
 // a path known in advance (a function of time), sees it all the while it is sung and comes up to it as it ends
 // (standAhead): the block stays where it was put, and the camera flies at it and past it as the next line comes up.
 import * as THREE from 'three';
-import { textMesh, hasCjk, type Face } from '../render/text.ts';
+import { textMesh, textPrimer, primer, hasCjk, inkPoints, type Face } from '../render/text.ts';
 import type { LyricTrack, LineState } from '../director/lyrics.ts';
 import type { Music } from '../director/music.ts';
 import type { LyricLine } from '../types.ts';
@@ -196,8 +196,9 @@ interface Dust { points: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial
 /** Where the glyph pixels of a texture are (light, not the halo): a few hundred of them, in 0..1 of its box. */
 const inkCache = new WeakMap<THREE.Texture, Float32Array>();
 function inkOf(tex: THREE.Texture): Float32Array {
-  let ink = inkCache.get(tex);
-  if (ink) return ink;
+  let ink = inkCache.get(tex) ?? inkPoints(tex);
+  if (ink) { inkCache.set(tex, ink); return ink; }
+  // (A texture textTexture didn't draw: read back.)
   const c = tex.image as HTMLCanvasElement, w = c.width, h = c.height;
   const px = c.getContext('2d')!.getImageData(0, 0, w, h).data;
   const out: number[] = [];
@@ -292,6 +293,29 @@ export class LyricBlocks {
   constructor(private palette: Palette, private music: Music | null, private opts: BlockOptions) {
     this.group.userData.lyrics = true;
     this.voice = VOICES[opts.voice];
+    // Hidden stand-ins for what is made as lines come and go (a word written in, a line's dust), so the warm-up
+    // compiles their programs before the first line (see textPrimer).
+    const word = this.dress(textPrimer());
+    if (this.voice.on === 'write') writable(word);
+    this.group.add(word);
+    if (opts.dust) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
+      geo.setAttribute('aVel', new THREE.Float32BufferAttribute([0, 0, 0], 3));
+      geo.setAttribute('aSeed', new THREE.Float32BufferAttribute([0], 1));
+      this.group.add(primer(new THREE.Points(geo, this.dustMaterial(opts.em))));
+    }
+  }
+
+  private dustMaterial(em: number): THREE.ShaderMaterial {
+    return new THREE.ShaderMaterial({
+      vertexShader: DUST_VERT, fragmentShader: DUST_FRAG, transparent: true, depthWrite: false, depthTest: !!this.opts.depthTest,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        uAge: { value: 0 }, uLife: { value: 1.5 }, uSize: { value: em * 0.085 }, uHalfH: { value: 540 },
+        uColor: { value: this.palette.paper.clone().multiplyScalar(0.8) }, uGlow: { value: this.palette.signal.clone() },
+      },
+    });
   }
 
   private get halo(): string { return this.opts.onLight ? this.palette.css.ink : 'dark'; }
@@ -427,14 +451,7 @@ export class LyricBlocks {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     geo.setAttribute('aVel', new THREE.Float32BufferAttribute(vel, 3));
     geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(seed, 1));
-    const mat = new THREE.ShaderMaterial({
-      vertexShader: DUST_VERT, fragmentShader: DUST_FRAG, transparent: true, depthWrite: false, depthTest: !!this.opts.depthTest,
-      blending: THREE.AdditiveBlending,
-      uniforms: {
-        uAge: { value: 0 }, uLife: { value: 1.5 }, uSize: { value: em * 0.085 }, uHalfH: { value: 540 },
-        uColor: { value: this.palette.paper.clone().multiplyScalar(0.8) }, uGlow: { value: this.palette.signal.clone() },
-      },
-    });
+    const mat = this.dustMaterial(em);
     const points = new THREE.Points(geo, mat);
     points.frustumCulled = false;
     points.renderOrder = 21;

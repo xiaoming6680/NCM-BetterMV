@@ -6,7 +6,7 @@
 // By default a line rides the lens. In world mode (`place`) each line is a card left in the scene where the plate
 // puts it, laid out in `frame` (world units), so the camera moves past it (src/scenes/lyricSpace.ts has the rest).
 import * as THREE from 'three';
-import { textMesh, hasCjk, VERTICAL_STEP, type Face } from '../render/text.ts';
+import { textMesh, textPrimer, hasCjk, VERTICAL_STEP, type Face } from '../render/text.ts';
 import { norm, type LyricTrack, type LineState, type WordState } from '../director/lyrics.ts';
 import { tokenize } from '../lyrics/parse.ts';
 import type { Palette } from '../render/palette.ts';
@@ -139,6 +139,8 @@ export class LyricRig {
       '#ifdef USE_MAP\n  diffuseColor *= texture2D( map, vMapUv, uBlur );\n#endif');
   };
   private built = new Map<number, Built>();
+  /** A hidden word dressed like the real ones (see textPrimer): added on the first update, once `focusable` is set. */
+  private primed = false;
   private hooks: Set<string> | null = null;
 
   /**
@@ -365,6 +367,12 @@ export class LyricRig {
   }
 
   update(camera: THREE.PerspectiveCamera, lyrics: LyricTrack, t: number, aspect: number, energy = 0.5): void {
+    if (!this.primed) {
+      this.primed = true;
+      const word = textPrimer();
+      this.dress(word);
+      this.group.add(word);
+    }
     // Ride in front of the camera (world mode: stay where the scene puts each line).
     if (this.place) { this.group.position.set(0, 0, 0); this.group.quaternion.identity(); }
     else { this.group.position.copy(camera.position); this.group.quaternion.copy(camera.quaternion); }

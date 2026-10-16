@@ -14,7 +14,7 @@
 // Drawn additive in an orthographic frame (height 2), faded out with the picture.
 import * as THREE from 'three';
 import { LineBatch } from '../render/lines.ts';
-import { textMesh, type Face } from '../render/text.ts';
+import { textMesh, textPrimer, type Face } from '../render/text.ts';
 import type { Music } from './music.ts';
 import type { Style } from '../style/style.ts';
 import type { Palette } from '../render/palette.ts';
@@ -82,6 +82,8 @@ export class MgOverlay {
   showBadge = true;
 
   constructor(private palette: Palette, private style: Style, private music: Music, private badge: Armillary | null = null) {
+    // (The labels and credits are made as they come up: their program is compiled with the plates beforehand.)
+    this.scene.add(textPrimer());
     this.camera = new THREE.OrthographicCamera(-this.aspect, this.aspect, 1, -1, 0.1, 20);
     this.camera.position.set(0, 0, 5);
     if (badge) this.scene.add(badge.group);

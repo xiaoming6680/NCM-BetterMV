@@ -127,39 +127,45 @@ export function textTexture(text: string, face: Face, px = 160, halo: Halo = 'da
   const w = Math.ceil(advance) + pad * 2;
   const h = (vertical ? Math.ceil(px * VERTICAL_STEP * chars.length) : Math.ceil(px * 1.24)) + pad * 2;
   canvas.width = w; canvas.height = h;
-  ctx.font = font;
-  ctx.fillStyle = '#fff';
-  ctx.textBaseline = 'alphabetic';
-  ctx.textAlign = vertical ? 'center' : 'start';
   const baseline = pad + px * (cjk ? 0.98 : 0.96);
-  // Vertical: each character centred in its cell (a glyph's middle sits about 0.36 em above its baseline).
-  const draw = () => {
-    if (runs.length) {
-      let x = pad;
-      for (const r of runs) { ctx.font = r.font; ctx.fillText(r.s, x, baseline); x += r.w; }
-      return;
+  // The strokes, on this canvas or (inkPoints) on a smaller one scaled by k: a shadow's blur isn't scaled with the
+  // drawing, so it is given scaled.
+  const paint = (ctx: CanvasRenderingContext2D, k = 1) => {
+    ctx.font = font;
+    ctx.fillStyle = '#fff';
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = vertical ? 'center' : 'start';
+    // Vertical: each character centred in its cell (a glyph's middle sits about 0.36 em above its baseline).
+    const draw = () => {
+      if (runs.length) {
+        let x = pad;
+        for (const r of runs) { ctx.font = r.font; ctx.fillText(r.s, x, baseline); x += r.w; }
+        return;
+      }
+      if (!vertical) { ctx.fillText(text, pad, baseline); return; }
+      chars.forEach((ch, i) => { if (pair) ctx.font = isCjkChar(ch) ? cjkFont : font; ctx.fillText(ch, w / 2, pad + px * (VERTICAL_STEP * (i + 0.5) + 0.36)); });
+    };
+    // The halo is baked in: the material tint leaves black black, so it keeps words readable on busy frames.
+    if (halo === 'none') {
+      draw();
+    } else if (halo === 'dark') {
+      ctx.shadowColor = 'rgba(0,0,0,0.7)';
+      ctx.shadowBlur = px * 0.22 * k;
+      draw();
+      ctx.shadowBlur = 0;
+      draw();
+    } else {
+      ctx.shadowColor = 'rgba(255,255,255,0.9)';
+      ctx.shadowBlur = px * 0.3 * k;
+      ctx.fillStyle = halo;
+      draw();
+      ctx.shadowBlur = 0;
+      draw();
     }
-    if (!vertical) { ctx.fillText(text, pad, baseline); return; }
-    chars.forEach((ch, i) => { if (pair) ctx.font = isCjkChar(ch) ? cjkFont : font; ctx.fillText(ch, w / 2, pad + px * (VERTICAL_STEP * (i + 0.5) + 0.36)); });
   };
-  // The halo is baked in: the material tint leaves black black, so it keeps words readable on busy frames.
-  if (halo === 'none') {
-    draw();
-  } else if (halo === 'dark') {
-    ctx.shadowColor = 'rgba(0,0,0,0.7)';
-    ctx.shadowBlur = px * 0.22;
-    draw();
-    ctx.shadowBlur = 0;
-    draw();
-  } else {
-    ctx.shadowColor = 'rgba(255,255,255,0.9)';
-    ctx.shadowBlur = px * 0.3;
-    ctx.fillStyle = halo;
-    draw();
-    ctx.shadowBlur = 0;
-    draw();
-  }
+  paint(ctx);
   const texture = new THREE.CanvasTexture(canvas);
+  strokes.set(texture, { w, h, paint });
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = anisotropy;
   texture.minFilter = THREE.LinearMipmapLinearFilter;
@@ -183,6 +189,51 @@ export function textMesh(text: string, face: Face, height: number, opts: { cente
   const mesh = new THREE.Mesh(geometry, material);
   mesh.userData.width = advance;
   return mesh;
+}
+
+/**
+ * A hidden text mesh (a full stop) for where words will appear later: a plate's warm-up compiles hidden objects too, so
+ * the program the words use is ready (and kept, while this holds it) before the first line is sung — made on the
+ * line's first frame instead, it held that frame up 100–150 ms.
+ */
+export function textPrimer(): THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> {
+  return primer(textMesh('.', 'bold', 0.001, { px: 16, halo: 'none' }));
+}
+
+/**
+ * Hides a stand-in mesh made only to have its program compiled in the warm-up (textPrimer): also out of every bounding
+ * box (an empty one: the lens focuses on the lyrics' box, and a stand-in at their group's origin moved the focus).
+ */
+export function primer<T extends THREE.Mesh | THREE.Points>(m: T): T {
+  m.visible = false;
+  m.frustumCulled = false;
+  m.geometry.boundingBox = new THREE.Box3();
+  m.userData.primer = true;
+  return m;
+}
+
+/** How each text texture was drawn (textTexture), for inkPoints. */
+const strokes = new WeakMap<THREE.Texture, { w: number; h: number; paint: (ctx: CanvasRenderingContext2D, k?: number) => void }>();
+
+/**
+ * Where a text texture's light is (the glyphs, and a light halo; red above 150), on a grid of about `samples` points,
+ * as x, y pairs in 0..1 of its box. The strokes are drawn again on a canvas that small rather than read back from the
+ * texture's own: reading back a large canvas the GPU drew held the page up (~180 ms as a line of lyrics crumbled).
+ */
+export function inkPoints(texture: THREE.Texture, samples = 9000): Float32Array | null {
+  const s = strokes.get(texture);
+  if (!s) return null;
+  const step = Math.max(1, Math.round(Math.sqrt((s.w * s.h) / samples)));
+  const cw = Math.ceil(s.w / step), ch = Math.ceil(s.h / step);
+  const c = document.createElement('canvas');
+  c.width = cw; c.height = ch;
+  const ctx = c.getContext('2d')!;
+  ctx.scale(1 / step, 1 / step);
+  s.paint(ctx, 1 / step);
+  const px = ctx.getImageData(0, 0, cw, ch).data;
+  const out: number[] = [];
+  for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) if (px[(y * cw + x) * 4] > 150) out.push((x * step) / s.w, (y * step) / s.h);
+  return Float32Array.from(out);
 }
 
 export function disposeText(): void {
