@@ -1154,8 +1154,8 @@ function gpuInfo(): { webgl2: boolean; name: string } {
     gl.getExtension('WEBGL_lose_context')?.loseContext();
     // “ANGLE (NVIDIA, NVIDIA GeForce RTX 5070 Ti Laptop GPU (0x00002F58) Direct3D11 vs_5_0 ps_5_0, D3D11)” → the model.
     const m = raw.match(/^ANGLE \([^,]*, (.+?)(?: \(0x[0-9a-f]+\))?(?: Direct3D[^,]*)?, [^,]*\)$/i);
-    // (Without the trademark marks and a trailing “GPU”, it fits the status row's line.)
-    const name = (m ? m[1] : raw).replace(/\((?:R|TM)\)/gi, '').replace(/\s+GPU$/i, '').trim();
+    // (Without the trademark marks, a trailing “GPU” and “NVIDIA” before its own brands, it fits the status row's line.)
+    const name = (m ? m[1] : raw).replace(/\((?:R|TM)\)/gi, '').replace(/\s+GPU$/i, '').replace(/^NVIDIA (?=GeForce|Quadro|RTX|TITAN)/i, '').trim();
     return (gpu = { webgl2: true, name: name.slice(0, 64) });
   } catch { return (gpu = { webgl2: false, name: '' }); }
 }
@@ -1417,14 +1417,14 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     if (st.kind === 'checking') { state('正在检查…'); set?.('off', '正在检查'); }
     else if (st.kind === 'none') {
       ctl.append(button(full ? '下载对齐包（约 400 MB）' : '下载（约 400 MB）', () => void installPack()));
-      set?.('off', '未安装：逐句歌词按音节估算每个字');
+      set?.('off', '未安装：逐句歌词按音节估算');
     } else if (st.kind === 'installing') {
       const downloading = st.total && st.note.indexOf('正在下载') === 0;
       ctl.append(meter(downloading ? `正在下载 ${mb(st.done)} / ${mb(st.total)} MB` : st.note, st.total ? st.done / st.total : 0));
       set?.('off', '正在安装');
     } else if (st.kind === 'ready') {
       if (full) { state('已安装'); ctl.append(button('删除', () => void removePack())); }
-      set?.('ok', '已安装：逐句歌词按音频对齐每个字');
+      set?.('ok', '已安装：逐句歌词按音频对齐');
     } else if (st.kind === 'removing') { state('正在删除…'); set?.('off', '正在删除'); }
     else {
       state('安装失败：' + st.message, true);
@@ -1775,7 +1775,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     start.root.append(cols);
 
     into = colA;
-    const open = group(section('打开 MV', undefined, '先播放一首歌。每首歌首次打开时需分析数秒。'));
+    const open = group(section('打开 MV', undefined, '首次打开一首歌时需分析数秒。'));
     // The button as it looks above NetEase's play bar.
     const sample = el('span', 'bmv-mvbtn-sample');
     sample.innerHTML = `${icon('play', 11)}<span>MV</span>`;
