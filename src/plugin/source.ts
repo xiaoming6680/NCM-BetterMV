@@ -11,6 +11,15 @@ const domain = () => {
 };
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+/** A song that can't be had, with what to try (the waiting view shows it under the message). */
+export class SourceError extends Error {
+  hint: string;
+  constructor(message: string, hint: string) {
+    super(message);
+    this.hint = hint;
+  }
+}
+
 export async function fetchLyric(id: number): Promise<NeteaseLyric | null> {
   try {
     const r = await fetch(`${domain()}/api/song/lyric/v1?tv=0&lv=0&rv=0&kv=0&yv=0&ytv=0&yrv=0&cp=false&id=${id}`);
@@ -76,7 +85,11 @@ async function recordCacheDir(dir: string): Promise<void> {
   } catch { /* the dev tools fall back to the default folder */ }
 }
 
-/** The client's complete cached copy of a song, decrypted (XOR 0xA3); null while it is still downloading. */
+/**
+ * The client's complete cached copy of a song, decrypted (XOR 0xA3); null while it is still downloading. Throws when
+ * the folder can't be listed: BetterNCM's read_dir then answers 500 with nothing in it, and its readDir fails with
+ * “Unexpected end of JSON input”.
+ */
 export async function readCachedAudio(client: Client, id: number): Promise<ArrayBuffer | null> {
   const dir = await songCacheDir(client);
   if (!dir) return null;
@@ -108,15 +121,30 @@ async function fetchStreamAudio(id: number): Promise<ArrayBuffer | null> {
   return a.ok ? await a.arrayBuffer() : null;
 }
 
-/** Whole-song audio: the cache if complete, else the stream, else wait for the cache to finish. */
+/**
+ * Whole-song audio: the cache if complete, else the stream, else wait for the cache to finish. A cache folder that
+ * can't be listed is passed over for the stream (a report on 0.9.0: the listing failed on that machine and every song
+ * failed with it, “Unexpected end of JSON input”, the stream never tried).
+ */
 export async function getAudio(client: Client, id: number, cancelled: () => boolean): Promise<ArrayBuffer> {
-  const cached = await readCachedAudio(client, id);
+  let cached: ArrayBuffer | null = null, unreadable = false;
+  try {
+    cached = await readCachedAudio(client, id);
+  } catch (e) {
+    unreadable = true;
+    console.warn('[BetterMV] 无法读取缓存目录', e);
+  }
   if (cached) return cached;
   const stream = await fetchStreamAudio(id).catch(() => null);
   if (stream) return stream;
+  if (unreadable) {
+    const dir = (await songCacheDir(client))?.replace(/\//g, '\\');
+    throw new SourceError(`无法读取网易云的缓存目录${dir ? `（${dir}）` : ''}，也无法在线获取这首歌曲`,
+      '请确认网易云“设置 → 下载设置 → 缓存目录”中的文件夹可以正常打开；登录网易云账号后，有播放权限的歌曲可直接在线获取。');
+  }
   for (let i = 0; i < 90 && !cancelled(); i++) {
     await sleep(2000);
-    const c = await readCachedAudio(client, id);
+    const c = await readCachedAudio(client, id).catch(() => null);
     if (c) return c;
   }
   throw new Error('无法获取这首歌曲的完整音频');

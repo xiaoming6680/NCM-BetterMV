@@ -61,3 +61,13 @@
 - 歌词：`/api/song/lyric/v1?tv=0&lv=0&rv=0&kv=0&yv=0&ytv=0&yrv=0&cp=false&id=` → `lrc`、`tlyric`（翻译）、`yrc`（逐字，有的歌没有）。
 - 音乐百科：`/api/song/play/about/block/page?songId=` → 曲风、推荐标签、语种、BPM（`src/meta/wiki.ts`）。
 - 域名用 `window.APP_CONF.domain`（`https://music.163.com`）。
+
+## BetterNCM 的文件接口
+
+2026-10-17 从网易云目录的 `msimg32.dll`（BetterNCM 1.3.4 的加载器，前端框架的 JS 内嵌在里面）和 BetterNCM 源码（GitHub `std-microblock/chromatic`，分支 `3.0.0-adaption` 的 `src/App.cpp`、`src/PluginManager.cpp`）确认。
+
+- `betterncm.fs.*` 都是向本机 `http://localhost:<随机端口>/api/fs/…` 发请求（带 API Key）。`readDir`、`exists` 对响应调 `.json()`，`readFileText` 是 `.text()`，`readFile` 是 `.blob()`。
+- 原生端列目录用 `fs::directory_iterator`，出错就抛异常，httplib 回 500、响应体为空，前端报 `SyntaxError: Unexpected end of JSON input`（实测读不存在的文件夹就是这个报错）。issue #1 的“无法生成 MV：Unexpected end of JSON input”就是缓存目录列不出来，0.9.1 及以前没接住，在线获取也没机会试。现在列目录失败会改走在线获取，两边都不行时报“无法读取网易云的缓存目录（路径），也无法在线获取这首歌曲”。
+- 路径第二个字符不是 `:` 时按 BetterNCM 数据目录的相对路径处理，所以 `\NAS\…` 这类网络路径会被拼错。`readFileText` 读不存在的文件返回空字符串，不报错。
+- 数据目录 `/local` 和 `mount_dir` 挂出来的目录不需要 API Key，但端口每次启动都变。
+

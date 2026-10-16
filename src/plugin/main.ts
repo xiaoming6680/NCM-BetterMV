@@ -8,7 +8,7 @@ import {
   setVolume, skip, toggleLike, toggleMaximize, togglePlay, volume, type Client, type PlayingSong,
 } from './client.ts';
 import { ProgressClock } from './clock.ts';
-import { fetchChorus, fetchLyric, fetchWiki, getAudio, loadCover, songCacheDir } from './source.ts';
+import { fetchChorus, fetchLyric, fetchWiki, getAudio, loadCover, songCacheDir, SourceError } from './source.ts';
 import { alignSong, applyAlignment, cachedAlignment, checkPack, needsAlignment } from './aligner.ts';
 import { isRecordingKeys, keyCombo, loadConfig, mvButton, Overlay, pixelRatio, settingsView, type BarSection, type Config, type QueueTrack } from './ui.ts';
 import type { SectionLabel } from '../types.ts';
@@ -298,7 +298,7 @@ function start(client: Client): void {
   /** A failure on the waiting view, with 重试. A lost WebGL context says so (the retry makes the renderer anew). */
   function failed(e: unknown): void {
     if (player?.engine.renderer.getContext().isContextLost()) overlay.status('画面中断：显卡被重置', { error: true, hint: '点重试会重新生成画面。' });
-    else overlay.status('无法生成 MV：' + ((e as Error)?.message || e), { error: true, hint: '若重试仍失败，请先在网易云中完整播放这首歌，缓存完成后再试。' });
+    else overlay.status('无法生成 MV：' + ((e as Error)?.message || e), { error: true, hint: e instanceof SourceError ? e.hint : '若重试仍失败，请先在网易云中完整播放这首歌，缓存完成后再试。' });
   }
 
   /**
