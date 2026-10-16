@@ -54,7 +54,8 @@ async function mkdirs(path: string): Promise<void> {
 export async function checkPack(): Promise<boolean> {
   try {
     const dir = await packDir();
-    const v = JSON.parse(await betterncm.fs.readFileText(`${dir}\\installed.json`));
+    // (Also written by hand when the pack is installed manually, README: an editor may put a BOM before it.)
+    const v = JSON.parse((await betterncm.fs.readFileText(`${dir}\\installed.json`)).replace(/^\uFEFF/, ''));
     const ok = v?.version === PACK_VERSION;
     if (state.kind === 'checking' || state.kind === 'ready' || state.kind === 'none') set({ kind: ok ? 'ready' : 'none' });
     return ok;

@@ -64,7 +64,7 @@
 | 风格不合适 | “风格”改为律动、抒情、字或墨 |
 | 不喜欢某个场景或画风 | 在“场景”“画风”中关闭，点击“应用” |
 | 切歌时不想等待 | 开启“提前分析下一首” |
-| 只有逐句歌词的歌曲也逐字显示 | 在“逐字对齐”中下载对齐包（约 400 MB），按音频对齐每个字 |
+| 只有逐句歌词的歌曲也逐字显示 | 在“歌词与对齐”中下载对齐包（约 400 MB），按音频对齐每个字；下载失败时可[手动安装](#手动安装对齐包) |
 | 不显示播放栏上方的 MV 按钮 | 关闭“MV 按钮”，改用快捷键打开 |
 
 ## 直播（OBS）
@@ -78,6 +78,28 @@
 **先打开 OBS、后打开网易云时，OBS 中的画面不会自动出现**：在 OBS 中右键 BetterMV 来源，选择“刷新”。先打开网易云，或网易云在 OBS 开着时重新打开，画面都会自动出现。
 
 OBS 显示画面时，网易云中的 MV 页暂停渲染，需要两边同时显示时打开“MV 页同时显示”。打开 OBS 输出后，后台会运行本机服务 BetterMV OBS，网易云退出时随之结束。
+
+## 手动安装对齐包
+
+对齐包通常在设置的“歌词与对齐”中一键下载。无法连接 GitHub 或下载中断时，可以手动安装：
+
+1. 在[对齐包发布页](https://github.com/xiaoming6680/NCM-BetterMV/releases/tag/aligner-v1)下载 `aligner-runtime.zip` 和 `mms_fa.onnx.001`～`mms_fa.onnx.004`，共 5 个文件，约 400 MB。
+2. 打开 BetterNCM 的数据目录（插件文件夹的上一级，默认 `C:\betterncm`），进入 `BetterMV\aligner`，没有就新建这两层文件夹。
+3. 把 `aligner-runtime.zip` 解压到 `aligner` 中。解压后 `align.py` 和 `python` 文件夹应直接位于 `aligner` 下，不要多出一层 `aligner-runtime` 文件夹。
+4. 在 `aligner` 中新建 `models` 文件夹，放入四个 `mms_fa.onnx.00x` 文件。
+5. 在 `aligner` 中新建文本文件 `installed.json`，内容为 `{"version":1}`。注意扩展名是 `.json`，不是 `.txt`。
+6. 重启网易云。设置“开始使用”中的“逐字对齐包”显示“已安装”即完成。
+
+完成后的文件夹：
+
+```text
+C:\betterncm\BetterMV\aligner\
+├─ align.py、fa.py、version.json、LICENSES.txt、installed.json
+├─ python\
+└─ models\mms_fa.onnx.001～mms_fa.onnx.004
+```
+
+首次对齐时，四个模型分卷会在本机拼合为一个文件。
 
 ## 常见问题
 
