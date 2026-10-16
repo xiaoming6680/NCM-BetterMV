@@ -17,6 +17,7 @@ import type { StyleId } from '../style/style.ts';
 import type { SceneId } from '../scenes/types.ts';
 import type { LookId } from '../director/director.ts';
 import { fromReference } from './reference.ts';
+import { OBS_VERSION, songFile } from '../obs/snapshot.ts';
 
 const CLARITY = 3359522924;
 const params = new URLSearchParams(location.search);
@@ -208,9 +209,31 @@ async function main() {
     }
     return out;
   };
+  // The plugin's OBS output from the harness (docs/OBS.md): the song to the local server, then where the audio is, as
+  // the plugin sends them (on each change, a stamp a second while playing). The server run by hand, without NetEase:
+  // bettermv-obs.exe --port 32109 --root <a folder with obs\ and fonts\> --key dev --watch "".
+  const obsSend = async (key = 'dev', port = 32109) => {
+    const api = (p: string) => `http://127.0.0.1:${port}/api/${p}`;
+    const file = `${songId}-e`, blob = songFile(song);
+    const t0 = performance.now();
+    const r = await fetch(api('song/' + file), { method: 'POST', headers: { 'x-bmv-key': key }, body: blob });
+    const ms = Math.round(performance.now() - t0);
+    const plan = { style: (params.get('style') as StyleId) || 'auto', off: [...off], lyricDelay: 0, seed: player.seed };
+    const push = () => fetch(api('state'), {
+      method: 'POST', headers: { 'x-bmv-key': key, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        v: OBS_VERSION, song: { id: songId, name: song.name ?? '', artists: song.artists ?? [], cover: detail?.cover ?? '' }, file, plan,
+        t: audio.currentTime, at: Date.now(), playing: !audio.paused, delay: 0,
+      }),
+    });
+    for (const ev of ['play', 'pause', 'seeked']) audio.addEventListener(ev, () => void push());
+    setInterval(() => { if (!audio.paused) void push(); }, 1000);
+    await push();
+    return { status: r.status, file, mb: +(blob.size / 1048576).toFixed(1), ms, seed: player.seed };
+  };
   (window as any).bmv = {
     audio, song, analysis, player, palette, renderAt, hold, style, choice, lines: song.lines, wiki,
-    shotAt, snap, sheet, label, perf,
+    shotAt, snap, sheet, label, perf, obsSend,
   };
 }
 

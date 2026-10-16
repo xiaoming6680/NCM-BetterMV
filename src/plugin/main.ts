@@ -12,7 +12,11 @@ import { fetchChorus, fetchLyric, fetchWiki, getAudio, loadCover, songCacheDir, 
 import { alignSong, applyAlignment, cachedAlignment, checkPack, needsAlignment } from './aligner.ts';
 import { startUpdates } from './update.ts';
 import { isRecordingKeys, keyCombo, loadConfig, mvButton, Overlay, pixelRatio, settingsView, type BarSection, type Config, type QueueTrack } from './ui.ts';
+import { obs, obsKey } from './obs.ts';
+import { OBS_VERSION, type ObsPlan, type ObsState } from '../obs/snapshot.ts';
 import type { SectionLabel } from '../types.ts';
+import type { SceneId } from '../scenes/types.ts';
+import type { LookId } from '../director/director.ts';
 
 const KEY = '__betterMv';
 const SECTION: Record<SectionLabel, string> = { intro: '前奏', verse: '主歌', pre: '预副歌', chorus: '副歌', drop: '高潮', build: '铺垫', break: '间奏', bridge: '桥段', outro: '尾奏' };
@@ -59,6 +63,9 @@ function start(client: Client): void {
   client.bridge.appendRegisterCall('PlayProgress', 'audioplayer', clock.onProgress);
   client.bridge.appendRegisterCall('PlayState', 'audioplayer', clock.onState);
   found = client;
+  // (The OBS page's clock follows NetEase's: a stamp a second while playing, at once on a seek. Driven by NetEase's
+  // events, not a timer, which a minimised window would slow to one a minute.)
+  client.bridge.appendRegisterCall('PlayProgress', 'audioplayer', () => pushState());
   void songCacheDir(client); // records the client's cache folder for the dev tools
 
   let player: MvPlayer | null = null;
@@ -133,14 +140,24 @@ function start(client: Client): void {
   let plannedWith = '';
   const planKey = (c: Config, id = player?.song?.id) => `${c.style}|${c.off.join(',')}|${c.offLooks.join(',')}|${id ? c.lyricDelays[id] ?? 0 : 0}|${c.arrange}`;
   /**
-   * The arrangement's seed: a fixed one per song when its arrangement is kept, a new one when asked for (`fresh`),
-   * else the player's own (drawn anew for each play of a song, kept while it plays).
+   * This play's seed: drawn anew when a song starts playing (a song plays differently each time), kept while it plays,
+   * so the MV page and the OBS page draw the same MV. A fixed one per song when its arrangement is kept.
    */
-  const seedFor = (song: PreparedSong, c: Config, fresh: boolean) =>
-    fresh ? (Math.random() * 4294967296) >>> 0 : c.arrange === 'fixed' ? Math.imul(song.id ^ 0x9e3779b9, 2654435761) >>> 0 : undefined;
+  let playSeed = { id: 0, seed: 0 };
+  const seedOf = (song: PreparedSong, c: Config, fresh = false) => {
+    if (c.arrange === 'fixed' && !fresh) return Math.imul(song.id ^ 0x9e3779b9, 2654435761) >>> 0;
+    if (fresh || playSeed.id !== song.id) playSeed = { id: song.id, seed: (Math.random() * 4294967296) >>> 0 };
+    return playSeed.seed;
+  };
+  /** How the MV is arranged: the style, the plates and looks left out, this song's lyric delay, the seed. */
+  const planFor = (song: PreparedSong, c: Config, fresh = false): ObsPlan => ({
+    style: c.style, off: [...c.off, ...c.offLooks], lyricDelay: (c.lyricDelays[song.id] ?? 0) / 1000, seed: seedOf(song, c, fresh),
+  });
   const plan = (song: PreparedSong, c: Config, fresh = false) => {
     plannedWith = planKey(c, song.id);
-    player!.load(song, styleFor(song, c.style), new Set([...c.off, ...c.offLooks]), undefined, undefined, (c.lyricDelays[song.id] ?? 0) / 1000, seedFor(song, c, fresh));
+    const p = planFor(song, c, fresh);
+    player!.load(song, styleFor(song, p.style), new Set(p.off as Array<SceneId | LookId>), undefined, undefined, p.lyricDelay, p.seed);
+    pushState();
   };
   /** The MV's style beside the volume (and why, when chosen automatically), and how the lyrics' word times stand. */
   const describe = (song: PreparedSong) => overlay.mvInfo({
@@ -158,6 +175,56 @@ function start(client: Client): void {
   let replan = 0;
   let button: HTMLButtonElement | null = config.button ? mvButton(() => open()) : null;
 
+  // OBS output (src/plugin/obs.ts): the playing song, once prepared, goes to the local server, and where NetEase is
+  // playing follows it; the OBS page draws the same MV from them.
+  /** The song the OBS page is given, and its file name on the server (another once the aligner pack timed its words). */
+  let obsSong: { song: PreparedSong; file: string } | null = null;
+  const obsFile = (song: PreparedSong) => `${song.id}-${aligned.get(song) === 'aligned' ? 'w' : 'e'}`;
+  async function obsPublish(song: PreparedSong): Promise<void> {
+    if (!obs.on) return;
+    const file = obsFile(song);
+    obsSong = { song, file };
+    pushState();
+    if (await obs.sendSong(song, file)) pushState(true);
+  }
+  function obsState(): ObsState {
+    const s = playingSong(client.store);
+    const shown = obsSong && s && obsSong.song.id === s.id && obs.has(obsSong.file) ? obsSong : null;
+    return {
+      v: OBS_VERSION,
+      song: s ? { id: s.id, name: s.name, artists: s.artists, cover: s.cover } : null,
+      file: shown?.file ?? null,
+      plan: shown ? planFor(shown.song, config) : null,
+      // (While NetEase switches songs its clock still has the last one.)
+      t: s && clock.songId === s.id ? clock.time() : 0,
+      at: Date.now(),
+      playing: isPlaying(),
+      delay: clock.offset,
+    };
+  }
+  let lastPush = { at: 0, t: 0, playing: false, key: '' };
+  /** Sends the state when it changed, when the song time jumped (a seek), and once a second while playing. */
+  function pushState(force = false): void {
+    if (obs.status.kind !== 'on') return;
+    const st = obsState();
+    const key = `${st.song?.id}|${st.file}|${st.playing}|${JSON.stringify(st.plan)}|${st.delay}`;
+    const expected = lastPush.t + (lastPush.playing ? (st.at - lastPush.at) / 1000 : 0);
+    if (!force && key === lastPush.key && Math.abs(st.t - expected) < 0.3 && (!st.playing || st.at - lastPush.at < 1000)) return;
+    lastPush = { at: st.at, t: st.t, playing: st.playing, key };
+    obs.sendState(st);
+  }
+  /** The playing song to the OBS page: prepared already (by the MV page or ahead), or prepared now. */
+  function obsFollow(): void {
+    if (obs.status.kind !== 'on') return;
+    const s = playingSong(client.store);
+    const p = s && (player?.song?.id === s.id ? player.song : ready.get(s.id));
+    if (p) void obsPublish(p);
+    else if (s && s.id !== preparing?.id) void prepareCurrent();
+    pushState(true);
+  }
+  /** While an OBS page shows the MV, the MV page rests (unless the settings keep it going) and says so. */
+  let resting = false;
+
   function loop(now: number): void {
     raf = 0;
     if (!overlay.visible || !player) return;
@@ -166,8 +233,13 @@ function start(client: Client): void {
     // was due, not after now, so the cap holds on average whatever the screen's rate: at 120 on a 144 Hz screen five
     // frames in six are drawn (counting from now, every other one would be, 72 a second). After a stall (more than a
     // period late) the schedule starts again from now.
+    const rest = obs.shown && !config.obsKeepMv;
+    if (rest !== resting && !preparing) {
+      resting = rest;
+      overlay.status(rest ? '画面正在 OBS 中显示' : null, rest ? { note: true, hint: '需要两边同时显示时，在设置中打开“MV 页同时显示”。' } : {});
+    }
     const cap = config.fpsCap, period = cap ? 1000 / cap : 0;
-    if (!cap || !last || now >= due - 1) {
+    if (!resting && (!cap || !last || now >= due - 1)) {
       if (cap) due = (now - due > period ? now : due) + period;
       const dt = last ? Math.min(0.1, (now - last) / 1000) : 1 / 60;
       last = now;
@@ -231,6 +303,7 @@ function start(client: Client): void {
       const n = r ? applyAlignment(target.lines, r) : 0;
       if (n) aligned.set(target, 'aligned'); else aligned.delete(target);
       if (player?.song === target) describe(target);
+      if (n && obsSong?.song === target) void obsPublish(target);
     });
   }
 
@@ -239,9 +312,10 @@ function start(client: Client): void {
    * so it shows at once when it comes (taken over at full speed if it comes first).
    */
   function prefetchNext(): void {
-    if (!config.prefetch || !overlay.visible || preparing || !player?.song) return;
+    const current = playingSong(client.store);
+    if (!config.prefetch || (!overlay.visible && !obs.on) || preparing || !current) return;
     const next = nextSong(client.store);
-    if (!next || next.id === player.song.id || ready.has(next.id) || ahead?.job.id === next.id) return;
+    if (!next || next.id === current.id || ready.has(next.id) || ahead?.job.id === next.id) return;
     if (ahead) ahead.job.cancelled = true;
     const job: Job = { id: next.id, cancelled: false, urgent: false };
     const entry: Ahead = {
@@ -256,10 +330,11 @@ function start(client: Client): void {
 
   async function prepareCurrent(): Promise<void> {
     const song = playingSong(client.store);
-    if (!song) { overlay.song(null); overlay.mvInfo(null); overlay.status('请先在网易云音乐中播放歌曲'); return; }
-    livePlayer();
+    if (!song) { overlay.song(null); overlay.mvInfo(null); overlay.status('请先在网易云音乐中播放歌曲'); resting = false; pushState(); return; }
+    // (With only the OBS output on, the MV page is closed: no renderer is made here.)
+    if (overlay.visible) livePlayer();
     // Already showing this song (reopened after closing): just take the loading note away.
-    if (player?.song?.id === song.id) { overlay.status(null); return; }
+    if (player?.song?.id === song.id) { overlay.status(null); resting = false; void obsPublish(player.song); return; }
     if (preparing?.id === song.id) return;
     if (preparing) preparing.cancelled = true;
     // The song prepared ahead is this one: it goes on at full speed. Ahead of another song, it is dropped.
@@ -269,6 +344,8 @@ function start(client: Client): void {
     const job: Job = taken?.job ?? { id: song.id, cancelled: false, urgent: true };
     job.urgent = true;
     preparing = job;
+    resting = false;
+    pushState();
     overlay.setBackdrop(song.cover || null);
     overlay.setStructure([], '#ffffff');
     overlay.song({ name: song.name, artists: song.artists, cover: song.cover || null });
@@ -284,7 +361,10 @@ function start(client: Client): void {
         prepared = g.song;
       }
       await alignIfNeeded(prepared);
-      if (job.cancelled || !player) return;
+      if (job.cancelled) return;
+      void obsPublish(prepared);
+      // Only the OBS output wants it (the MV page is closed): done here.
+      if (!player || !overlay.visible) { preparing = null; prefetchNext(); return; }
       plan(prepared, config);
       // The progress bar shows the song's structure: its sections, the choruses and drops in the cover's colour.
       overlay.setStructure(prepared.analysis.sections.map((x): BarSection => ({ start: x.start, end: x.end, name: SECTION[x.label], loud: x.label === 'chorus' || x.label === 'drop' })), prepared.palette.css.signal);
@@ -348,8 +428,11 @@ function start(client: Client): void {
 
   function close(): void {
     overlay.hide();
-    if (preparing) preparing.cancelled = true;
-    if (ahead) { ahead.job.cancelled = true; ahead = null; }
+    // (The OBS output still wants the song being prepared, and the next one.)
+    if (!obs.on) {
+      if (preparing) preparing.cancelled = true;
+      if (ahead) { ahead.job.cancelled = true; ahead = null; }
+    }
     cancelAnimationFrame(raf);
     raf = 0;
   }
@@ -361,10 +444,13 @@ function start(client: Client): void {
     const state = client.store.getState()?.playing?.playingState;
     if (typeof state === 'number') clock.onState('', '', state === 2 ? 1 : 0);
     overlay.maximized = isMaximized(client.store);
-    if (!overlay.visible) return;
+    pushState();
+    if (!overlay.visible && !obs.on) return;
     const moved = syncQueue();
     const s = playingSong(client.store);
-    if (s && s.id !== player?.song?.id && s.id !== preparing?.id) void prepareCurrent();
+    // (With the MV page closed, the song the OBS page has is what counts.)
+    const has = overlay.visible ? player?.song?.id : obsSong?.song.id;
+    if (s && s.id !== has && s.id !== preparing?.id) void prepareCurrent();
     // (The list or the place in it changed: what comes next may have.)
     else if (moved) prefetchNext();
   });
@@ -376,7 +462,22 @@ function start(client: Client): void {
     overlay.visible ? close() : void open();
   });
 
+  // The OBS output with the settings: started, stopped, moved to another port.
+  let obsWith = '';
+  const obsSync = (c: Config) => {
+    const want = c.obs ? `${c.obsPort}` : '';
+    if (want === obsWith) return;
+    obsWith = want;
+    if (want) void obs.start(c.obsPort, obsKey()); else void obs.stop();
+  };
+  // (On again after a start, a restart of the server, a new port: it is given the playing song.)
+  let obsWas = obs.status.kind;
+  obs.watch(st => { if (st.kind === 'on' && obsWas !== 'on') obsFollow(); obsWas = st.kind; });
+  obsSync(config);
+
   listeners.push(c => {
+    obsSync(c);
+    pushState();
     clock.offset = c.latencyMs / 1000;
     overlay.showControls = c.controls;
     overlay.setKeys(c.keys);
@@ -397,7 +498,7 @@ function start(client: Client): void {
     }, 350);
   });
 
-  (window as any)[KEY] = { open, close, clock, get player() { return player; } };
+  (window as any)[KEY] = { open, close, clock, obs, client, get player() { return player; } };
 }
 
 plugin.onLoad(() => {

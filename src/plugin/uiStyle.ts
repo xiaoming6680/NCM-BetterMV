@@ -59,6 +59,10 @@ const CSS = `
 .bmv-load.is-error .bmv-load-step{justify-content:center;width:auto;max-width:min(70vw,560px);margin-top:18px;font-size:13px;color:var(--l1);text-align:center}
 .bmv-load-hint{display:none;max-width:min(70vw,480px);margin-top:4px;font-size:12px;color:var(--l2);text-align:center}
 .bmv-load.is-error .bmv-load-hint{display:block}
+/* A note, not progress (the MV page resting while OBS shows the MV): the artwork as it is, the line away. */
+.bmv-load.is-note .bmv-load-line{display:none}
+.bmv-load.is-note .bmv-load-step{justify-content:center;width:auto;max-width:min(70vw,560px);margin-top:22px;font-size:13px;color:var(--l1);text-align:center}
+.bmv-load.is-note .bmv-load-hint{display:block}
 .bmv-load-retry{display:none;margin-top:16px;pointer-events:auto}
 .bmv-load.is-error .bmv-load-retry{display:block}
 .bmv-load.is-empty .bmv-load-art,.bmv-load.is-empty .bmv-load-title,.bmv-load.is-empty .bmv-load-artist,.bmv-load.is-empty .bmv-load-line{display:none}

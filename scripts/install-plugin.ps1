@@ -6,10 +6,15 @@ try {
     bunx vite build --config vite.plugin.config.ts
     if ($LASTEXITCODE -ne 0) { throw '打包失败' }
 } finally { Pop-Location }
+& (Join-Path $PSScriptRoot 'build-obs.ps1')
 $dataPath = if ($env:BETTERNCM_PROFILE) { $env:BETTERNCM_PROFILE } else { 'C:\betterncm' }
 $target = Join-Path $dataPath 'plugins_dev\ncm-better-mv'
 New-Item -ItemType Directory -Force -Path (Join-Path $target 'fonts') | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $target 'previews') | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $target 'obs') | Out-Null
+Copy-Item -LiteralPath (Join-Path $projectRoot 'plugin\obs\index.html') -Destination (Join-Path $target 'obs') -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'dist\obs\obs.js') -Destination (Join-Path $target 'obs') -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'dist\obs\bettermv-obs.exe') -Destination (Join-Path $target 'obs') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'plugin\manifest.json') -Destination $target -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'dist\plugin\bettermv.js') -Destination $target -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'plugin\preview.jpg') -Destination $target -Force

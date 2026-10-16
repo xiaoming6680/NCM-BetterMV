@@ -11,6 +11,8 @@ import { appIcon, icon, type IconName } from './icons.ts';
 import { canRestart, checkUpdate, installUpdate, openPage, restartNetEase, VERSION, watchUpdate, type UpdateState } from './update.ts';
 import { updateWindowOn } from './updatePrompt.ts';
 import { ensureStyles } from './uiStyle.ts';
+import { OBS_PORT } from '../obs/snapshot.ts';
+import { obsSettings } from './obsSettings.ts';
 
 export interface Config {
   style: 'auto' | StyleId;
@@ -36,6 +38,11 @@ export interface Config {
   autoUpdate: boolean;
   /** The key of each action, as `Ctrl+Shift+KeyM`: the modifiers, then the key's code. */
   keys: Keys;
+  /** OBS output (src/plugin/obs.ts): the MV for a browser source at http://127.0.0.1:<obsPort>/. */
+  obs: boolean;
+  /** Keep drawing the MV page while an OBS page shows the MV (by default it rests). */
+  obsKeepMv: boolean;
+  obsPort: number;
 }
 
 /** What the keyboard can do: open or leave the MV page (anywhere in NetEase), and on the MV page itself. */
@@ -85,6 +92,9 @@ export function loadConfig(): Config {
     fpsCap: (() => { const n = Number(plugin.getConfig('fpsCap', 0)); return n === 240 || n === 120 || n === 60 || n === 30 ? n : 0; })(),
     prefetch: plugin.getConfig<boolean>('prefetch', false) as unknown === true,
     autoUpdate: plugin.getConfig<boolean>('autoUpdate', true) as unknown !== false,
+    obs: plugin.getConfig<boolean>('obs', false) as unknown === true,
+    obsKeepMv: plugin.getConfig<boolean>('obsKeepMv', false) as unknown === true,
+    obsPort: (() => { const n = Math.floor(Number(plugin.getConfig('obsPort', OBS_PORT))); return n >= 1024 && n <= 65535 ? n : OBS_PORT; })(),
     keys: (() => {
       const keys = { ...DEFAULT_KEYS };
       try {
@@ -118,7 +128,13 @@ export interface QueueTrack { name: string; artists: string[]; duration: number 
 /** How the MV shows the song: its style, why it was chosen (null: chosen by hand), its tempo, the lyrics' word times. */
 export interface MvInfo { style: string; why: string | null; bpm?: number; lyrics: 'aligning' | 'aligned' | null }
 /** What the waiting view says besides its line: how far along (0..1), or that it failed. */
-export interface StatusOptions { progress?: number; error?: boolean; hint?: string }
+export interface StatusOptions {
+  progress?: number;
+  error?: boolean;
+  hint?: string;
+  /** A plain note rather than progress (the MV page resting while OBS shows the MV): no line, the hint shown. */
+  note?: boolean;
+}
 /** NetEase's covers come in any size: a small one for the thumbnail, a large one for the waiting view. */
 const sized = (url: string, px: number) => url.replace(/^http:/, 'https:') + (/\?/.test(url) ? '' : `?param=${px}y${px}`);
 const clock = (s: number) => { s = Math.max(0, s); return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`; };
@@ -852,6 +868,7 @@ export class Overlay {
     if (text === null) { this.finishLoading(); return; }
     const p = opts.progress;
     l.classList.toggle('is-error', !!opts.error);
+    l.classList.toggle('is-note', !!opts.note && !opts.error);
     l.classList.toggle('is-empty', !this.hasSong);
     this.loadStep.textContent = text;
     this.loadHint.textContent = opts.hint ?? '';
@@ -1143,7 +1160,7 @@ function gpuInfo(): { webgl2: boolean; name: string } {
   } catch { return (gpu = { webgl2: false, name: '' }); }
 }
 
-type PageId = 'start' | 'picture' | 'perf' | 'lyrics' | 'scenes' | 'looks' | 'keys' | 'update';
+type PageId = 'start' | 'picture' | 'perf' | 'lyrics' | 'scenes' | 'looks' | 'keys' | 'live' | 'update';
 
 /**
  * The settings, in sections that are pages of their own. On BetterNCM's plugin page a sidebar shows one at a time
@@ -1485,6 +1502,12 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   row(about, '更新记录', link('查看', () => openPage(`${REPO}/blob/main/CHANGELOG.md`)));
   row(about, '问题反馈', link('反馈', () => openPage(`${REPO}/issues`)), '请附上歌曲名和截图');
 
+  // 直播: the OBS output (src/plugin/obsSettings.ts), its rows from the same building blocks.
+  const live = page('live', '直播');
+  const obsUi = obsSettings({ section, group, row, button, link, sync }, config, onChange);
+  live.value = obsUi.value;
+  synced.push(obsUi.paint);
+
   // The keys: a click on one, then the new keys pressed; one already in use by another action trades places with it.
   const KEY_ROWS: Array<[KeyAction, string, string?]> = [
     ['toggle', '打开 / 退出 MV 页', '网易云的任何页面都可用'],
@@ -1738,7 +1761,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     return k;
   };
   const shown = (root: HTMLElement) => play(root, [{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' });
-  const ORDER: PageId[] = ['start', 'picture', 'perf', 'lyrics', 'scenes', 'looks', 'keys', 'update'];
+  const ORDER: PageId[] = ['start', 'picture', 'perf', 'lyrics', 'scenes', 'looks', 'keys', 'live', 'update'];
   const inOrder = (a: Page, b: Page) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id);
 
   if (!compact) {

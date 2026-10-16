@@ -174,14 +174,19 @@ export async function prepareSong(input: SongInput, opts: PrepareOptions): Promi
     xy = xyMusic(both.left, both.right, XY_RATE).xy;
     stereo = toStereo(both.left, both.right, XY_RATE, xy ? 1 : XY_RATE / WAVE_RATE);
   } else stereo = toStereo(left, right, WAVE_RATE, 1);
-  const cover = new THREE.Texture(input.cover);
+  return {
+    id: input.id, name: input.name, artists: input.artists, duration, lines, analysis, wiki: input.wiki, choice,
+    palette, cover: coverTexture(input.cover), coverPixels, coverSize, stereo, xyMusic: xy, ms: Math.round(performance.now() - t0),
+  };
+}
+
+/** The cover as the plates take it (also the OBS page's, from the song file: src/obs/snapshot.ts). */
+export function coverTexture(img: HTMLImageElement): THREE.Texture {
+  const cover = new THREE.Texture(img);
   cover.colorSpace = THREE.SRGBColorSpace;
   cover.anisotropy = 8;
   cover.needsUpdate = true;
-  return {
-    id: input.id, name: input.name, artists: input.artists, duration, lines, analysis, wiki: input.wiki, choice,
-    palette, cover, coverPixels, coverSize, stereo, xyMusic: xy, ms: Math.round(performance.now() - t0),
-  };
+  return cover;
 }
 
 /** The style to play a song in: the user's choice, else (or for a setting this version doesn't know) the automatic one. */
