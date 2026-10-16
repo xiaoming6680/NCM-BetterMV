@@ -140,7 +140,7 @@ export async function getAudio(client: Client, id: number, cancelled: () => bool
   if (unreadable) {
     const dir = (await songCacheDir(client))?.replace(/\//g, '\\');
     throw new SourceError(`无法读取网易云的缓存目录${dir ? `（${dir}）` : ''}，也无法在线获取这首歌曲`,
-      '请确认网易云“设置 → 下载设置 → 缓存目录”中的文件夹可以正常打开；登录网易云账号后，有播放权限的歌曲可直接在线获取。');
+      '请检查网易云“设置 → 下载设置 → 缓存目录”能否打开，或登录网易云后重试。');
   }
   for (let i = 0; i < 90 && !cancelled(); i++) {
     await sleep(2000);

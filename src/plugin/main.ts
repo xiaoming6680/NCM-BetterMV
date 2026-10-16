@@ -305,8 +305,8 @@ function start(client: Client): void {
 
   /** A failure on the waiting view, with 重试. A lost WebGL context says so (the retry makes the renderer anew). */
   function failed(e: unknown): void {
-    if (player?.engine.renderer.getContext().isContextLost()) overlay.status('画面中断：显卡被重置', { error: true, hint: '点重试会重新生成画面。' });
-    else overlay.status('无法生成 MV：' + ((e as Error)?.message || e), { error: true, hint: e instanceof SourceError ? e.hint : '若重试仍失败，请先在网易云中完整播放这首歌，缓存完成后再试。' });
+    if (player?.engine.renderer.getContext().isContextLost()) overlay.status('画面中断：显卡被重置', { error: true, hint: '频繁出现时请调低画质。' });
+    else overlay.status('无法生成 MV：' + ((e as Error)?.message || e), { error: true, hint: e instanceof SourceError ? e.hint : '重试仍失败时，请先在网易云中完整播放一遍这首歌。' });
   }
 
   /**

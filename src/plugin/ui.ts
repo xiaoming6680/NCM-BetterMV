@@ -155,7 +155,7 @@ function glyph(name: IconName, title: string, fn: () => void, size = 22, extra =
   return b;
 }
 
-const mvButtonTitle = (key: string) => `BetterMV：为当前歌曲生成 MV（${keyLabel(key)}）`;
+const mvButtonTitle = (key: string) => `打开 MV（${keyLabel(key)}）`;
 
 export function mvButton(onClick: () => void): HTMLButtonElement {
   ensureStyles();
@@ -531,7 +531,7 @@ export class Overlay {
     this.vol = v;
     this.volFill.style.width = v * 100 + '%';
     this.volKnob.style.left = v * 100 + '%';
-    this.volTrack.title = `音量 ${Math.round(v * 100)}%（滚轮或 ↑ ↓ 调节）`;
+    this.volTrack.title = `音量 ${Math.round(v * 100)}%`;
     if (was < 0 || (was > 0.001) !== (v > 0.001)) this.volIcon.innerHTML = icon(v > 0.001 ? 'speaker' : 'muted', 22);
     this.volIcon.title = v > 0.001 ? '静音' : '取消静音';
   }
@@ -948,8 +948,7 @@ export class Overlay {
       if (info.lyrics === 'aligning') s.append(el('span', '', '正在对齐歌词'));
       s.title = [
         `风格：${info.style}（${info.why ? `自动选择，${info.why}` : '手动指定'}）`,
-        info.lyrics === 'aligning' ? '歌词：正在按音频对齐每个字' : info.lyrics === 'aligned' ? '歌词：已按音频对齐每个字' : '',
-        '点击打开设置',
+        info.lyrics === 'aligning' ? '歌词：正在按音频对齐' : info.lyrics === 'aligned' ? '歌词：已按音频对齐' : '',
       ].filter(Boolean).join('\n');
     }
     this.fit();
@@ -1018,11 +1017,11 @@ export class Overlay {
 const LATENCY_MIN = -200, LATENCY_MAX = 400;
 
 const STYLE_NOTE: Record<Config['style'], string> = {
-  auto: '根据网易云的曲风标签选择：说唱为“字”，国风为“墨”，电子、舞曲、摇滚为“律动”，民谣、古典、轻音乐为“抒情”；无标签时依据鼓点和 drop 判断。',
-  pulse: '踩拍硬切，细线与光效，drop 处进入推进隧道。适合电子、舞曲、摇滚。',
-  ballad: '长镜头、柔光、缓慢推移，转场柔和、无闪烁。适合慢歌、民谣、轻音乐。',
-  word: '以歌词为画面主体：字墙、海报排版、网点印刷。适合说唱。',
-  ink: '封面呈现为宣纸水墨，歌词竖排，以墨迹晕染转场。适合国风、古风。',
+  auto: '按网易云的曲风标签选择，没有标签时依据鼓点判断。',
+  pulse: '踩拍硬切，drop 处进入推进隧道。适合电子、舞曲、摇滚。',
+  ballad: '长镜头、柔光，转场柔和。适合慢歌、民谣、轻音乐。',
+  word: '以歌词为画面主体。适合说唱。',
+  ink: '宣纸水墨，歌词竖排。适合国风、古风。',
 };
 
 /** Which styles use each plate (any section, any cover, with or without lyrics); every style opens on the cards. */
@@ -1138,7 +1137,9 @@ function gpuInfo(): { webgl2: boolean; name: string } {
     gl.getExtension('WEBGL_lose_context')?.loseContext();
     // “ANGLE (NVIDIA, NVIDIA GeForce RTX 5070 Ti Laptop GPU (0x00002F58) Direct3D11 vs_5_0 ps_5_0, D3D11)” → the model.
     const m = raw.match(/^ANGLE \([^,]*, (.+?)(?: \(0x[0-9a-f]+\))?(?: Direct3D[^,]*)?, [^,]*\)$/i);
-    return (gpu = { webgl2: true, name: (m ? m[1] : raw).trim().slice(0, 64) });
+    // (Without the trademark marks and a trailing “GPU”, it fits the status row's line.)
+    const name = (m ? m[1] : raw).replace(/\((?:R|TM)\)/gi, '').replace(/\s+GPU$/i, '').trim();
+    return (gpu = { webgl2: true, name: name.slice(0, 64) });
   } catch { return (gpu = { webgl2: false, name: '' }); }
 }
 
@@ -1250,7 +1251,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     const stepper = el('div', 'bmv-stepper');
     const input = el('input');
     input.inputMode = 'numeric';
-    input.title = '可直接输入；↑ ↓ 键每次调整 10 ms';
+    input.title = `可直接输入，↑ ↓ 键每次调整 ${by} ms`;
     const zero = link('归零', () => apply(0));
     const show = () => { const ms = get(); input.value = (ms > 0 ? '+' : '') + ms; zero.style.visibility = ms ? 'visible' : 'hidden'; };
     const apply = (ms: number) => {
@@ -1303,7 +1304,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   // Picture delay, no slider: − and + step 10 ms (held, they repeat), the number can be typed, and back to zero.
   const latencyRow = (host: HTMLElement, brief = false) => row(host, '画面延迟', msStepper(() => config.latencyMs, ms => { config.latencyMs = ms; plugin.setConfig('latencyMs', ms); onChange(config); },
     LATENCY_MIN, LATENCY_MAX, 10, '画面提前 10 ms', '画面推后 10 ms'), brief ? '画面早于声音时调大' : undefined,
-  brief ? undefined : compact ? '画面早于声音时调大（蓝牙耳机通常需 +150～250 ms），可在播放中实时调整' : '画面早于声音时调大（蓝牙耳机通常需 +150～250 ms）；也可在 MV 页右上角的设置中实时调整');
+  brief ? undefined : '画面早于声音时调大，蓝牙耳机通常需 +150～250 ms');
   const qualityRow = (host: HTMLElement) => row(host, '画质', segmented('quality', [['high', '高'], ['mid', '中'], ['low', '低']]), '画面卡顿时调低');
   // On the MV page: the playing song arranged anew, at once.
   const rerollRow = (host: HTMLElement) => {
@@ -1312,7 +1313,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
       again.textContent = '已重新编排';
       window.setTimeout(() => { again.textContent = '换一种'; }, 1400);
     });
-    return row(host, '重新编排', again, '立即重新编排正在播放的歌曲');
+    return row(host, '重新编排', again);
   };
   // On the MV page: this song's own lyric delay (some songs' lyrics run late or early on NetEase's side).
   const lyricDelayRow = (host: HTMLElement, s: { id: number; name: string }, brief = false) => {
@@ -1322,26 +1323,26 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
       plugin.setConfig('lyricDelays', JSON.stringify(config.lyricDelays));
       onChange(config);
     }, -3000, 3000, 50, '歌词提前 50 ms', '歌词推后 50 ms'), brief ? '仅对这首歌生效' : undefined,
-    brief ? undefined : `仅对当前歌曲（${s.name}）生效：歌词晚于演唱时调小，早于演唱时调大`);
+    brief ? undefined : `仅对“${s.name}”生效，歌词晚于演唱时调小`);
   };
   const QUALITY_NAME: Record<Config['quality'], string> = { high: '高', mid: '中', low: '低' };
 
   page('picture', '画面', () => (config.style === 'auto' ? '自动' : STYLES[config.style].name));
   const picture = group(section('画面'));
   styleRow(picture);
-  row(picture, '画面编排', segmented('arrange', [['random', '每次不同'], ['fixed', '固定']]), '同一首歌再次播放时，场景、镜头与画风是否重新编排');
+  row(picture, '画面编排', segmented('arrange', [['random', '每次不同'], ['fixed', '固定']]), '再次播放时是否重新编排');
   latencyRow(picture);
 
   page('perf', '性能', () => `${QUALITY_NAME[config.quality]}画质` + (config.fpsCap ? `，${config.fpsCap} 帧` : ''));
   const perf = group(section('性能'));
   qualityRow(perf);
-  row(perf, '帧率上限', segmented('fpsCap', [[0, '不限'], [240, '240'], [120, '120'], [60, '60'], [30, '30']]), undefined, '限制每秒绘制的帧数；高刷新率屏幕可选 120 或 240，30 帧可明显降低显卡占用');
-  row(perf, '提前分析下一首', toggle('prefetch', '提前分析下一首'), '播放时在后台分析播放列表中的下一首，切歌后无需等待；会占用部分 CPU');
+  row(perf, '帧率上限', segmented('fpsCap', [[0, '不限'], [240, '240'], [120, '120'], [60, '60'], [30, '30']]), undefined, '30 帧可明显降低显卡占用');
+  row(perf, '提前分析下一首', toggle('prefetch', '提前分析下一首'), '切歌时无需等待，会占用部分 CPU');
 
   const keysPage = page('keys', '界面与快捷键', () => keyLabel(config.keys.toggle));
   const shell = group(section('界面'));
-  const mvButtonRow = row(shell, 'MV 按钮', toggle('button', 'MV 按钮'), `显示在播放栏上方；关闭后可用 ${keyLabel(config.keys.toggle)} 打开`);
-  row(shell, '控制栏', toggle('controls', '控制栏'), 'MV 页底部的播放控制，鼠标静止时自动隐藏');
+  const mvButtonRow = row(shell, 'MV 按钮', toggle('button', 'MV 按钮'), `关闭后可用 ${keyLabel(config.keys.toggle)} 打开`);
+  row(shell, '控制栏', toggle('controls', '控制栏'), 'MV 页底部的播放控制');
 
   // The optional aligner pack: its state follows the download while the page is open.
   let packState: PackState = { kind: 'checking' };
@@ -1399,14 +1400,14 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     if (st.kind === 'checking') { state('正在检查…'); set?.('off', '正在检查'); }
     else if (st.kind === 'none') {
       ctl.append(button(full ? '下载对齐包（约 400 MB）' : '下载（约 400 MB）', () => void installPack()));
-      set?.('off', '未安装：仅有逐句歌词的歌曲按音节估算每个字的时间');
+      set?.('off', '未安装：逐句歌词按音节估算每个字');
     } else if (st.kind === 'installing') {
       const downloading = st.total && st.note.indexOf('正在下载') === 0;
       ctl.append(meter(downloading ? `正在下载 ${mb(st.done)} / ${mb(st.total)} MB` : st.note, st.total ? st.done / st.total : 0));
       set?.('off', '正在安装');
     } else if (st.kind === 'ready') {
       if (full) { state('已安装'); ctl.append(button('删除', () => void removePack())); }
-      set?.('ok', '已安装：仅有逐句歌词的歌曲按音频对齐每个字');
+      set?.('ok', '已安装：逐句歌词按音频对齐每个字');
     } else if (st.kind === 'removing') { state('正在删除…'); set?.('off', '正在删除'); }
     else {
       state('安装失败：' + st.message, true);
@@ -1465,7 +1466,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   pack.style.margin = '0';
   packInto(pack, true);
   row(words, '逐字对齐', pack, undefined,
-    '适用于仅有逐句歌词的歌曲：按音频识别每个字的演唱时间，替代按音节的估算。首次播放时在本机后台分析，耗时数秒至半分钟，结果缓存后复用。全程本地运行，不上传数据。');
+    '只有逐句歌词的歌曲，按音频对齐每个字的演唱时间。在本机运行，每首歌首次播放时分析数秒至半分钟。');
 
   let updateState: UpdateState = { kind: 'idle' };
   watchUpdate(st => { updateState = st; });
@@ -1477,17 +1478,17 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   upCtl.style.margin = '0';
   const upRow = row(updates, '版本', upCtl, ' ');
   updateInto(upRow, upCtl, upRow.querySelector('.bmv-row-sub') as HTMLElement);
-  row(updates, '自动检查更新', toggle('autoUpdate', '自动检查更新'), '每天查询一次 GitHub，有新版本时弹出提醒');
+  row(updates, '自动检查更新', toggle('autoUpdate', '自动检查更新'), '每天检查一次，有新版本时提醒');
   const about = group(section('关于'));
   const REPO = 'https://github.com/xiaoming6680/NCM-BetterMV';
   row(about, '项目主页', link('打开', () => openPage(REPO)), '使用说明、下载与源代码');
-  row(about, '更新记录', link('查看', () => openPage(`${REPO}/blob/main/CHANGELOG.md`)), '每个版本的变化');
-  row(about, '问题反馈', link('反馈', () => openPage(`${REPO}/issues`)), '附上歌曲名和截图更容易查明原因');
+  row(about, '更新记录', link('查看', () => openPage(`${REPO}/blob/main/CHANGELOG.md`)));
+  row(about, '问题反馈', link('反馈', () => openPage(`${REPO}/issues`)), '请附上歌曲名和截图');
 
   // The keys: a click on one, then the new keys pressed; one already in use by another action trades places with it.
   const KEY_ROWS: Array<[KeyAction, string, string?]> = [
-    ['toggle', '打开 / 退出 MV 页', '在网易云的任何页面都可用；也可点击播放栏上方的 MV 按钮'],
-    ['exit', '退出 MV 页', '设置或播放列表打开时，先收起面板'],
+    ['toggle', '打开 / 退出 MV 页', '网易云的任何页面都可用'],
+    ['exit', '退出 MV 页', '面板打开时先收起面板'],
     ['playPause', '播放 / 暂停'],
     ['back', '快退 5 秒'],
     ['forward', '快进 5 秒'],
@@ -1497,7 +1498,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   const keyName = (a: KeyAction) => KEY_ROWS.find(r => r[0] === a)![1];
   const keyButtons = new Map<KeyAction, HTMLButtonElement>();
   const keysNote = el('div', 'bmv-sec-note');
-  const keysTip = '点击后按下新的组合键，Esc 取消；与其他动作重复时两者互换。网易云自身的快捷键（如 Ctrl+← → 切歌）同样有效。';
+  const keysTip = '点击后按下新的组合键，Esc 取消。';
   keysNote.textContent = keysTip;
   let noteTimer = 0;
   const saveKeys = () => {
@@ -1507,7 +1508,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     sync();
     // Where the opening key is named: the MV button's row and the button's own tip.
     const sub = mvButtonRow.querySelector('.bmv-row-sub');
-    if (sub) sub.textContent = `显示在播放栏上方；关闭后可用 ${keyLabel(config.keys.toggle)} 打开`;
+    if (sub) sub.textContent = `关闭后可用 ${keyLabel(config.keys.toggle)} 打开`;
     document.querySelectorAll<HTMLElement>('.bmv-mvbtn').forEach(b => { b.title = mvButtonTitle(config.keys.toggle); });
   };
   const paintKey = (a: KeyAction) => {
@@ -1585,7 +1586,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   const aside = el('div');
   aside.append(count, allOn);
   page('scenes', '场景', () => `已开启 ${SCENES.length - config.off.length} / ${SCENES.length}`);
-  const scenes = section('场景', aside, '点击选择开启或关闭，再点击底部的“应用”生效；鼠标悬停可查看说明。关闭的场景由同一段落的其他场景替代。');
+  const scenes = section('场景', aside, '点击开启或关闭，点击“应用”后生效。悬停查看说明。');
   const paints: Array<() => void> = [];
   let warnTimer = 0;
   const applyBar = el('div', 'bmv-apply');
@@ -1718,7 +1719,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
 
   // Looks: each one on or off, like the scenes (applied with them).
   page('looks', '画风', () => `已开启 ${LOOKS.length - config.offLooks.length} / ${LOOKS.length}`);
-  const looks = section('画风', undefined, '部分段落会改用另一种画风呈现，使整首歌不止一种面貌。关闭的画风不再使用。');
+  const looks = section('画风', undefined, '部分段落改用以下画风呈现。');
   const lookCard = (info: typeof LOOKS[number], b: HTMLElement) => showSketch(info, `look-${info.id}`, info.styles, offLooks.has(info.id), b);
   group(looks).append(tiles(LOOKS, info => `look-${info.id}`, info => offLooks.has(info.id), (info, b) => {
     if (offLooks.has(info.id)) offLooks.delete(info.id); else offLooks.add(info.id);
@@ -1744,23 +1745,23 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     // 开始使用: how to open the MV, whether everything it needs works, the two most-used settings, the scenes.
     const start = page('start', '开始使用');
     pages.unshift(pages.pop()!);
-    start.root.append(el('div', 'bmv-pg-lead', '为正在播放的歌曲实时生成 3D MV：以封面构建场景，按歌曲结构剪辑镜头，按曲风自动选择风格。'));
+    start.root.append(el('div', 'bmv-pg-lead', '为正在播放的歌曲实时生成 3D MV。'));
     const cols = el('div', 'bmv-cols');
     const colA = el('div', 'bmv-col'), colB = el('div', 'bmv-col');
     cols.append(colA, colB);
     start.root.append(cols);
 
     into = colA;
-    const open = group(section('打开 MV', undefined, '先在网易云中播放一首歌。首次打开一首歌时会先分析整首歌曲，约需数秒。'));
+    const open = group(section('打开 MV', undefined, '先播放一首歌。每首歌首次打开时需分析数秒。'));
     // The button as it looks above NetEase's play bar.
     const sample = el('span', 'bmv-mvbtn-sample');
     sample.innerHTML = `${icon('play', 11)}<span>MV</span>`;
-    const buttonRow = row(open, '点击播放栏上方的按钮', sample, ' ');
+    const buttonRow = row(open, '播放栏上方的按钮', sample, ' ');
     const buttonSub = buttonRow.querySelector('.bmv-row-sub') as HTMLElement;
     const keyHost = el('div', 'bmv-row-c');
     const exitHost = el('div', 'bmv-row-c');
     keyHost.style.margin = exitHost.style.margin = '0';
-    row(open, '或按快捷键', keyHost, '任何页面都可用');
+    row(open, '快捷键', keyHost, '任何页面都可用');
     row(open, '退出 MV 页', exitHost, '音乐继续播放');
     synced.push(() => {
       sample.style.display = config.button ? '' : 'none';
@@ -1781,13 +1782,13 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     checkStatus = () => {
       if (updateState.kind === 'idle' && config.autoUpdate) void checkUpdate(true);
       const g = gpuInfo();
-      gpuRow.set(g.webgl2 ? 'ok' : 'warn', g.webgl2 ? (g.name ? `WebGL 2 可用：${g.name}` : 'WebGL 2 可用') : '不支持 WebGL 2，无法生成画面；请更新显卡驱动');
+      gpuRow.set(g.webgl2 ? 'ok' : 'warn', g.webgl2 ? (g.name || '可用') : '不支持 WebGL 2，请更新显卡驱动');
       if (!status.cacheDir) { cache.set('off', '在网易云中查看'); return; }
       void status.cacheDir().then(dir => {
-        if (dir === undefined) cache.set('off', '网易云尚未就绪，稍后再查看');
+        if (dir === undefined) cache.set('off', '网易云尚未就绪');
         else if (dir) cache.set('ok', dir.replace(/\//g, '\\'));
-        else cache.set('warn', '未找到缓存目录：将改为在线获取整首歌，需登录网易云账号');
-      }, () => cache.set('warn', '无法读取缓存目录：将改为在线获取整首歌'));
+        else cache.set('warn', '未找到缓存目录，将在线获取歌曲（需登录网易云）');
+      }, () => cache.set('warn', '无法读取缓存目录，将在线获取歌曲'));
     };
     cache.set('off', '正在查找…');
     gpuRow.set('off', '正在检查…');

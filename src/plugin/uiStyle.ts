@@ -208,7 +208,7 @@ const CSS = `
 .bmv-pg[data-page=start],.bmv-pg[data-page=scenes],.bmv-pg[data-page=looks],.bmv-set.is-compact .bmv-pg{max-width:none}
 .bmv-pg-title{display:flex;align-items:baseline;gap:12px;padding:0 4px;font:700 20px/1.2 var(--display)}
 .bmv-pg-title .bmv-sec-aside{font:400 12px/1.4 var(--font)}
-.bmv-pg-lead{padding:4px 4px 0;color:var(--t2)}
+.bmv-pg-lead{padding:4px 4px 0;line-height:1.5;color:var(--t2)}
 .bmv-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(236px,1fr));column-gap:20px;align-items:start}
 .bmv-set.is-page.is-narrow{flex-direction:column}
 .bmv-set.is-narrow .bmv-side{width:auto;padding:8px 10px;box-shadow:inset 0 -.5px 0 var(--sep)}
@@ -227,7 +227,7 @@ const CSS = `
 .bmv-sec-h{display:flex;align-items:center;gap:10px;min-height:22px;padding:0 4px 7px}
 .bmv-sec-title{font-size:13px;font-weight:600}
 .bmv-sec-aside{display:flex;align-items:center;gap:12px;margin-left:auto;font-size:12px;color:var(--t2)}
-.bmv-sec-note{padding:0 4px 8px;font-size:12px;color:var(--t2)}
+.bmv-sec-note{padding:0 4px 8px;font-size:12px;line-height:1.5;color:var(--t2)}
 .bmv-sub{padding:12px 4px 6px;font-size:12px;color:var(--t2)}
 .bmv-group{border-radius:10px;background:var(--group);box-shadow:inset 0 0 0 .5px var(--line)}
 .bmv-row{position:relative;display:flex;flex-wrap:wrap;align-items:center;column-gap:16px;row-gap:8px;min-height:44px;padding:10px 14px}
@@ -235,9 +235,9 @@ const CSS = `
 .bmv-row-l{flex:1 1 96px;min-width:0}
 .bmv-set.is-compact .bmv-row-l{flex-basis:56px}
 .bmv-row-label{font-weight:500}
-.bmv-row-sub{margin-top:1px;font-size:12px;color:var(--t2)}
+.bmv-row-sub{margin-top:1px;font-size:12px;line-height:1.5;color:var(--t2)}
 .bmv-row-c{flex:none;display:flex;align-items:center;gap:8px;margin-left:auto;max-width:100%}
-.bmv-row-note{flex:1 1 100%;margin-top:-2px;font-size:12px;color:var(--t2)}
+.bmv-row-note{flex:1 1 100%;margin-top:-2px;font-size:12px;line-height:1.5;color:var(--t2)}
 
 .bmv-segc{display:inline-flex;gap:2px;padding:2px;border-radius:8px;background:var(--track)}
 .bmv-segc button{height:24px;padding:0 12px;border-radius:6px;font-size:12px;color:var(--t1);white-space:nowrap;transition:background-color .2s,box-shadow .2s}
