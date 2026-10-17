@@ -235,13 +235,14 @@ const WORD_GENRES = /说唱|嘻哈|饶舌|Rap|Hip[\s-]?Hop|Drill|Grime/i;
 const INK_GENRES = /国风|古风|中国风|戏腔|戏曲|民族/;
 const PULSE_GENRES = /电子|舞曲|电音|浩室|陷阱|Trap|Dubstep|Techno|Trance|摇滚|金属|朋克|Phonk/i;
 const BALLAD_GENRES = /民谣|古典|轻音乐|新世纪|纯音乐|氛围|爵士|蓝调/;
-const CALM_TAGS = /治愈|平静|伤感|浪漫|放松|安静|思念|孤独|温暖|感动|怀旧|深夜|失恋|抒情|慵懒/;
-const LIVELY_TAGS = /活力|燃|兴奋|激昂|律动|派对|运动|动感|嗨/;
+const CALM_TAGS = /治愈|平静|伤感|悲伤|苦情|抑郁|浪漫|放松|安静|冥想|助眠|思念|孤独|温暖|感动|怀旧|深夜|失恋|抒情|慵懒/;
+const LIVELY_TAGS = /活力|燃|热血|兴奋|激昂|欢快|狂欢|律动|派对|夜店|运动|有氧|动感|嗨/;
 
 /**
- * NetEase's genre and mood tags first (they are curated and reliable); the audio only when a song has none:
- * drops or a steady drum pulse mean pulse, anything else gets the ballad language. Rap gets the word style when it
- * has lyrics to set; 国风 gets the ink style unless it is dance music.
+ * NetEase's genre and mood tags first (they are curated and reliable); the audio when they don't decide (no genre,
+ * or one none of the lists name with no mood tags or mixed ones): drops or a steady drum pulse mean pulse, anything
+ * else gets the ballad language. Rap gets the word style when it has lyrics to set; 国风 gets the ink style unless it
+ * is dance music.
  */
 export function chooseStyle(a: Analysis, wiki?: { genres: string[]; tags: string[]; bpm?: number }, hasLyrics = true): StyleChoice {
   const strong = (hits: Array<[number, number]>) => hits.filter(h => h[1] > 0.3).length;
@@ -258,13 +259,18 @@ export function chooseStyle(a: Analysis, wiki?: { genres: string[]; tags: string
     if (INK_GENRES.test(genres) && !PULSE_GENRES.test(genres)) return { style: INK, reason: byGenre, features };
     if (BALLAD_GENRES.test(genres) && !PULSE_GENRES.test(genres)) return { style: BALLAD, reason: byGenre, features };
     if (PULSE_GENRES.test(genres) || WORD_GENRES.test(genres)) return { style: PULSE, reason: byGenre, features };
-    // Pop and the rest: mood tags, then tempo.
+    // Pop and the rest: mood tags, then the audio. (Not the wiki's BPM: it is often half the tempo people cite, and
+    // put 170–190 BPM rhythm-game songs tagged 平静 and 活力 at once among the ballads.)
     const calm = CALM_TAGS.test(tags), lively = LIVELY_TAGS.test(tags);
     if (calm && !lively) return { style: BALLAD, reason: `标签：${wiki!.tags.slice(0, 2).join('、')}`, features };
     if (lively && !calm) return { style: PULSE, reason: `标签：${wiki!.tags.slice(0, 2).join('、')}`, features };
-    return bpm < 100 ? { style: BALLAD, reason: `${genre}，${Math.round(bpm)} BPM`, features } : { style: PULSE, reason: `${genre}，${Math.round(bpm)} BPM`, features };
+    return byAudio(`${genre}，`);
   }
-  if (drops > 0) return { style: PULSE, reason: '含 drop', features };
-  if (drumsPerSecond >= 1.6) return { style: PULSE, reason: '鼓点密集', features };
-  return { style: BALLAD, reason: '鼓点稀疏、无 drop', features };
+  return byAudio('');
+
+  function byAudio(prefix: string): StyleChoice {
+    if (drops > 0) return { style: PULSE, reason: `${prefix}含 drop`, features };
+    if (drumsPerSecond >= 1.6) return { style: PULSE, reason: `${prefix}鼓点密集`, features };
+    return { style: BALLAD, reason: `${prefix}鼓点稀疏、无 drop`, features };
+  }
 }
