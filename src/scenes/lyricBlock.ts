@@ -1,4 +1,4 @@
-// The sung line as one block of type standing in the world (docs/TREATMENT.md, 歌词重做：整句、字体、效果).
+// The sung line as one block of type standing in the world (docs/TREATMENT.md, 整句字块、字体与效果).
 // The chunked signs (LyricGates) put two or three words on screen at a time, piled one sign onto the next and, to
 // stay readable, rode with the camera while sung (the user, 2026-10-13: “歌词表现的方式已经开始不行了”). Here the
 // whole line is set as one piece — rows balanced, the words the singer holds set bigger — each word still coming on

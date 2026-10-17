@@ -128,7 +128,7 @@ OBS 先于网易云打开时，浏览器来源加载不到画面，之后也不�
 
 ## 开发者
 
-需要 [Bun](https://bun.sh)。开发说明、风格手册和验证记录见 [docs/](docs/)。
+需要 [Bun](https://bun.sh)。开发文档见 [docs/](docs/)。
 
 ```sh
 bun install
