@@ -6,7 +6,8 @@
 // again as it falls apart, on round until the shot ends.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, lerp, outExpo, rng, smooth, snap } from './types.ts';
+import { clamp01, lerp, outExpo, punch, rng, smooth, snap } from './types.ts';
+import { Accents } from './hits.ts';
 import { LineBatch } from '../render/lines.ts';
 import { LyricRig } from './lyricRig.ts';
 import { voiceFaces } from './lyricBlock.ts';
@@ -17,9 +18,11 @@ const EYE = 6; // the magic camera: (0, 0, EYE) looking at the origin
 const NB = 64;
 
 // The shards also play the song: across the cover, left to right, run the bands from the bass to the treble, and each
-// shard slides along its own line of sight from the magic camera as its band gets louder, lighting up as it goes. A
-// move along the line of sight changes nothing from the magic angle — there the cover still closes pixel for pixel —
-// but from anywhere else the cloud of shards is a spectrum analyser in depth.
+// shard slides along its own line of sight from the magic camera as its band comes in (an onset more than a level: in
+// a loud passage every band sits high, and the shards stood out all together, hits or not), lighting up as it goes,
+// and on every hit the whole cloud springs back along the lines of sight. A move along the line of sight changes
+// nothing from the magic angle — there the cover still closes pixel for pixel — but from anywhere else the cloud of
+// shards is a spectrum analyser in depth.
 export class AlignScene implements MvScene {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(40, 16 / 9, 0.05, 100);
@@ -28,7 +31,9 @@ export class AlignScene implements MvScene {
   private bases: Array<{ tri: Array<[number, number]>; s: number; band: number }> = [];
   private geo: THREE.BufferGeometry;
   private spec: Spectrogram;
+  private hits: Accents;
   private level = new Float32Array(NB);
+  private past = new Float32Array(NB * 21);
   private lines = new LineBatch(3000);
   private rig: LyricRig;
   private resolution = new THREE.Vector2(1920, 1080);
@@ -41,6 +46,7 @@ export class AlignScene implements MvScene {
     this.scene.background = palette.ink.clone();
     const random = rng(0x7a1e);
     this.spec = Spectrogram.of(init.stereo, init.music.duration + 8, NB, 30);
+    this.hits = new Accents(init.music);
     const uv: number[] = [];
     for (let j = 0; j < ROWS; j++) for (let i = 0; i < COLS; i++) {
       const x0 = -HALF + (i / COLS) * 2 * HALF, x1 = -HALF + ((i + 1) / COLS) * 2 * HALF;
@@ -98,24 +104,40 @@ export class AlignScene implements MvScene {
     this.spec.prefetch(t, 0.8);
   }
 
-  /** Each band's peak of the last 0.15 s, falling away over it (a pure function of t), stretched to 0..1. */
+  /**
+   * Each band, 0..1: its onset (how far it is above the third of a second before), held and dying away over a quarter
+   * second, plus a little of its level (the peak of the last 0.3 s, falling away). A pure function of t, falling
+   * between columns too, so the shards don't step at 30 a second.
+   */
   private levels(t: number): Float32Array {
-    const c0 = Math.floor(t * SPEC_COLS), out = this.level.fill(0);
+    const x = t * SPEC_COLS, c0 = Math.floor(x), out = this.level.fill(0), past = this.past;
     if (!this.init.stereo) return out;
-    for (let k = 0; k < 9; k++) {
-      const col = this.spec.column(c0 - k);
-      for (let b = 0; b < NB; b++) out[b] = Math.max(out[b], col[b] - k * 0.03);
+    // Columns c0 − 20 … c0, oldest first.
+    for (let j = 0; j <= 20; j++) past.set(this.spec.column(c0 - 20 + j), j * NB);
+    for (let b = 0; b < NB; b++) {
+      let level = 0, onset = 0;
+      for (let k = 0; k < 9; k++) {
+        const j = 20 - k, v = past[j * NB + b], age = (x - (c0 - k)) / SPEC_COLS;
+        // The third of a second before this column, leaving out the two just before it (the attack's own ramp).
+        let base = 0;
+        for (let i = j - 12; i <= j - 3; i++) base += past[i * NB + b];
+        level = Math.max(level, v - 0.9 * age);
+        onset = Math.max(onset, Math.max(0, v - base / 10 - 0.03) * Math.exp(-age / 0.12));
+      }
+      out[b] = clamp01(0.4 * clamp01((level - 0.4) / 0.55) + 2.2 * onset);
     }
-    for (let b = 0; b < NB; b++) out[b] = clamp01((out[b] - 0.4) / 0.55);
     return out;
   }
 
-  /** Every shard slid along its line of sight from the magic eye by its band's level, and lit by it. */
-  private place(level: Float32Array): void {
+  /**
+   * Every shard slid along its line of sight from the magic eye by its band's level and lit by it, and all of them by
+   * `knock` (the hits).
+   */
+  private place(level: Float32Array, knock = 0): void {
     const pos = this.geo.getAttribute('position') as THREE.BufferAttribute, col = this.geo.getAttribute('color') as THREE.BufferAttribute;
     const on = this.init.stereo ? 1 : 0;
     this.bases.forEach((b, i) => {
-      const v = level[b.band], s = b.s * (1 + 0.32 * v * on), light = on ? 0.55 + 0.75 * v : 1;
+      const v = level[b.band], s = b.s * (1 + 0.32 * v * on + 0.1 * knock), light = on ? 0.55 + 0.75 * v : 1;
       for (let k = 0; k < 3; k++) {
         const [x, y] = b.tri[k];
         this.pieces[i][k].set(x * s, y * s, EYE - EYE * s);
@@ -131,8 +153,12 @@ export class AlignScene implements MvScene {
     const random = rng(shot.seed);
     const side = random() < 0.5 ? -1 : 1;
     const beat = 60 / Math.max(40, music.at(t).bpm), bar = beat * music.meter;
-    // The magic moment: the downbeat about a bar into the shot (or its middle).
+    // The magic moment: the strongest hit round the downbeat about a bar into the shot, so the cover closes on a hit
+    // the song really has (the grid's downbeat alone often had none: syncopated kicks fall between); else that
+    // downbeat, or the shot's middle.
     let tm = music.downbeatAtOrAfter(shot.start + bar * 0.9);
+    const hit = this.hits.strongest(tm - beat * 0.5, tm + beat);
+    if (hit < shot.end - beat * 0.5) tm = hit;
     if (!(tm < shot.end - beat * 0.5)) tm = (shot.start + shot.end) / 2;
     const whip = 0.32; // seconds of the whip onto the angle
     // Off-axis angles: drifting before, whipped to 0 on the beat, held a beat, drifting off after.
@@ -164,7 +190,7 @@ export class AlignScene implements MvScene {
     // The seams fade as the view comes round to the angle, so at it the cover reads whole.
     const aligned = 1 - clamp01(Math.hypot(th, ph) / 0.35);
     const level = this.levels(t);
-    this.place(level);
+    this.place(level, Math.min(1.5, this.hits.sum(t, 1.2, age => punch(age, 0.2, 0.04))));
     this.pieces.forEach(([a, b, c], i) => {
       // (A loud shard's seams burn brighter; at the angle they all fade so the cover reads whole.)
       const seamI = (0.04 + 0.5 * (1 - aligned)) * (0.5 + 1.2 * level[this.bases[i].band]);

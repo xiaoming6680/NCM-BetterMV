@@ -1,16 +1,20 @@
 // Particles: the cover as ~30 000 points of light that hold its picture and come apart with the music — all moved on
 // the GPU. hold: the picture in depth (bright pixels forward), drifting a little, the camera turning slowly round it.
-// burst: every downbeat the points blow outwards and fall back into the picture over the bar. vortex: they wheel
-// round the middle, the inner ones faster, flaring on the kicks. rain (ballad): they drift down off the picture and
-// come round again from the top. A cover on a plain ground (a white sheet with a figure on it, a black one with a
-// bright subject) keeps only its subject: the ground is left out, and a light ground becomes the paper they float on.
+// burst: on every hit (kick, snare, accent) the points blow outwards and fall back into the picture before the next.
+// vortex: they wheel round the middle, the inner ones faster, each hit turning them on a notch. rain (ballad): they
+// drift down off the picture, falling faster on each hit, and come round again from the top. All of it is timed to the
+// detected hits, not the beat grid (a swell from the downbeat over the bar peaked a beat and a half late, and in
+// syncopated songs most hits were nowhere near it). A cover on a plain ground (a white sheet with a figure on it, a
+// black one with a bright subject) keeps only its subject: the ground is left out, and a light ground becomes the
+// paper they float on.
 // The sound moves through the picture: out from the middle a point is further back in time (the spectrum flows outwards
 // across the cover, about two seconds to the edge), round it the bands run from the bass at the bottom to the treble
 // at the top (left and right mirrored); where its band was loud the point is lifted towards the camera and lights up.
 // So every kick is a swell running out through the picture, a held chord a raised ring, a quiet passage a flat print.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, inOutCubic, lerp, outExpo, rng } from './types.ts';
+import { clamp01, inOutCubic, lerp, outExpo, punch, rng, surge } from './types.ts';
+import { Accents } from './hits.ts';
 import { LyricRig } from './lyricRig.ts';
 import { voiceFaces } from './lyricBlock.ts';
 import { COLS, SpecRing, Spectrogram } from './viz.ts';
@@ -106,10 +110,12 @@ export class Particles implements MvScene {
   private height = 1080;
   private readonly onPaper: boolean;
   private ring: SpecRing;
+  private hits: Accents;
 
   constructor(private init: SceneInit, private look: 'pulse' | 'ballad' = 'pulse') {
     const { palette } = init;
     this.ring = new SpecRing(Spectrogram.of(init.stereo, init.music.duration + 8, NB, 30), RING);
+    this.hits = new Accents(init.music);
     const S = init.coverSize, px = init.coverPixels, random = rng(11), c = new THREE.Color();
     const ground = plainGround(px, S);
     // Ballads float the subject on the cover's own light ground; pulse always on ink, where it glows.
@@ -199,15 +205,21 @@ export class Particles implements MvScene {
     u.uVortex.value = 0;
     u.uRain.value = 0;
     u.uDrift.value = soft ? 1.4 : 1;
+    // Ballads move on their hits too, half as far.
+    const hv = soft ? 0.5 : 1;
     switch (shot.variant) {
       case 'burst': {
-        // Out on the downbeat, back into the picture across the bar.
-        const x = (info.inBar * beat) / (beat * music.meter);
-        u.uBurst.value = Math.sin(Math.PI * Math.min(1, x * 1.15)) * (0.35 + shot.section.energy * 0.65) * Math.pow(1 - x, 0.6);
+        // Out on each hit (all the way 60 ms after it), back into the picture within about a beat; hits close together
+        // add up to a bigger swell, never past twice one. One hit leaves the picture readable: blown all the way apart
+        // two or three times a second, it read as flicker.
+        const decay = Math.min(0.3, 0.55 * beat);
+        const b = this.hits.sum(t, 6 * decay, age => punch(age, decay, 0.06));
+        u.uBurst.value = hv * (0.1 + 0.18 * shot.section.energy) * 2 * (1 - Math.exp(-0.7 * b));
         break;
       }
-      case 'vortex': u.uVortex.value = since * (soft ? 0.25 : 0.6) + kick * 0.15; break;
-      case 'rain': u.uRain.value = since * 0.35; break;
+      // Each hit turns the wheel on a notch (its speed peaks 70 ms after the hit) and makes the rain fall a step.
+      case 'vortex': u.uVortex.value = since * (soft ? 0.25 : 0.6) + hv * 0.25 * this.hits.since(shot.start, t, age => surge(age, 0.07)); break;
+      case 'rain': u.uRain.value = since * 0.35 + hv * 0.25 * this.hits.since(shot.start, t, age => surge(age, 0.09)); break;
     }
     const cam = this.camera, side = random() < 0.5 ? -1 : 1;
     const a = side * lerp(0.35, -0.2, inOutCubic(k)), dist = lerp(9.5, 8.2, inOutCubic(k));
