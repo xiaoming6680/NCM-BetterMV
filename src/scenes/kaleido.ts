@@ -1,6 +1,7 @@
 // Kaleido: the cover folded into a kaleidoscope — 6, 8 or 12 mirrored segments, an endless zoom in log-polar
-// space, hairlines on the segment and band edges. Pulse: holds, then snaps half a segment on every beat
-// (the fold count changes on downbeats) and pushes in on kicks. Ballad: turns and drifts slowly.
+// space, hairlines on the segment and band edges. Pulse: holds, then snaps half a segment on every strong hit (not
+// the grid's beats: in a syncopated song half of those have no drum; the fold count changes on downbeats) and pushes
+// in on kicks. Ballad: turns and drifts slowly.
 // The words come out of the middle as arcs, a line to an arc, and are carried outwards and round by the zoom and the
 // turn like the bands of the pattern (and out of the way once the next line is up); the translation goes the same way
 // round the bottom.
@@ -12,6 +13,8 @@ import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, outExpo, rng, smooth, snap as snapTo } from './types.ts';
 import { LyricGates } from './lyricSpace.ts';
+import { Accents } from './hits.ts';
+import { lastIndex } from '../director/music.ts';
 import { VOICES, voiceFor } from './lyricBlock.ts';
 import { COLS, SpecRing, Spectrogram } from './viz.ts';
 
@@ -70,10 +73,19 @@ export class Kaleido implements MvScene {
   private material: THREE.ShaderMaterial;
   private gates: LyricGates;
   private ring: SpecRing;
+  /** The hits the pattern snaps on: strong ones, at least 0.45 of a beat apart. */
+  private snapT: Float64Array;
 
   constructor(private init: SceneInit, private look: 'pulse' | 'ballad' = 'pulse') {
     const { palette } = init;
     this.ring = new SpecRing(Spectrogram.of(init.stereo, init.music.duration + 8, NB, 30), RING);
+    const acc = Accents.of(init.music), snapT: number[] = [];
+    acc.times.forEach((x, i) => {
+      if (acc.strength[i] < 0.45) return;
+      const beat = 60 / Math.max(40, init.music.at(x).bpm);
+      if (!snapT.length || x - snapT[snapT.length - 1] >= 0.45 * beat) snapT.push(x);
+    });
+    this.snapT = Float64Array.from(snapT);
     const glow = palette.signal.clone().multiplyScalar(1 / Math.max(palette.signal.r, palette.signal.g, palette.signal.b, 1e-4));
     this.material = new THREE.ShaderMaterial({
       vertexShader, fragmentShader, depthTest: false, depthWrite: false,
@@ -105,6 +117,13 @@ export class Kaleido implements MvScene {
     this.ring.spec.prefetch(t, 0.8);
   }
 
+  /** Snaps made by time x: one per snap hit, each a `snap` over 0.3 of a beat. */
+  private snaps(x: number): number {
+    const s = this.snapT, i = lastIndex(s, x);
+    if (i < 0) return 0;
+    return i + snapTo((x - s[i]) / (0.3 * 60 / Math.max(40, this.init.music.at(s[i]).bpm)));
+  }
+
   update(ctx: FrameCtx): void {
     const { t, music, shot } = ctx;
     const u = this.material.uniforms;
@@ -112,16 +131,15 @@ export class Kaleido implements MvScene {
     const soft = this.look === 'ballad';
     const random = rng((info.bar * 2654435761) ^ shot.seed);
     const seg = soft ? 6 : [6, 8, 12][Math.floor(random() * 3)];
-    const kick = soft ? 0 : music.pulse('kick', t, 0.12);
+    const kick = (soft ? 0.5 : 1) * music.pulse('kick', t, 0.12);
     u.uSeg.value = seg;
     u.uSpiral.value = shot.variant === 'spiral' ? 1 : 0;
     if (soft) {
       u.uRot.value = t * 0.05;
       u.uZoom.value = t * 0.06;
     } else {
-      // Hold, then snap half a segment at every beat.
-      const i = Math.floor(info.pos), ph = info.pos - i;
-      u.uRot.value = (Math.PI / seg) * (i + snapTo(ph / 0.3));
+      // Hold, then snap half a segment on every strong hit.
+      u.uRot.value = (Math.PI / seg) * this.snaps(t);
       u.uZoom.value = info.pos * 0.3 + kick * 0.08;
     }
     u.uKick.value = kick;
@@ -132,14 +150,13 @@ export class Kaleido implements MvScene {
     u.uNow.value = now;
     u.uSecPerZ.value = soft ? 1.6 : 60 / Math.max(60, info.bpm) / 0.3;
     if (this.init.stereo) u.uSpec.value = soft ? 0.7 : 1;
-    u.uLines.value = soft ? 0.35 : 0.55 + kick * 0.4;
-    ctx.fx.bloom = soft ? 0.4 : 0.45 + kick * 0.3;
+    u.uLines.value = (soft ? 0.35 : 0.55) + kick * 0.4;
+    ctx.fx.bloom = (soft ? 0.4 : 0.45) + kick * 0.3;
     // The words ride the pattern: from where a chunk begins they grow as the bands do, and once it has been sung they
     // turn as the segments do (in pulse a beat's snap, whatever the fold count) — while sung it stays upright over the
     // top; they fade once they have grown past the frame.
     const grow = (a: number, b: number) => soft ? Math.exp(0.12 * (b - a)) : Math.exp(((music.beatPos(b) - music.beatPos(a)) * 0.3) / 1.25);
-    const snap = (x: number) => { const i = Math.floor(music.beatPos(x)), ph = music.beatPos(x) - i; return i + snapTo(ph / 0.3); };
-    const turn = (a: number, b: number) => soft ? -0.05 * (b - a) : -(Math.PI / 8) * (snap(b) - snap(a));
+    const turn = (a: number, b: number) => soft ? -0.05 * (b - a) : -(Math.PI / 8) * (this.snaps(b) - this.snaps(a));
     // Once the next line is up a line is carried out of its way, quickly (the ballad's push alone takes eight seconds to
     // the edge), easing into it so the growth never jumps.
     const out = (next: number) => { const x = t - next, w = 0.3; return x <= -w ? 0 : x >= w ? x : ((x + w) * (x + w)) / (4 * w); };

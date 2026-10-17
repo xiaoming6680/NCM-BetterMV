@@ -261,7 +261,7 @@ export class Flip implements MvScene {
     u.uReach.value = Math.hypot(viewW / 2 + Math.abs(ox), viewH / 2 + Math.abs(oy));
     u.uAlt.value = Math.floor(random() * 2);
     u.uDetail.value.set(0.3 + random() * 0.4, 0.3 + random() * 0.4);
-    u.uKick.value = soft ? 0 : music.pulse('kick', t, 0.1);
+    u.uKick.value = (soft ? 0.5 : 1) * music.pulse('kick', t, 0.1);
 
     const k = clamp01((t - shot.start) / Math.max(0.5, shot.end - shot.start));
     const sign = random() < 0.5 ? -1 : 1;

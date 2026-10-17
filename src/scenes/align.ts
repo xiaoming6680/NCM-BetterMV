@@ -46,7 +46,7 @@ export class AlignScene implements MvScene {
     this.scene.background = palette.ink.clone();
     const random = rng(0x7a1e);
     this.spec = Spectrogram.of(init.stereo, init.music.duration + 8, NB, 30);
-    this.hits = new Accents(init.music);
+    this.hits = Accents.of(init.music);
     const uv: number[] = [];
     for (let j = 0; j < ROWS; j++) for (let i = 0; i < COLS; i++) {
       const x0 = -HALF + (i / COLS) * 2 * HALF, x1 = -HALF + ((i + 1) / COLS) * 2 * HALF;

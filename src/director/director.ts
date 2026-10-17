@@ -17,8 +17,9 @@ import { SECTION_LABELS, type LyricLine, type Section } from '../types.ts';
 import { norm } from './lyrics.ts';
 import { STYLES, type Plate, type SongTraits, type Style } from '../style/style.ts';
 import { lastIndex } from './music.ts';
+import { Accents } from '../scenes/hits.ts';
 
-/** Cut times inside a section, on downbeats (and on beats at the end of a build). */
+/** Cut times inside a section, on downbeats or their bar's hit (and on beats at the end of a build). */
 function cutTimes(music: Music, style: Style, section: Section, next: Section | undefined): number[] {
   const beats = Array.from(music.beats).filter(b => b > section.start + 0.05 && b < section.end - 0.05);
   const downs = Array.from(music.downbeats).filter(d => d > section.start + 0.05 && d < section.end - 0.05);
@@ -27,9 +28,18 @@ function cutTimes(music: Music, style: Style, section: Section, next: Section | 
   const hero = style.heroBars?.(section) ?? per;
   const rising = style.accelerate && !!next && next.energy > section.energy + 0.08 && section.label !== 'intro';
   const accelFrom = rising ? Math.max(0, downs.length + 1 - 4) : Infinity;
+  // A cut on a downbeat goes to that bar's hit (the strongest from 0.4 beat before to half a beat after), so it lands
+  // on a drum: in a syncopated song the grid's downbeat often has none.
+  const barHits = Accents.of(music).barHits();
+  const onHit = (d: number) => {
+    const beat = 60 / Math.max(40, music.at(d).bpm), i = lastIndex(barHits, d + 0.5 * beat);
+    return i >= 0 && barHits[i] >= d - 0.4 * beat && barHits[i] > section.start + 0.12 && barHits[i] < section.end - 0.12 ? barHits[i] : d;
+  };
   for (let i = 0; i < downs.length; i++) {
     const bar = i + 1;
-    if (bar >= accelFrom || (bar >= hero && bar % per === 0)) cuts.push(downs[i]);
+    // (Not the speeding-up cuts of a build: they run on every beat, and a moved one would leave a sliver of a shot.)
+    if (bar >= accelFrom) cuts.push(downs[i]);
+    else if (bar >= hero && bar % per === 0) cuts.push(onHit(downs[i]));
   }
   if (rising) {
     const lastTwo = downs.length >= 2 ? downs[downs.length - 2] : section.start;
@@ -606,7 +616,7 @@ export class Director {
    * Post-effect moments laid over the scenes' own settings, by section and beat. Pulse: drops trail light behind
    * the line plates, flash a negative on strong snares in their second half and mirror some unsung shots; the last
    * bar of a build pulses gently on the eighths; a drop resolves out of big pixels on its first beat; breaks turn duotone
-   * (the cover's ink → signal), bridges half so; choruses trail a little after each downbeat. Ballad: long soft
+   * (the cover's ink → signal), bridges half so; choruses trail a little after each bar's hit. Ballad: long soft
    * trails in choruses, a light duotone in bridges; no negatives, strobes or mirrors.
    */
   private grade(t: number, shot: Shot, fx: Fx, beat: number): void {
@@ -655,7 +665,8 @@ export class Director {
       case 'break': fx.duotone = Math.max(fx.duotone, 0.6); fx.scan = Math.max(fx.scan, 0.15); break;
       case 'bridge': fx.duotone = Math.max(fx.duotone, 0.4); break;
       case 'chorus': {
-        const sinceDown = (info.inBar % m.meter) * beat;
+        // From the bar's hit (none where the bar starts on no drum).
+        const sinceDown = Accents.of(m).sinceBar(t);
         if (sparse && sinceDown < beat) fx.echo = Math.max(fx.echo, 0.6 * (1 - sinceDown / beat));
         break;
       }

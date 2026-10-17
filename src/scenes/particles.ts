@@ -115,7 +115,7 @@ export class Particles implements MvScene {
   constructor(private init: SceneInit, private look: 'pulse' | 'ballad' = 'pulse') {
     const { palette } = init;
     this.ring = new SpecRing(Spectrogram.of(init.stereo, init.music.duration + 8, NB, 30), RING);
-    this.hits = new Accents(init.music);
+    this.hits = Accents.of(init.music);
     const S = init.coverSize, px = init.coverPixels, random = rng(11), c = new THREE.Color();
     const ground = plainGround(px, S);
     // Ballads float the subject on the cover's own light ground; pulse always on ink, where it glows.
@@ -207,18 +207,17 @@ export class Particles implements MvScene {
     u.uDrift.value = soft ? 1.4 : 1;
     // Ballads move on their hits too, half as far.
     const hv = soft ? 0.5 : 1;
+    // The blow of the hits: out on each (all the way 60 ms after it), back into the picture within about a beat; hits
+    // close together add up to a bigger swell, never past twice one. One hit leaves the picture readable: blown all
+    // the way apart two or three times a second, it read as flicker.
+    const decay = Math.min(0.3, 0.55 * beat);
+    const blow = hv * (0.12 + 0.22 * shot.section.energy) * 2 * (1 - Math.exp(-0.7 * this.hits.sum(t, 6 * decay, age => punch(age, decay, 0.06))));
     switch (shot.variant) {
-      case 'burst': {
-        // Out on each hit (all the way 60 ms after it), back into the picture within about a beat; hits close together
-        // add up to a bigger swell, never past twice one. One hit leaves the picture readable: blown all the way apart
-        // two or three times a second, it read as flicker.
-        const decay = Math.min(0.3, 0.55 * beat);
-        const b = this.hits.sum(t, 6 * decay, age => punch(age, decay, 0.06));
-        u.uBurst.value = hv * (0.1 + 0.18 * shot.section.energy) * 2 * (1 - Math.exp(-0.7 * b));
-        break;
-      }
-      // Each hit turns the wheel on a notch (its speed peaks 70 ms after the hit) and makes the rain fall a step.
-      case 'vortex': u.uVortex.value = since * (soft ? 0.25 : 0.6) + hv * 0.25 * this.hits.since(shot.start, t, age => surge(age, 0.07)); break;
+      case 'burst': u.uBurst.value = blow; break;
+      // The held picture and the wheel give a little on the hits too; each hit turns the wheel on a notch (its speed
+      // peaks 70 ms after the hit) and makes the rain fall a step.
+      case 'hold': u.uBurst.value = 0.4 * blow; break;
+      case 'vortex': u.uVortex.value = since * (soft ? 0.25 : 0.6) + hv * 0.25 * this.hits.since(shot.start, t, age => surge(age, 0.07)); u.uBurst.value = 0.3 * blow; break;
       case 'rain': u.uRain.value = since * 0.35 + hv * 0.25 * this.hits.since(shot.start, t, age => surge(age, 0.09)); break;
     }
     const cam = this.camera, side = random() < 0.5 ? -1 : 1;

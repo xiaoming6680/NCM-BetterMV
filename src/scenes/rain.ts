@@ -8,7 +8,8 @@
 // close (nearer the glass: bigger drops, bigger words), clear (the focus slowly pulls through the glass to the city).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, lerp, rng, smooth } from './types.ts';
+import { clamp01, lerp, punch, rng, smooth } from './types.ts';
+import { Accents } from './hits.ts';
 import { LyricLayer } from './lyricSpace.ts';
 
 /** Running drops drawn at once. */
@@ -194,11 +195,13 @@ export class RainScene implements MvScene {
     const loud = shot.section.label === 'chorus' || shot.section.label === 'drop';
     u.uTime.value = t;
     u.uDrift.value = (random() < 0.5 ? -1 : 1) * t * 0.004;
-    u.uZoom.value = shot.variant === 'close' ? 1.65 : 1;
+    // On each hit the city's lights swell behind the glass and the view leans in a touch, falling back within a beat.
+    const hit = Math.min(1.2, Accents.of(music).sum(t, 1.2, age => punch(age, 0.28, 0.05)));
+    u.uZoom.value = (shot.variant === 'close' ? 1.65 : 1) * (1 + 0.012 * hit);
     u.uFocus.value = shot.variant === 'clear' ? lerp(0.05, 0.75, smooth((k - 0.15) / 0.7)) : 0.04;
     u.uFog.value = (loud ? 0.6 : 0.72) * (shot.variant === 'clear' ? lerp(1, 0.75, smooth(k)) : 1);
     u.uRain.value = 0.55 + 0.45 * shot.section.energy;
-    u.uLights.value = (loud ? 1.15 : 0.95) + 0.15 * music.env('mid', t);
+    u.uLights.value = (loud ? 1.15 : 0.95) + 0.15 * music.env('mid', t) + 0.3 * hit;
     // The running drops: the latest few that are still on the pane.
     const live = this.slides.filter(s => s.t0 <= t && s.y0 - s.speed * Math.max(0, t - s.t0 - 0.4) > -0.75).slice(-SLIDERS);
     const sl = u.uSlide.value as THREE.Vector4[], sy = u.uSlideY.value as THREE.Vector4[];

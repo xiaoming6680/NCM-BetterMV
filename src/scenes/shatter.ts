@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, inOutCubic, lerp, outExpo, rng, smooth, punch } from './types.ts';
+import { Accents } from './hits.ts';
 import { LyricLayer } from './lyricSpace.ts';
 import { voiceFaces } from './lyricBlock.ts';
 import { COLS, SpecRing, Spectrogram } from './viz.ts';
@@ -330,8 +331,8 @@ export class Shatter implements MvScene {
         fov = 50;
       }
     }
-    // Downbeat punch.
-    fov -= info.inBar < 1 ? punch(info.inBar, 1 / 5, 0.12) * 3 * (0.5 + energy) : 0;
+    // A punch on the bar's hit (none where the bar starts on no drum).
+    fov -= punch(Accents.of(music).sinceBar(t), beatLen / 5, Math.min(0.06, 0.12 * beatLen)) * 3 * (0.5 + energy);
     cam.fov = fov;
     cam.updateProjectionMatrix();
     cam.up.set(0, 1, 0);

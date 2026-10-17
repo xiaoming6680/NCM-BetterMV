@@ -7,7 +7,8 @@
 // middle), mist (a close, drifting detail with fog rising through it).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, inOutCubic, lerp, rng, smooth } from './types.ts';
+import { clamp01, inOutCubic, lerp, punch, rng, smooth } from './types.ts';
+import { Accents } from './hits.ts';
 import { LyricLayer } from './lyricSpace.ts';
 import { textTexture } from '../render/text.ts';
 
@@ -65,7 +66,7 @@ const fragmentShader = /* glsl */ `
     vec3 paper = uPaper * (0.93 + 0.07 * fbm(q * 5.0) - fibre);
     // A breath of the cover's own colour where the ink is still wet (淡彩).
     vec3 wash = mix(vec3(1.0), clamp(c * 1.5, 0.0, 1.0), 0.45);
-    vec3 col = mix(paper * mix(vec3(1.0), wash, clamp(tone * 1.6, 0.0, 1.0) * 0.6), uInk, tone * (0.92 + uBreath * 0.05));
+    vec3 col = mix(paper * mix(vec3(1.0), wash, clamp(tone * 1.6, 0.0, 1.0) * 0.6), uInk, tone * (0.9 + uBreath * 0.1));
     col = mix(col, uInk, glyph * (0.86 + 0.12 * grain));
     // Mist rising through the painting.
     float fog = fbm(vec2(q.x * 2.2 + uTime * 0.03, q.y * 3.0 - uTime * 0.05)) * uMist;
@@ -149,11 +150,14 @@ export class Ink implements MvScene {
     const k = clamp01(since / len), e = inOutCubic(k);
     const info = music.at(t);
     u.uTime.value = t;
-    u.uBreath.value = Math.exp(-(info.inBar % music.meter) * 1.5);
+    // The ink deepens on each hit and the view leans in a touch, falling back within a beat (it used to breathe on
+    // the downbeats, by 5 %, which hardly showed and came with or without a drum).
+    const hit = Math.min(1.2, Accents.of(music).sum(t, 1.5, age => punch(age, 0.3, 0.05)));
+    u.uBreath.value = hit;
     const sx = random() < 0.5 ? -1 : 1;
     // The ink spreads in over the first two seconds of a shot.
     u.uReveal.value = lerp(0.05, 2.2, smooth(since / 2.2));
-    u.uZoom.value = this.view(shot.variant, e, sx, u.uPan.value);
+    u.uZoom.value = this.view(shot.variant, e, sx, u.uPan.value) * (1 + 0.015 * hit);
     switch (shot.variant) {
       case 'bloom': u.uSpread.value.set(0, 0); u.uMist.value = 0.2; break;
       case 'mist': u.uSpread.value.set(sx * 0.3, -0.2); u.uMist.value = 1.1; break;

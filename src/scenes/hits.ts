@@ -5,11 +5,22 @@
 import type { Music } from '../director/music.ts';
 import { lastIndex } from '../director/music.ts';
 
+const shared = new WeakMap<Music, Accents>();
+
 export class Accents {
+  /** The song's list, made once and shared by every plate that asks. */
+  static of(music: Music): Accents {
+    let a = shared.get(music);
+    if (!a) shared.set(music, (a = new Accents(music)));
+    return a;
+  }
+
   readonly times: Float64Array;
   readonly strength: Float64Array;
 
-  constructor(music: Music, gap = 0.24) {
+  private bars?: Float64Array;
+
+  constructor(private music: Music, gap = 0.24) {
     const all: Array<[number, number]> = [
       ...music.a.hits.kick.filter(h => h[1] >= 0.35),
       ...music.a.hits.snare.filter(h => h[1] >= 0.45),
@@ -37,6 +48,33 @@ export class Accents {
     let s = 0;
     for (let i = lastIndex(this.times, t); i >= 0 && this.times[i] >= from; i--) s += this.strength[i] * f(t - this.times[i]);
     return s;
+  }
+
+  /**
+   * Seconds since the bar's hit (Infinity before the first): per downbeat, the strongest hit (≥ 0.5) from 0.4 beat
+   * before it to half a beat after. For a once-a-bar move (a punch of the lens) that should land on a drum, and is
+   * left out where a bar starts on none — the grid's downbeat alone punched into silence in syncopated songs.
+   */
+  sinceBar(t: number): number {
+    const bars = this.barHits(), i = lastIndex(bars, t);
+    return i < 0 ? Infinity : t - bars[i];
+  }
+
+  /** The bars' hits (see sinceBar), in time order. */
+  barHits(): Float64Array {
+    if (!this.bars) {
+      const out: number[] = [];
+      for (const d of this.music.a.downbeats) {
+        const beat = 60 / Math.max(40, this.music.at(d).bpm);
+        let best = NaN, v = 0.5;
+        for (let i = Math.max(0, lastIndex(this.times, d - 0.4 * beat)); i < this.times.length && this.times[i] <= d + 0.5 * beat; i++) {
+          if (this.times[i] >= d - 0.4 * beat && this.strength[i] >= v) { v = this.strength[i]; best = this.times[i]; }
+        }
+        if (best === best && best !== out[out.length - 1]) out.push(best);
+      }
+      this.bars = Float64Array.from(out);
+    }
+    return this.bars;
   }
 
   /** The strongest hit in [t0, t1], or NaN. */

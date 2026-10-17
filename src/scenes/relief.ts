@@ -8,6 +8,7 @@ import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { clamp01, inOutCubic, lerp, outExpo, rng, smooth, punch } from './types.ts';
 import { textMesh, hasCjk } from '../render/text.ts';
 import type { LineState } from '../director/lyrics.ts';
+import { Accents } from './hits.ts';
 import { COLS, SpecRing, Spectrogram } from './viz.ts';
 
 const N = 192;
@@ -272,8 +273,9 @@ export class Relief implements MvScene {
     const { p, pos, look, flat, island, origin, bank, k } = framing;
     let fov = framing.fov;
     const cam = this.camera;
-    // Downbeat punch, the bob of the beat, and (while heating up) a widening lens and a shake.
-    fov -= info.inBar < 1 ? punch(info.inBar, 1 / 6, 0.12) * 2.5 * (0.4 + energy) : 0;
+    // A punch on the bar's hit, the bob of the beat, and (while heating up) a widening lens and a shake.
+    const beatLen = 60 / Math.max(40, info.bpm);
+    fov -= punch(Accents.of(music).sinceBar(t), beatLen / 6, Math.min(0.06, 0.12 * beatLen)) * 2.5 * (0.4 + energy);
     fov += build * 12;
     pos.y += Math.sin(info.pos * Math.PI) * 0.06 + kick * 0.05;
     const shake = build * build * 0.14 + kick * build * 0.1;

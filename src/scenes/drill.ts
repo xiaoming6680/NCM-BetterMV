@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import type { FrameCtx, SceneInit, Shot } from './types.ts';
 import { FractalPlate, hue, v3, type FractalOptions, type Pose } from './fractal.ts';
 import { rng, smooth } from './types.ts';
+import { Accents } from './hits.ts';
 import { lastIndex } from '../director/music.ts';
 
 /** One stretch, in its own frame: the route's points and directions, and the map from the next stretch's frame. */
@@ -212,6 +213,8 @@ const TABLE_RATE = 60;
  */
 export abstract class DrillPlate extends FractalPlate {
   protected readonly chain: Chain;
+  /** Seconds the beat's shell leaves before its hit: how long it takes to reach the near walls (0: they are close). */
+  protected shellLead = 0.15;
   private spec: DrillSpec;
   private table: Float64Array;
   private shellT: Float64Array;
@@ -230,11 +233,15 @@ export abstract class DrillPlate extends FractalPlate {
       const want = spec.rate * this.flight.speedAt(i / TABLE_RATE), turn = this.chain.turnRate(u);
       u += Math.min(want, turn > 1e-6 ? maxTurn / turn : want) / TABLE_RATE;
     }
+    const acc = Accents.of(init.music);
     const music = init.music, sections = music.a.sections;
     const loud = (t: number) => { const s = sections[music.sectionIndex(t)]; return !!s && (s.label === 'chorus' || s.label === 'drop'); };
     const ev: Array<[number, number]> = [];
-    for (const d of Array.from(music.downbeats)) if (!loud(d) && !this.soft) ev.push([d, 0.35]);
-    for (const [t, v] of music.a.hits.kick) if (loud(t) && v > 0.4) ev.push([t, this.soft ? 0.35 : 0.5 + 0.4 * v]);
+    // Calm sections: a shell on each bar's hit (on the bare downbeat it lit up over silence).
+    for (const d of Array.from(acc.barHits())) if (!loud(d) && !this.soft) ev.push([d, 0.35]);
+    // Loud sections: a shell on every strong hit (kicks, snares and accents, not only the kicks). The flight itself
+    // stays steady (see Flight in fractal.ts): the beat is in the light.
+    acc.times.forEach((t, i) => { const v = acc.strength[i]; if (loud(t) && v >= 0.45) ev.push([t, this.soft ? 0.35 : 0.5 + 0.4 * v]); });
     ev.sort((a, b) => a[0] - b[0]);
     const kept: Array<[number, number]> = [];
     for (const e of ev) if (!kept.length || e[0] - kept[kept.length - 1][0] > 0.2) kept.push(e);
@@ -275,10 +282,12 @@ export abstract class DrillPlate extends FractalPlate {
     this.chain.outer(k, this.spec.outer, this.u.uOuter.value as THREE.Vector4);
     this.chain.next(k, this.u.uNext.value as THREE.Vector4);
     this.chain.at(u + this.spec.light, this.u.uLight.value as THREE.Vector3, k);
-    const i = lastIndex(this.shellT, t), age = i < 0 ? 99 : t - this.shellT[i];
-    const kick = this.soft ? 0 : ctx.music.pulse('kick', t, 0.3);
-    // (Brightness only: the shell and the light; nothing on the beat moves.)
-    (this.u.uFold.value as THREE.Vector4).set(0, 0.3 * kick, age * 6, i < 0 ? 0 : this.shellV[i] * Math.exp(-age / 0.5) * smooth(age / 0.05));
+    // The shell sets out from the camera a little before its hit (`shellLead`), so it is on the near walls on the hit
+    // itself: launched on the hit, it reached the menger's and the floating city's 0.15 s after the drum.
+    const lead = this.shellLead, i = lastIndex(this.shellT, t + lead), age = i < 0 ? 99 : t - this.shellT[i];
+    const kick = (this.soft ? 0.5 : 1) * ctx.music.pulse('kick', t, 0.3);
+    // (The shell and the light; the move on the beat is the lunge in the route table.)
+    (this.u.uFold.value as THREE.Vector4).set(0, 0.3 * kick, (age + lead) * 6, i < 0 ? 0 : this.shellV[i] * (age < 0 ? smooth((age + lead) / lead) : Math.exp(-age / 0.5)));
     this.u.uKick.value = kick;
   }
 }
@@ -344,7 +353,7 @@ vec3 lit(vec3 p, vec3 n, vec3 rd, float t, vec3 base) {
   col *= mix(0.06, 1.0, pow(occ, 1.6));
   col += GLOW * pow(1.0 - occ, 3.0) * 0.05;
   float e = (length(p - uCam) / uScale - uFold.z) / 0.18;
-  col += SIG * uFold.w * exp(-e * e) * (0.3 + 0.7 * occ) * 0.45;
+  col += SIG * uFold.w * exp(-e * e) * (0.3 + 0.7 * occ) * 0.75;
   return col;
 }`;
 }

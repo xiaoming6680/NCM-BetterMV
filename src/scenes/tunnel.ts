@@ -11,6 +11,7 @@ import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, lerp, rng, smooth, punch } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
+import { Accents } from './hits.ts';
 import { LyricRig } from './lyricRig.ts';
 import { voiceFaces, voiceOpts } from './lyricBlock.ts';
 import { LyricGates, poseInTube } from './lyricSpace.ts';
@@ -149,7 +150,7 @@ export class Tunnel implements MvScene {
     const rising = !!next && next.energy > energy + 0.08;
     const build = rising ? smooth((t - section.start) / Math.max(1, section.end - section.start)) : 0;
     const whip = rising && !this.soft ? clamp01((t - (section.end - beat)) / beat) : 0;
-    const kick = this.soft ? 0 : music.pulse('kick', t, 0.08);
+    const kick = (this.soft ? 0.5 : 1) * music.pulse('kick', t, 0.08);
     const hat = music.pulse('hat', t, 0.07);
     const random = rng(shot.seed);
     const sign = random() < 0.5 ? -1 : 1;
@@ -171,7 +172,7 @@ export class Tunnel implements MvScene {
     // The roll camera keeps turning: the words turn with it (below) and read level instead of going round with the tunnel.
     const spin = shot.variant === 'roll' ? (t - shot.start) * (this.soft ? 0.15 : 0.6) * sign : 0;
     cam.rotateZ(0.025 * Math.sin(t * 0.9) + spin + 0.5 * Math.pow(whip, 3));
-    cam.fov = FOV + 8 * whip * whip + build * 8 - (info.inBar < 1 && !this.soft ? punch(info.inBar, 1 / 6, 0.12) * 3 : 0);
+    cam.fov = FOV + 8 * whip * whip + build * 8 - (this.soft ? 1.5 : 3) * punch(Accents.of(music).sinceBar(t), beat / 6, Math.min(0.06, 0.12 * beat));
     cam.updateProjectionMatrix();
     cam.updateMatrixWorld();
 

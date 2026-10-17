@@ -9,7 +9,8 @@
 import * as THREE from 'three';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { clamp01, inOutCubic, lerp, rng, smooth } from './types.ts';
+import { clamp01, inOutCubic, lerp, punch, rng, smooth } from './types.ts';
+import { Accents } from './hits.ts';
 import { LyricBlocks, Stands, voiceFor } from './lyricBlock.ts';
 import { passMesh } from '../render/engine.ts';
 import { INK_BLACK, ricePaper } from './ink.ts';
@@ -276,7 +277,7 @@ const SKY = /* glsl */ `
     vec3 c = mix(uHorizon, uZenith, smoothstep(-0.01, 0.42, e));
     c = mix(c, uBelow, smoothstep(0.0, -0.12, e));
     float s = max(dot(d, uSunDir), 0.0);
-    c += uGlow * (0.35 * pow(s, 10.0) + 0.6 * pow(s, 90.0)) * (1.0 + 0.15 * uKick);
+    c += uGlow * (0.35 * pow(s, 10.0) + 0.6 * pow(s, 90.0)) * (1.0 + 0.45 * uKick);
     // The cover as the sun: a disc round the sun's direction, its lower part lost in the horizon haze.
     vec3 right = normalize(cross(uSunDir, vec3(0.0, 1.0, 0.0)));
     vec3 up = cross(right, uSunDir);
@@ -452,11 +453,15 @@ export class Clouds implements MvScene {
   update(ctx: FrameCtx): void {
     const { t, music, shot } = ctx;
     const soft = this.look !== 'pulse';
-    const kick = soft ? 0 : music.pulse('kick', t, 0.2);
+    const kick = (soft ? 0.5 : 1) * music.pulse('kick', t, 0.2);
     this.shot = shot;
     const pose = this.pose(t, shot, { pos: new THREE.Vector3(), quat: new THREE.Quaternion() });
     this.camera.position.copy(pose.pos);
     this.camera.quaternion.copy(pose.quat);
+    // The flight keeps its steady speed (surges on the kicks read as jolting, see Flight in fractal.ts); the beat is the
+    // sun flaring on the kicks and a punch of the lens on each bar's hit.
+    this.camera.fov = 48 - (soft ? 1 : 2) * punch(Accents.of(music).sinceBar(t), 0.12, 0.05);
+    this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
     const mu = this.march.uniforms;
     mu.uT.value = t;

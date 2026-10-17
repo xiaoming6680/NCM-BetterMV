@@ -6,7 +6,8 @@
 // The words run round the label, the word being sung at the top; the translation round the bottom.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, inOutCubic, lerp, rng, smooth } from './types.ts';
+import { clamp01, inOutCubic, lerp, punch, rng, smooth } from './types.ts';
+import { Accents } from './hits.ts';
 import { LyricOrbit } from './lyricSpace.ts';
 import { voiceOpts } from './lyricBlock.ts';
 import { lastIndex } from '../director/music.ts';
@@ -179,7 +180,7 @@ export class Vinyl implements MvScene {
     const { t, music, shot } = ctx;
     const soft = this.look === 'ballad';
     const info = music.at(t);
-    const kick = soft ? 0 : music.pulse('kick', t, 0.12);
+    const kick = (soft ? 0.5 : 1) * music.pulse('kick', t, 0.12);
     const u = this.material.uniforms;
     // Once a bar (once every two in ballads), locked to the beat; clockwise seen from above.
     const per = music.meter * (soft ? 2 : 1);
@@ -225,6 +226,8 @@ export class Vinyl implements MvScene {
       cam.lookAt(0.3 * side * (1 - sk), 0, 0);
       cam.rotateZ(side * lerp(0.06, -0.02, sk));
     }
+    // The lens knocks in on each hit, as if the deck sat on the speaker (ballads half as hard).
+    cam.fov -= (soft ? 0.8 : 1.6) * Math.min(1.2, Accents.of(music).sum(t, 1, age => punch(age, 0.18, 0.04)));
     cam.updateProjectionMatrix();
     cam.updateMatrixWorld();
 

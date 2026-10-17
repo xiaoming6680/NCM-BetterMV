@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { rng, smooth } from './types.ts';
+import { Accents } from './hits.ts';
 import { LyricBlocks, Stands, voiceFor } from './lyricBlock.ts';
 import { lastIndex } from '../director/music.ts';
 import { CANYON_X, CANYON_Y, CENTERS, TOWER_VERT, towerFrag, Towers } from './cityTowers.ts';
@@ -498,18 +499,20 @@ export class City implements MvScene {
   /**
    * The surges: a small one on each kick of a loud section (a district flaring), wide ones on its snares, and the
    * first downbeat of a chorus or drop powering the city up from the middle of the view. Calm sections send a slow
-   * swell on every downbeat.
+   * swell on each bar's hit (none where the bar starts on no drum: on the bare downbeat it swelled into silence);
+   * ballads send small ones on the hits of their loud sections.
    */
   private planSurges(init: SceneInit): void {
     const { music } = init, sections = music.a.sections, random = rng(0xc17 + Math.round(music.duration * 10));
     const loud = (t: number) => { const s = sections[music.sectionIndex(t)]; return !!s && (s.label === 'chorus' || s.label === 'drop'); };
     const ev: Array<[number, number, number]> = []; // time, size, speed (m/s)
-    for (const d of Array.from(music.downbeats)) if (!loud(d)) ev.push([d, 0.35, 900]);
+    const acc = Accents.of(music);
+    for (const d of Array.from(acc.barHits())) if (!loud(d)) ev.push([d, 0.35, 900]);
     if (!this.soft) {
       for (const [t, v] of music.a.hits.kick) if (loud(t) && v > 0.4) ev.push([t, 0.45 + 0.35 * v, 1500]);
       for (const [t, v] of music.a.hits.snare) if (loud(t) && v > 0.6) ev.push([t, 0.8, 2600]);
     } else {
-      for (const b of Array.from(music.beats)) if (loud(b)) ev.push([b, 0.3, 900]);
+      acc.times.forEach((t, i) => { if (loud(t) && acc.strength[i] > 0.4) ev.push([t, 0.3, 900]); });
     }
     ev.sort((a, b) => a[0] - b[0]);
     for (const [t, size, speed] of ev) {
@@ -566,11 +569,13 @@ export class City implements MvScene {
     u.uTraffic.value = music.at(t).bpm / 120;
     // Calm sections run dimmer; a chorus powers up from its first downbeat (the big surge carries the lights on).
     const into = loud ? smooth((t - sec.start) / 0.6) : 0;
-    u.uLights.value = (this.soft ? 0.7 : 0.55) + (loud ? (this.soft ? 0.3 : 0.45) * into : 0) + 0.06 * music.env('low', t);
+    // …and in loud sections the whole city's lights lift on each kick at once, before its surge has spread (the surge
+    // alone peaked a few tenths of a second after the drum, where it reached the view).
+    u.uLights.value = (this.soft ? 0.7 : 0.55) + (loud ? (this.soft ? 0.3 : 0.45) * into + (this.soft ? 0.05 : 0.1) * music.pulse('kick', t, 0.15) : 0) + 0.06 * music.env('low', t);
     u.uExposure.value = 1;
     u.uFocal.value = this.height / 2 / Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2);
-    // The aviation lights flash on the kicks of loud sections.
-    u.uBeat.value = loud && !this.soft ? music.pulse('kick', t, 0.12) : 0;
+    // The aviation lights flash on the kicks of loud sections (ballads at half).
+    u.uBeat.value = loud ? (this.soft ? 0.5 : 1) * music.pulse('kick', t, 0.12) : 0;
 
     // Surges about now, placed where the view was looking when each started.
     const p = new THREE.Vector3(), q = new THREE.Quaternion(), f = new THREE.Vector3(), r = new THREE.Vector3();

@@ -10,10 +10,13 @@
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { rng, smooth, surge } from './types.ts';
+import { Accents } from './hits.ts';
 import { LyricBlocks, Stands, voiceFor } from './lyricBlock.ts';
 import { lastIndex } from '../director/music.ts';
 
 const SURGES = 4;
+/** Seconds a surge is on its way in before its hit. */
+const PREROLL = 0.45;
 /**
  * A colour as a uniform: the palette reaches the shader as uniforms, so its source is the same for every song and the
  * compiled program is reused by the next song with the aurora (as in the city). Rounded as when written into the source.
@@ -220,11 +223,12 @@ export class Aurora implements MvScene {
     };
     this.scene.add(mesh);
 
-    // Surges: on the kicks of loud sections, on the downbeats elsewhere; sides alternate.
+    // Surges: on the kicks of loud sections, on each bar's hit elsewhere (none where the bar starts on no drum); sides
+    // alternate.
     const sections = music.a.sections, random = rng(0xa0 + Math.round(music.duration * 10));
     const loud = (t: number) => { const s = sections[music.sectionIndex(t)]; return !!s && (s.label === 'chorus' || s.label === 'drop'); };
     const ev: Array<[number, number]> = [];
-    for (const d of Array.from(music.downbeats)) if (!loud(d)) ev.push([d, 0.5]);
+    for (const d of Array.from(Accents.of(music).barHits())) if (!loud(d)) ev.push([d, 0.5]);
     for (const [t, v] of music.a.hits.kick) if (loud(t) && v > 0.4) ev.push([t, this.soft ? 0.5 : 0.6 + 0.5 * v]);
     ev.sort((a, b) => a[0] - b[0]);
     let dir = random() < 0.5 ? -1 : 1;
@@ -293,12 +297,15 @@ export class Aurora implements MvScene {
     u.uExposure.value = 1;
 
     let m = 0;
-    for (let i = lastIndex(this.surgeT, t); i >= 0 && m < SURGES; i--) {
+    for (let i = lastIndex(this.surgeT, t + PREROLL); i >= 0 && m < SURGES; i--) {
       const s = this.surges[i], age = t - s.t;
       if (age > 2.4) break;
-      // The surge runs along the curtains across the view (x), from one side to the other.
-      const x = cam.position.x - s.dir * 520 + s.dir * age * 650;
-      this.surgeU[m++].set(x, age, s.size * Math.exp(-age / 0.9) * smooth(age / 0.04), 0);
+      // The surge runs along the curtains across the view (x), from one side to the other, and crosses the middle of
+      // the view on its hit: it comes in from the side growing brighter, is brightest there, and fades as it runs
+      // off. (It used to set out from the side on the hit and reach the middle 0.8 s later.)
+      const x = cam.position.x + s.dir * age * 650;
+      const k = age < 0 ? smooth((age + PREROLL) / PREROLL) * smooth((age + PREROLL) / PREROLL) : Math.exp(-age / 0.9);
+      this.surgeU[m++].set(x, age, s.size * k, 0);
     }
     for (let i = m; i < SURGES; i++) this.surgeU[i].set(0, 0, 0, 0);
 

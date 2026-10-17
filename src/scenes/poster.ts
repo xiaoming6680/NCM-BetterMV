@@ -10,6 +10,8 @@ import { textMesh, hasCjk, type Face } from '../render/text.ts';
 import { VOICES, voiceFor } from './lyricBlock.ts';
 import type { LineState } from '../director/lyrics.ts';
 import type { SectionLabel } from '../types.ts';
+import { Accents } from './hits.ts';
+import { lastIndex } from '../director/music.ts';
 
 const H = 9; // page height in world units
 const FOV = 22;
@@ -227,15 +229,16 @@ export class Poster implements MvScene {
     const enter = outExpo(clamp01(since / 0.5));
     this.page.position.set(0, (1 - enter) * -0.6, 0);
 
-    // The block holds, then snaps to its next spot on each downbeat.
+    // The block holds, then snaps to its next spot on each bar's hit (a bar that starts on no drum leaves it where it
+    // is; it used to move on the bare downbeat), and bumps on the kicks (ballads half as much).
     if (this.block && this.blockSpots.length) {
-      const spots = this.blockSpots, n = spots.length;
-      const a = spots[info.bar % n], b = spots[(info.bar + n - 1) % n];
-      const e = snap(info.barPhase / 0.12);
-      const kick = this.look === 'ballad' ? 0 : music.pulse('kick', t, 0.1);
+      const spots = this.blockSpots, n = spots.length, bars = Accents.of(music).barHits(), i = lastIndex(bars, t);
+      const a = spots[(i + 1 + n) % n], b = spots[(i + n) % n];
+      const e = i < 0 ? 1 : snap((t - bars[i]) / (0.12 * music.meter * 60 / Math.max(40, info.bpm)));
+      const kick = (this.look === 'ballad' ? 0.5 : 1) * music.pulse('kick', t, 0.1);
       this.block.position.x = lerp(b.x, a.x, e);
       this.block.position.y = lerp(b.y, a.y, e);
-      this.block.scale.setScalar((onSlab ? 1 : 1 + kick * 0.04) * (0.2 + 0.8 * enter));
+      this.block.scale.setScalar((onSlab ? 1 : 1 + kick * 0.06) * (0.2 + 0.8 * enter));
     }
     // A marker ticks along the rule, one step per beat across the bar.
     if (this.tick) {

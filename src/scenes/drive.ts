@@ -18,6 +18,7 @@ import { LineBatch } from '../render/lines.ts';
 import { LyricGates, poseInTube } from './lyricSpace.ts';
 import { voiceOpts } from './lyricBlock.ts';
 import { lastIndex } from '../director/music.ts';
+import { Accents } from './hits.ts';
 import { Armillary } from '../sigil/armillary.ts';
 
 const R = 2.3; // frame radius
@@ -110,6 +111,8 @@ export class Drive implements MvScene {
   private arm: Armillary;
   private gates: LyricGates;
   private kicks: Float64Array;
+  /** The hits the strobe world changes shape on: strong ones, at least 0.45 of a beat apart. */
+  private strobeT: Float64Array;
   private snares: Float64Array;
   private snareTurn: Float32Array;
   private white: RGB; private ice: RGB; private mid: RGB; private far: RGB; private shock: RGB; private wall: RGB;
@@ -154,6 +157,12 @@ export class Drive implements MvScene {
     this.shock = rgb(shockC);
     this.wall = rgb(new THREE.Color().copy(palette.ink).lerp(shockC, 0.8));
     this.kicks = Float64Array.from(init.music.a.hits.kick.filter(h => h[1] > 0.35), h => h[0]);
+    const acc = Accents.of(init.music), strobeT: number[] = [];
+    acc.times.forEach((x, i) => {
+      if (acc.strength[i] < 0.45) return;
+      if (!strobeT.length || x - strobeT[strobeT.length - 1] >= 0.45 * 60 / Math.max(40, init.music.at(x).bpm)) strobeT.push(x);
+    });
+    this.strobeT = Float64Array.from(strobeT);
     this.snares = Float64Array.from(init.music.a.hits.snare.filter(h => h[1] > 0.35), h => h[0]);
     this.snareTurn = Float32Array.from(this.snares, s => (Math.floor(init.music.at(s).bar / 8) % 2 === 0 ? 1 : -1));
     let drops = 0;
@@ -214,11 +223,15 @@ export class Drive implements MvScene {
     return s;
   }
 
-  /** The strobe world's outline: a new shape on every beat, snapping over a quarter beat. */
+  /**
+   * The strobe world's outline: a new shape on every strong hit, snapping over a quarter beat (it changed on every
+   * beat of the grid, which in a syncopated song often has no drum).
+   */
   private strobe(t: number): Outline {
-    const beats = this.init.music.beatPos(t), b = Math.floor(beats);
+    const s = this.strobeT, i = lastIndex(s, t);
     const one = (q: number): Outline => OUTLINE[(['well', 'rifling', 'triangle', 'hangar'] as const)[((q % 4) + 4) % 4]];
-    return blend(one(b - 1), one(b), snapTo((beats - b) / 0.25));
+    if (i < 0) return one(0);
+    return blend(one(i), one(i + 1), snapTo((t - s[i]) / (0.25 * 60 / Math.max(40, this.init.music.at(s[i]).bpm))));
   }
 
   /** The world of a phrase of a section (each later drop starts further along the cycle). */

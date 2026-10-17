@@ -97,6 +97,8 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float t, float ao) {
 }
 
 export class Sierpinski extends DrillPlate {
+  // (The triangular windows are close round the camera: the shell reaches them on its hit.)
+  protected override shellLead = 0;
   constructor(init: SceneInit, look: 'pulse' | 'ballad' = 'pulse') {
     const L = letters(((init.seed ?? 0) ^ 0x51e7) >>> 0);
     const chain = new Chain(k => stretch(L, k), { ahead: 0.75, up: new THREE.Vector3(0, 1, 0) });

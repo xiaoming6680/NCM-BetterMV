@@ -7,7 +7,8 @@
 // wide (further back, drifting along the shore). The words hang in the sky in columns, a line to each side.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { clamp01, inOutCubic, lerp, rng, smooth } from './types.ts';
+import { clamp01, inOutCubic, lerp, punch, rng, smooth } from './types.ts';
+import { Accents } from './hits.ts';
 import { LyricRig } from './lyricRig.ts';
 
 /** Lanterns drawn at once. */
@@ -174,14 +175,12 @@ export class LanternScene implements MvScene {
       release(w.start);
       if (sec.label === 'chorus' || sec.label === 'drop') release(w.start + 0.12);
     }
-    // Between the words: one a bar where nothing is sung (two in a full section).
+    // Between the words: one on each bar's hit where nothing is sung, one on every strong hit in a full section (it
+    // used to be on the grid's beats, drum or none).
     const sung = (t: number) => lyrics.lines.some(l => t >= l.start - 0.5 && t <= l.end + 0.5);
-    const beats = music.beats, every = Math.max(1, music.meter);
-    for (let i = 0; i < beats.length; i++) {
-      const t = beats[i], sec = music.section(t);
-      if (sung(t)) continue;
-      if (i % (sec.energy > 0.6 ? Math.ceil(every / 2) : every) === 0) release(t);
-    }
+    const acc = Accents.of(music);
+    for (const t of Array.from(acc.barHits())) if (!sung(t) && music.section(t).energy <= 0.6) release(t);
+    acc.times.forEach((t, i) => { if (!sung(t) && music.section(t).energy > 0.6 && acc.strength[i] >= 0.5) release(t); });
     this.lanterns.sort((a, b) => a.t0 - b.t0);
 
     this.rig = new LyricRig(palette, 'poem');
@@ -242,7 +241,8 @@ export class LanternScene implements MvScene {
       // It gets going slowly, then rises steadily, drifting with the wind and swaying.
       const y = 0.3 + l.rise * (age - 2 * (1 - Math.exp(-age / 2)));
       const x = l.x + l.wind * age + 0.25 * Math.sin(age * 0.7 + l.seed * 20) * smooth(age / 4);
-      const light = smooth(age / 1.2) * (1 - smooth((age - LIFE) / 6)) * (1 - smooth((y - 40) / 8));
+      // It catches at once (a flare as the flame takes, on its word or hit), then glows on.
+      const light = (0.7 * smooth(age / 0.1) + 0.3 * smooth(age / 1.2) + 0.6 * punch(age, 0.35, 0.05)) * (1 - smooth((age - LIFE) / 6)) * (1 - smooth((y - 40) / 8));
       if (light <= 0.002) continue;
       lamp.set([x, y, l.z - 0.04 * age, l.size], n * 4);
       state.set([light, l.seed], n * 2);
@@ -250,7 +250,8 @@ export class LanternScene implements MvScene {
     }
     this.geo.instanceCount = n;
     this.aLamp.needsUpdate = this.aState.needsUpdate = true;
-    const bright = 1 + 0.15 * music.env('mid', t);
+    // The flames all lift a little on each hit.
+    const bright = 1 + 0.15 * music.env('mid', t) + 0.12 * Math.min(1.2, Accents.of(music).sum(t, 1, age => punch(age, 0.2, 0.04)));
     this.lampU.uBright.value = bright;
     this.mirrorU.uBright.value = bright;
     this.lampU.uTime.value = this.mirrorU.uTime.value = t;

@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { clamp01, rng, surge } from './types.ts';
+import { Accents } from './hits.ts';
 import { LyricOrbit } from './lyricSpace.ts';
 import { voiceOpts } from './lyricBlock.ts';
 import { COLS, SpecRing, Spectrogram } from './viz.ts';
@@ -198,8 +199,10 @@ export class Ripple implements MvScene {
 
     this.scene.add(field, shocks, bars, this.cover);
 
-    // The kicks that send shock rings: strong ones (and in the ballad look, downbeats instead).
-    const ev = this.soft ? Array.from(music.downbeats, d => [d, 0.5] as [number, number]) : music.a.hits.kick.filter(h => h[1] > 0.35);
+    // The hits that send shock rings: strong kicks; in the ballad look the song's hits at half strength (it used to
+    // send them on the downbeats, which in a syncopated song often fall on no drum).
+    const acc = Accents.of(music);
+    const ev = this.soft ? Array.from(acc.times, (x, i) => [x, 0.5 * acc.strength[i]] as [number, number]) : music.a.hits.kick.filter(h => h[1] > 0.35);
     this.kicks = Float64Array.from(ev, h => h[0]);
     this.kickV = Float64Array.from(ev, h => h[1]);
 
@@ -260,7 +263,7 @@ export class Ripple implements MvScene {
     const sec = shot.section, loud = sec.label === 'chorus' || sec.label === 'drop';
     this.u.uGain.value = (0.75 + 0.45 * clamp01(sec.energy ?? 0.5)) * (loud ? 1.05 : 1);
     this.u.uReach.value = loud ? 4.5 : 3;
-    const kick = this.soft ? 0 : music.pulse('kick', t, 0.12);
+    const kick = (this.soft ? 0.5 : 1) * music.pulse('kick', t, 0.12);
     this.u.uKick.value = kick;
     this.cover.scale.setScalar(1 + 0.06 * kick);
     this.cover.rotation.y = -t * 0.12;

@@ -5,7 +5,8 @@
 // it: soft in the haze, coming sharp as the focus pulls onto the picture.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, inOutCubic, lerp, rng, smooth } from './types.ts';
+import { clamp01, inOutCubic, lerp, punch, rng, smooth } from './types.ts';
+import { Accents } from './hits.ts';
 import { LyricRig } from './lyricRig.ts';
 import { voiceFaces } from './lyricBlock.ts';
 import { rgbToLab } from '../render/palette.ts';
@@ -182,11 +183,15 @@ export class Bokeh implements MvScene {
     u.uFocus.value = cam.position.length() + focusOffset;
     u.uScatter.value = scatter;
     u.uRise.value = rise;
-    u.uAperture.value = aperture;
+    // On each hit the focus bites: the discs draw in towards points (the picture comes clearer for a moment) and
+    // brighten, most in a chorus, falling back within a beat; and they swell with the voice. (The swell used to come on
+    // each downbeat of a chorus, with or without a drum, and the hits did nothing; opening the discs instead hardly
+    // showed on a light cover, where the discs are printed, not lit.)
+    const loud = shot.section.label === 'chorus' || shot.section.label === 'drop';
+    const hit = Math.min(1.5, Accents.of(music).sum(t, 1.2, age => punch(age, 0.25, 0.04))) * (loud ? 1 : 0.6);
+    u.uAperture.value = aperture * (1 - 0.28 * Math.min(1, hit));
     u.uPxPerUnit.value = this.height / (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2));
-    // Swell a little on each downbeat of a chorus and with the voice.
-    const swell = shot.section.label === 'chorus' ? Math.exp(-info.inBar * 1.2) * 0.25 : 0;
-    u.uGain.value = 0.8 + rms * 0.35 + swell;
+    u.uGain.value = 0.8 + rms * 0.35 + 0.18 * hit;
 
     ctx.fx.bloom = this.init.palette.light ? 0.12 : 0.5 + rms * 0.3;
     // Each line a card just in front of the picture, to one side (alternating), turned a little towards the middle;

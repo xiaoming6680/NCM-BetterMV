@@ -9,7 +9,8 @@
 // beside it in columns, a line to the left, the next to the right (arcs in the pattern itself piled up unreadably).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { rng } from './types.ts';
+import { rng, surge } from './types.ts';
+import { Accents } from './hits.ts';
 import { LyricRig } from './lyricRig.ts';
 import { ricePaper } from './ink.ts';
 
@@ -180,9 +181,11 @@ export class PaperCut implements MvScene {
     if (this.zoomT < 0 || t < this.zoomT || t - this.zoomT > 0.5) this.zoom = t * rate(music.env('rms', t) * 0.6);
     else this.zoom += (t - this.zoomT) * rate(music.env('rms', t));
     this.zoomT = t;
-    u.uZoom.value = this.zoom;
+    // Each hit turns the paper on a notch and grows it a step outwards (the speed of both peaks 80 ms after the hit).
+    const steps = Accents.of(music).since(shot.start, t, age => surge(age, 0.08));
+    u.uZoom.value = this.zoom + 0.035 * steps;
     const bloom = shot.variant === 'bloom';
-    u.uRot.value = bloom ? 0.4 * dir : dir * t * 0.035;
+    u.uRot.value = (bloom ? 0.4 * dir : dir * t * 0.035) + dir * 0.035 * steps;
     u.uScale.value = bloom ? 1.35 : 1;
     ctx.fx.bloom = 0.04;
     ctx.fx.vignette = 0.25;

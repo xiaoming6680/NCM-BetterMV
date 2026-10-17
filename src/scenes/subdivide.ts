@@ -5,7 +5,9 @@
 // ball that breathes with the bass, a ripple running over it on each kick. Beside it, the level and the count.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, finish, lerp, rng, smooth } from './types.ts';
+import { clamp01, finish, lerp, punch, rng, smooth } from './types.ts';
+import { Accents } from './hits.ts';
+import { lastIndex } from '../director/music.ts';
 import { SEEDS, type Vec } from '../sigil/polyhedron.ts';
 import { textMesh } from '../render/text.ts';
 import { LyricOrbit } from './lyricSpace.ts';
@@ -208,9 +210,19 @@ export class SubdivideScene implements MvScene {
     const { t, music, shot } = ctx;
     const len = Math.max(0.2, shot.end - shot.start), k = clamp01(ctx.shotT / len);
     const beat = 60 / Math.max(40, music.at(t).bpm), step = this.soft ? 1 : 0.5;
-    const since = music.beatPos(t) - music.beatPos(shot.start);
-    const level = Math.min(this.levels.length - 1, Math.max(0, Math.floor(since / step)));
-    const age = (since - level * step) * beat; // seconds since this level split
+    // The splits land on the song's hits: each on the first hit at least 0.6 of a step (half a beat, a beat in ballads)
+    // after the last, or a step after it where none comes within one and a half (a quiet stretch splits on time).
+    // (They used to fall every half beat of the grid, drum or no drum.)
+    const acc = Accents.of(music);
+    let level = 0, at = shot.start;
+    while (level < this.levels.length - 1) {
+      const i = lastIndex(acc.times, at + 0.6 * step * beat - 1e-6) + 1;
+      const next = i < acc.times.length && acc.times[i] <= at + 1.5 * step * beat ? acc.times[i] : at + step * beat;
+      if (next > t) break;
+      at = next;
+      level++;
+    }
+    const age = t - at; // seconds since this level split
     const L = this.levels[level], u = this.mesh.material.uniforms;
     if (this.mesh.geometry !== L.geo) this.mesh.geometry = L.geo;
     const done = level === this.levels.length - 1;
@@ -224,7 +236,7 @@ export class SubdivideScene implements MvScene {
     u.uSpecOn.value = done && this.init.stereo ? smooth(age / 0.6) * (this.soft ? 0.6 : 1) : 0;
     const kick = music.hitsBetween('kick', t - 0.6, t + 1e-3).filter(h => h[1] > 0.35).pop();
     const ka = kick ? t - kick[0] : 9;
-    u.uRipple.value = done ? 0.08 * Math.exp(-ka / 0.35) : 0;
+    u.uRipple.value = done ? 0.08 * punch(ka, 0.35, 0.03) : 0;
     u.uRippleAt.value = ka * 4.5;
 
     const random = rng(shot.seed);

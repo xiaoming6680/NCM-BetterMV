@@ -6,7 +6,8 @@
 // covers them where its cut-out reaches, and the camera's moves slide them against the paper.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, inOutCubic, lerp, rng, smooth } from './types.ts';
+import { clamp01, inOutCubic, lerp, punch, rng, smooth } from './types.ts';
+import { Accents } from './hits.ts';
 import { LyricRig } from './lyricRig.ts';
 import { voiceFaces } from './lyricBlock.ts';
 
@@ -324,16 +325,19 @@ export class Diorama implements MvScene {
     // A slow handheld breath.
     cam.position.x += Math.sin(t * 0.37) * 0.08;
     cam.position.y += Math.sin(t * 0.29 + 1) * 0.06;
-    cam.fov = fov;
+    // (The lens leans in a touch on the hits too: on a light cover the sheets' rims hardly show.)
+    cam.fov = fov - 1.2 * Math.min(1.2, Accents.of(music).sum(t, 1.5, age => punch(age, 0.32, 0.05)));
     cam.updateProjectionMatrix();
     cam.up.set(0, 1, 0);
     cam.lookAt(target);
 
-    // The sheets breathe apart a little with the loudness; the backlight follows the voice.
-    const spread = 1 + rms * 0.12;
+    // The sheets breathe apart a little with the loudness, and spring apart on each hit (the paper stage knocked),
+    // their rims catching the light; the backlight follows the voice.
+    const hit = Math.min(1.5, Accents.of(music).sum(t, 1.5, age => punch(age, 0.32, 0.05)));
+    const spread = 1 + rms * 0.12 + 0.2 * hit;
     this.sheets.forEach((sheet, r) => {
       sheet.position.z = -(LAYERS - 1 - r) * GAP * spread;
-      sheet.material.uniforms.uRimGain.value = this.init.palette.light ? 0.25 + rms * 0.2 : 0.7 + rms * 0.9 + vocalWarmth;
+      sheet.material.uniforms.uRimGain.value = this.init.palette.light ? 0.25 + rms * 0.2 + 0.1 * hit : 0.7 + rms * 0.9 + vocalWarmth + 0.45 * hit;
     });
     this.shadows.forEach((s, i) => { s.position.z = -(LAYERS - 1 - (i + 1)) * GAP * spread - GAP * 0.5 * spread; });
     (this.glow.material.uniforms.uGain as { value: number }).value = this.init.palette.light ? 0.06 : 0.35 + rms * 0.5 + shot.section.energy * 0.2;
