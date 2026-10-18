@@ -1,6 +1,7 @@
 // Onset detection functions from the 100 fps spectra. The full-band SuperFlux-style log-mel flux and the dB flux of
 // the kick bins drive tempo and beat tracking; amplitude (linear) flux per drum band drives the hits, because it is
-// dominated by the loudest attacks (a kick, not the bass line under it).
+// dominated by the loudest attacks (a kick, not the bass line under it). The 100–600 Hz log flux adds the kicks that
+// land on the previous kick's tail.
 import type { Spectra } from './spectrum.ts';
 import { chunked, type Slicer } from './util.ts';
 
@@ -22,6 +23,13 @@ export interface Onsets {
   lowLevel: Float32Array;
   highLevel: Float32Array;
   hatLevel: Float32Array;
+  /** Amplitude-weighted centroid of the kick bins, in bins (a kick sweeps down; a bass note holds its pitch). */
+  kickCentroid: Float32Array;
+  /**
+   * Log mel flux of the ≈100–600 Hz bands (mean positive dB rise, ±1 band max filter on the reference): the start of
+   * a kick's downward sweep, also where the kick bins are still full of the previous kick's tail.
+   */
+  kickFlux: Float32Array;
 }
 
 /** Frames between the compared spectra (20 ms at 100 fps). */
@@ -34,18 +42,27 @@ export function* computeOnsets(s: Spectra, slicer: Slicer, p0: number, p1: numbe
   const snare = new Float32Array(nFrames), hat = new Float32Array(nFrames);
   const snareMid = new Float32Array(nFrames), snareHigh = new Float32Array(nFrames);
   const lowLevel = new Float32Array(nFrames), highLevel = new Float32Array(nFrames), hatLevel = new Float32Array(nFrames);
-  let mLo = nMel, mHi = 0, hLo = nMel, h6 = nMel;
+  const kickCentroid = new Float32Array(nFrames), kickFlux = new Float32Array(nFrames);
+  let mLo = nMel, mHi = 0, hLo = nMel, h6 = nMel, kfLo = nMel, kfHi = -1;
   for (let b = 0; b < nMel; b++) {
     if (melHz[b] >= 1000 && b < mLo) mLo = b;
     if (melHz[b] <= 5000) mHi = b;
     if (melHz[b] > 5000 && b < hLo) hLo = b;
     if (melHz[b] >= 6000 && b < h6) h6 = b;
+    if (melHz[b] >= 100 && melHz[b] <= 600) {
+      if (b < kfLo) kfLo = b;
+      kfHi = b;
+    }
   }
   const mc = Math.max(1, mHi - mLo + 1), hc = Math.max(1, nMel - hLo), h6c = Math.max(1, nMel - h6);
   const work = (t0: number, t1: number) => {
     for (let t = t0; t < t1; t++) {
-      let la = 0, hla = 0, h6l = 0;
-      for (let k = 0; k < nKick; k++) la += kickAmp[t * nKick + k];
+      let la = 0, hla = 0, h6l = 0, lm = 0;
+      for (let k = 0; k < nKick; k++) {
+        la += kickAmp[t * nKick + k];
+        lm += k * kickAmp[t * nKick + k];
+      }
+      kickCentroid[t] = la > 0 ? lm / la : 0;
       for (let b = mLo; b < nMel; b++) {
         hla += melAmp[t * nMel + b];
         if (b >= h6) h6l += melAmp[t * nMel + b];
@@ -55,15 +72,19 @@ export function* computeOnsets(s: Spectra, slicer: Slicer, p0: number, p1: numbe
       hatLevel[t] = h6l;
       if (t < L) continue;
       const cur = t * nMel, ref = (t - L) * nMel;
-      let sum = 0;
+      let sum = 0, kf = 0;
       for (let b = 0; b < nMel; b++) {
         let r = melDb[ref + b];
         if (b > 0 && melDb[ref + b - 1] > r) r = melDb[ref + b - 1];
         if (b + 1 < nMel && melDb[ref + b + 1] > r) r = melDb[ref + b + 1];
         const v = melDb[cur + b] - r;
-        if (v > 0) sum += v;
+        if (v > 0) {
+          sum += v;
+          if (b >= kfLo && b <= kfHi) kf += v;
+        }
       }
       flux[t] = sum / nMel;
+      kickFlux[t] = kfHi >= kfLo ? kf / (kfHi - kfLo + 1) : 0;
       // Drum bands: amplitude rise, weighted by the share of bands whose level rises by more than 1 dB.
       let ma = 0, mn = 0, ha = 0, hn = 0, h6a = 0, h6n = 0;
       for (let b = mLo; b < nMel; b++) {
@@ -98,5 +119,5 @@ export function* computeOnsets(s: Spectra, slicer: Slicer, p0: number, p1: numbe
     }
   };
   yield* chunked(nFrames, 512, work, slicer, p0, p1);
-  return { flux, low, kick, snare, snareMid, snareHigh, hat, lowLevel, highLevel, hatLevel };
+  return { flux, low, kick, snare, snareMid, snareHigh, hat, lowLevel, highLevel, hatLevel, kickCentroid, kickFlux };
 }

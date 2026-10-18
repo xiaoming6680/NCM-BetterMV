@@ -1,5 +1,5 @@
 # Separates a song into drums / bass / other / vocals with htdemucs_ft (audio-separator), for fitting the drum gates
-# (docs/ANALYSIS.md). Models from BMV_STEM_MODELS (default: the Clarity_MV project's).
+# (docs/ANALYSIS.md). Models from BMV_STEM_MODELS (default: the Clarity MV project's, which moved and was renamed).
 #   python tools/drums/separate.py <song.wav> <out dir>
 import os, sys, time, types
 import numpy as np, soundfile as sf
@@ -15,7 +15,7 @@ from audio_separator.separator import Separator
 inp, out = sys.argv[1], sys.argv[2]
 os.makedirs(out, exist_ok=True)
 t0 = time.time()
-models = os.environ.get("BMV_STEM_MODELS", r"D:\!XM的项目\个人项目\Clarity_MV\analysis\models")
+models = os.environ.get("BMV_STEM_MODELS", r"D:\!XM的项目\视频项目\Clarity_游戏是你的解药吗？\analysis\models")
 sep = Separator(output_dir=out, model_file_dir=models, output_format="WAV")
 sep.load_model(model_filename="htdemucs_ft.yaml")
 files = sep.separate(inp, {"Drums": "drums", "Bass": "bass", "Other": "other", "Vocals": "vocals"})

@@ -276,12 +276,15 @@ export function namedTempo(
   if (!(bpm > 0) || beats.length < 16) return bpm;
   if (bpm < NAMED_LOW) return 2 * bpm;
   if (bpm > NAMED_HIGH || meter !== 4) return bpm;
-  // Snare hits with no kick within 35 ms (a bright kick's attack also passes the snare gate).
+  // Snare hits with no kick at least half as strong within 35 ms (a bright kick's attack also passes the snare gate;
+  // a drum & bass snare's body passes the kick gate, much weaker).
   const free: number[] = [];
   for (let i = 0, k = 0; i < snares.length; i++) {
     const t = snares[i][0];
     while (k < kicks.length && kicks[k][0] < t - 0.035) k++;
-    if (!(k < kicks.length && kicks[k][0] <= t + 0.035)) free.push(t);
+    let kick = 0;
+    for (let j = k; j < kicks.length && kicks[j][0] <= t + 0.035; j++) kick = Math.max(kick, kicks[j][1]);
+    if (kick < 0.5 * snares[i][1]) free.push(t);
   }
   const near = (t: number) => {
     let lo = 0, hi = free.length;

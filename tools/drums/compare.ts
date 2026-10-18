@@ -1,14 +1,14 @@
 // Plugin drum hits vs reference onsets from the separated drum stem.
-//   bun tools/drums/compare.ts <encoded audio> <ref.json> [--dump]   (--dump writes <audio>.hits.json)
+//   bun tools/drums/compare.ts <encoded audio> <ref.json> [bpm hint] [--dump]   (--dump writes <audio>.hits.json)
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { analyze } from '../../src/analysis/index.ts';
 const FF = 'E:/ffmpeg-master-latest-win64-gpl-shared/bin/ffmpeg.exe', SR = 22050;
-const [enc, refPath] = process.argv.slice(2);
+const [enc, refPath, hint] = process.argv.slice(2).filter(a => !a.startsWith('--'));
 const raw = enc + '.f32';
 if (!existsSync(raw)) Bun.spawnSync([FF, '-v', 'error', '-y', '-i', enc, '-ac', '1', '-ar', String(SR), '-f', 'f32le', raw]);
 const b = readFileSync(raw), x = new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4);
 const t0 = performance.now();
-const a = analyze(x, SR, {});
+const a = analyze(x, SR, { bpmHint: hint ? +hint : undefined });
 const ms = performance.now() - t0;
 const ref = JSON.parse(readFileSync(refPath, 'utf8')) as Record<string, Array<[number, number]>>;
 const TOL = 0.05;

@@ -164,9 +164,13 @@ export interface GridEvidence {
   latency: number;
 }
 
-/** Evidence lookups: novelty support of a beat time, and whether a stretch of time is (nearly) silent. */
+/**
+ * Evidence lookups: novelty support of a beat time (tolerant), the novelty at a time (exact, for fitting a grid to the
+ * onsets), and whether a stretch of time is (nearly) silent.
+ */
 interface Probe {
   support(t: number): number;
+  at(t: number): number;
   quiet(from: number, to: number): boolean;
 }
 
@@ -187,8 +191,12 @@ interface Grid {
  * of at least `minBeats` beats where most beats sit tightly on one grid is replaced by that exact grid.
  * Produced music sits on a fixed grid; this repairs half-beat slips in sections whose onsets favour the off-beat
  * (open hats without a kick). Drifting (live) tempo fails the tightness test and keeps the DP beats.
- * With onset evidence, each grid is then continued over the DP beats beside it while it fits the onsets there
- * (extendGrid), and moved half a beat when the kicks sit between its beats (kicksOnHalfBeat).
+ * With onset evidence, two groups whose grids are neither in phase nor half a beat apart (a phase jump at an edit)
+ * merge only when one grid lands about as many onsets as the two (MERGE_ONSETS); each grid's period is refined on
+ * the onsets of its own stretch (refineGrid), continued over the DP beats beside it while it fits the onsets there
+ * (extendGrid), and moved half a beat when the kicks sit between its beats (kicksOnHalfBeat). Neighbouring grids
+ * that are not on one lattice (a tempo change, an edit) are joined at the beat where the onsets switch from one to
+ * the other (joinGrids).
  */
 export function lockConstantTempo(beats: Float64Array, ev?: GridEvidence, minBeats = 32): { beats: Float64Array; regions: LockedRegion[] } {
   const n = beats.length;
@@ -223,6 +231,7 @@ export function lockConstantTempo(beats: Float64Array, ev?: GridEvidence, minBea
     runs.push([s, e]);
     s = Math.max(e, s + 1);
   }
+  const probe = ev ? makeProbe(ev) : undefined;
   // Fit runs of ≥ 16 beats, merging neighbours with the same period.
   interface Group { a: number; b: number; idx: number[]; fit: { offset: number; period: number } }
   const groups: Group[] = [];
@@ -251,6 +260,14 @@ export function lockConstantTempo(beats: Float64Array, ev?: GridEvidence, minBea
       const known = (g.fit.period * g.idx.length + fit.period * idx.length) / all.length;
       const refit = fitGrid(beats, all, known, 0.001);
       if (!refit) continue;
+      // Grids neither in phase nor half a beat apart (a slip onto the off-beat): a phase jump at an edit, or DP beats
+      // on syncopated onsets. One grid for both only where it lands about as many onsets as the two.
+      const x = (fit.offset - g.fit.offset) / known, frac = Math.abs(x - Math.round(x));
+      if (probe && frac >= 0.1 && frac <= 0.42) {
+        const t0 = beats[g.a], t1 = beats[g.b - 1], t2 = beats[a], t3 = beats[b - 1];
+        const apart = gridSupport(g.fit, t0, t1, probe) + gridSupport(fit, t2, t3, probe);
+        if (gridSupport(refit, t0, t1, probe) + gridSupport(refit, t2, t3, probe) < MERGE_ONSETS * apart) continue;
+      }
       g.b = b; g.idx = all; g.fit = refit;
       groups.length = gi + 1;
       merged = true;
@@ -262,8 +279,10 @@ export function lockConstantTempo(beats: Float64Array, ev?: GridEvidence, minBea
   for (const g of groups) {
     if (g.idx.length >= minBeats) grids.push({ offset: g.fit.offset, period: g.fit.period, t0: beats[g.a], t1: beats[g.b - 1], half: false });
   }
-  if (ev && grids.length) {
-    const probe = makeProbe(ev);
+  // Stretches between two grids where the DP beats give way to beats of the grids (joinGrids).
+  const joins: Array<[number, number]> = [];
+  if (ev && probe && grids.length) {
+    for (const g of grids) refineGrid(g, probe);
     for (let i = 0; i < grids.length; i++) {
       const g = grids[i], P = g.period;
       // Each side as far as the neighbouring grid (as extended so far) or the first / last DP beat.
@@ -284,6 +303,13 @@ export function lockConstantTempo(beats: Float64Array, ev?: GridEvidence, minBea
       g.half = kicksOnHalfBeat(g, ev, probe);
       if (g.half) g.offset += 0.5 * g.period;
     }
+    for (let i = 0; i + 1 < grids.length; i++) {
+      const a = grids[i], b = grids[i + 1];
+      const x = (b.t0 - a.offset) / a.period;
+      if (Math.abs(b.period / a.period - 1) < 0.003 && Math.abs(x - Math.round(x)) < 0.1) continue;
+      const z = joinGrids(a, b, probe);
+      if (z) joins.push(z);
+    }
   }
   // DP beats outside the grids (moved half a beat too where the grids around them moved) and the grid beats, each
   // with its local beat period and whether it is a grid beat.
@@ -293,6 +319,7 @@ export function lockConstantTempo(beats: Float64Array, ev?: GridEvidence, minBea
     while (gi < grids.length && t >= grids[gi].t1 + 0.5 * grids[gi].period) gi++;
     const g = gi < grids.length ? grids[gi] : undefined, prev = gi > 0 ? grids[gi - 1] : undefined;
     if (g && t > g.t0 - 0.5 * g.period) continue;
+    if (joins.some(([x, y]) => t > x && t < y)) continue;
     const ja = Math.max(0, j - 1), jb = Math.min(n - 1, j + 1), p = (beats[jb] - beats[ja]) / (jb - ja);
     const half = (g || prev) && (!g || g.half) && (!prev || prev.half);
     out.push([half ? t + 0.5 * (j + 1 < n ? beats[j + 1] - t : t - beats[j - 1]) : t, p, false]);
@@ -328,8 +355,9 @@ export function lockConstantTempo(beats: Float64Array, ev?: GridEvidence, minBea
 }
 
 /**
- * Support of a beat time: the strongest smoothed beat novelty within ±2 frames, in standard deviations. Quiet: the
- * mean loudness weight of the stretch is under 0.1 (over 22 dB below the loud parts: a fade-out, a silent gap).
+ * Support of a beat time: the strongest smoothed beat novelty within ±2 frames, in standard deviations; `at` is the
+ * smoothed novelty at the time itself (interpolated). Quiet: the mean loudness weight of the stretch is under 0.1
+ * (over 22 dB below the loud parts: a fade-out, a silent gap).
  */
 function makeProbe(ev: GridEvidence): Probe {
   const { fps, latency, weight } = ev;
@@ -342,6 +370,10 @@ function makeProbe(ev: GridEvidence): Probe {
       let m = 0;
       for (let i = Math.max(0, f - 2); i <= Math.min(T - 1, f + 2); i++) if (sm[i] > m) m = sm[i];
       return m / sd;
+    },
+    at(t: number): number {
+      const x = (t + latency) * fps, i = Math.floor(x), f = x - i;
+      return i >= 0 && i + 1 < T ? (sm[i] * (1 - f) + sm[i + 1] * f) / sd : 0;
     },
     quiet(from: number, to: number): boolean {
       if (!weight) return false;
@@ -468,6 +500,112 @@ function kicksOnHalfBeat(g: Grid, ev: GridEvidence, probe: Probe): boolean {
   }
   return kh > 1.5 * k0 && sh > 0.5 * s0 && bh >= b0;
 }
+
+/** Summed onset support of a grid's beats within [t0, t1]. */
+function gridSupport(g: { offset: number; period: number }, t0: number, t1: number, probe: Probe): number {
+  let s = 0;
+  for (let k = Math.ceil((t0 - g.offset) / g.period - 0.5); g.offset + k * g.period <= t1 + 0.5 * g.period; k++) s += probe.support(g.offset + k * g.period);
+  return s;
+}
+
+/**
+ * Share of the two groups' own onset support that one grid over both needs, when their grids are neither in phase
+ * nor half a beat apart. With 0.95 this keeps apart, on 197 songs of the cache, an intro and an outro recorded
+ * 0.4 beat off the rest (Dragonhearted: one grid had put them 190 ms off their drums) and a section whose own fit was
+ * 0.65 % slow (今年も, 78.5 against 78.0); groups the DP took apart only by following syncopated onsets for a while
+ * still merge (Reverie, ratio 1.10).
+ */
+const MERGE_ONSETS = 0.95;
+
+/**
+ * Refines a grid's period (±1 %) and offset (±0.1 beat) on the onsets of its own stretch: the mean novelty at its
+ * beats. The grid was fitted to DP beats, which can sit on a slightly wrong lattice for a whole section: 122.047
+ * where the onsets say 121.999 (a tenth of a beat of drift over 290 beats, Lake Arrowhead), or 78.6 where they say
+ * 78.0 (DP beats hopping between the triplet subdivisions of a 234 BPM pulse). Kept only when the beats land clearly
+ * better (REFINE_GAIN) and the new period moves the far beats by a real part of a beat (REFINE_DRIFT); a refinement
+ * that only nudges the phase by a few milliseconds would just trade the DP's beat-time convention for the comb's.
+ */
+function refineGrid(g: Grid, probe: Probe): void {
+  const P0 = g.period;
+  const k0 = Math.ceil((g.t0 - g.offset) / P0 - 0.5), k1 = Math.floor((g.t1 - g.offset) / P0 + 0.5);
+  if (k1 - k0 < 16) return;
+  // Period and phase around the middle beat, so a period change does not move the phase there.
+  const kc = Math.round((k0 + k1) / 2), tc = g.offset + kc * P0;
+  const score = (P: number, ph: number) => {
+    let s = 0;
+    for (let k = k0; k <= k1; k++) s += probe.at(tc + ph + (k - kc) * P);
+    return s / (k1 - k0 + 1);
+  };
+  const base = score(P0, 0);
+  let best = base, bp = P0, bph = 0;
+  const search = (pc: number, phc: number, pStep: number, pN: number, phStep: number, phN: number) => {
+    let b = best, p1 = bp, ph1 = bph;
+    for (let q = -pN; q <= pN; q++) {
+      const P = pc * (1 + q * pStep);
+      for (let r = -phN; r <= phN; r++) {
+        const ph = phc + r * phStep;
+        if (Math.abs(ph) > 0.1 * P0) continue;
+        const v = score(P, ph);
+        if (v > b) { b = v; p1 = P; ph1 = ph; }
+      }
+    }
+    best = b; bp = p1; bph = ph1;
+  };
+  search(P0, 0, 0.0005, 20, 0.004, Math.ceil((0.1 * P0) / 0.004));
+  search(bp, bph, 0.00005, 10, 0.001, 4);
+  if (best < REFINE_GAIN * base || Math.abs(bp / P0 - 1) * (k1 - k0) < REFINE_DRIFT) return;
+  g.period = bp;
+  g.offset = tc + bph - kc * bp;
+}
+/** Gain in mean onset novelty at the beats that a refined grid needs (on the cache, accepted gains 1.07–1.49). */
+const REFINE_GAIN = 1.05;
+/** Beats of drift over its stretch that a refined period needs to be a correction rather than a nudge. */
+const REFINE_DRIFT = 0.05;
+
+/**
+ * Joins two neighbouring grids that are not on one lattice (a tempo change, a phase jump at an edit) and at most
+ * JOIN_BEATS apart: the earlier grid continues up to some beat and the later one takes over, at the split that lands
+ * the most onsets — support above the mean of the beat's other 1/8 phases, weighted by the beat's period so the
+ * faster grid gains nothing from its number of beats. The junction interval stays within the assembly's junction
+ * rules (0.6 to 1.6 of the periods), or both grids meet in one beat. Returns the stretch left between the two grids,
+ * where the DP beats are dropped. The DP follows the tempo path, which glides between the two tempos over several
+ * seconds of 8 s tempogram windows and misses an abrupt change (Distorted Fate, 100 → 150 at 91 s: five DP beats at
+ * 93–118 BPM), and extendGrid stops a grid at the last whole step of 8 beats that fits.
+ */
+function joinGrids(a: Grid, b: Grid, probe: Probe): [number, number] | null {
+  const Pa = a.period, Pb = b.period;
+  const gap = b.t0 - a.t1;
+  if (gap > JOIN_BEATS * Math.max(Pa, Pb)) return null;
+  const gain = (t: number, P: number) => {
+    let o = 0;
+    for (let p = 1; p < 8; p++) o += probe.support(t + (p / 8) * P);
+    return P * (probe.support(t) - o / 7);
+  };
+  // Cumulative gains of continuing each grid by q beats into the gap.
+  const J = Math.ceil(gap / Pa), M = Math.ceil(gap / Pb);
+  const ga = [0], gb = [0];
+  for (let q = 1; q <= J; q++) ga.push(ga[q - 1] + gain(a.t1 + q * Pa, Pa));
+  for (let q = 1; q <= M; q++) gb.push(gb[q - 1] + gain(b.t0 - q * Pb, Pb));
+  const lo = 0.6 * Math.min(Pa, Pb), hi = 1.6 * Math.max(Pa, Pb), same = 0.1 * Math.min(Pa, Pb);
+  let best = -Infinity, bj = -1, bm = -1;
+  for (let j = 0; j <= J; j++) {
+    const la = a.t1 + j * Pa;
+    if (la > b.t0 - 0.5 * Pb) break;
+    for (let m = 0; m <= M; m++) {
+      const fb = b.t0 - m * Pb;
+      if (fb < a.t1 + 0.5 * Pa) break;
+      const d = fb - la;
+      if (!(Math.abs(d) <= same || (d >= lo && d <= hi))) continue;
+      if (ga[j] + gb[m] > best + 1e-9) { best = ga[j] + gb[m]; bj = j; bm = m; }
+    }
+  }
+  if (bj < 0) return null;
+  a.t1 += bj * Pa;
+  b.t0 -= bm * Pb;
+  return [a.t1, b.t0];
+}
+/** Longest gap between two grids (beats of the slower one) that joinGrids fills from them. */
+const JOIN_BEATS = 8;
 
 /**
  * Final guard for the beat list: finite, within [0, duration], strictly increasing, and no beat within 30 % of the
