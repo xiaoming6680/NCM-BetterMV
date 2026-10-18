@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { clamp01, fitFov, rng, smooth } from './types.ts';
+import { clamp01, fitFov, narrowness, rng, smooth } from './types.ts';
 import { LyricOrbit } from './lyricSpace.ts';
 import { voiceOpts } from './lyricBlock.ts';
 import { hue, v3 } from './fractal.ts';
@@ -193,6 +193,10 @@ export class BlackHole implements MvScene {
     this.camera.aspect = aspect;
     this.camera.fov = fitFov(34, aspect);
     this.camera.updateProjectionMatrix();
+    // A narrow frame's translation in rows as wide as the frame where the band comes nearest (about 14 units off in
+    // the side views), inside the edges' fade; a wide one keeps its row.
+    const tan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2);
+    this.orbit.setWidth(narrowness(aspect) < 1 ? (2 * 0.72 * 14 * tan * aspect) / this.orbit.group.scale.x : Infinity);
   }
 
   /** The march's resolution: a share of the canvas. */

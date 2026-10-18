@@ -10,7 +10,7 @@
 // Cameras: down the flight line (flow), the same rolling (roll), across it, the swarm streaming sideways (side).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { clamp01, punch, rng, smooth, snap } from './types.ts';
+import { clamp01, narrowness, punch, rng, smooth, snap } from './types.ts';
 import { LyricBlocks, voiceFor } from './lyricBlock.ts';
 import { COLS, Spectrogram } from './viz.ts';
 import { Flight, hue, v3 } from './fractal.ts';
@@ -26,7 +26,7 @@ const BACK_VERT = /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Posit
 
 function backFrag(ink: THREE.Color, sig: THREE.Color, paper: THREE.Color): string {
   return /* glsl */ `
-uniform float uAspect, uAngle, uPhase, uPeriod, uTone, uArrows, uArrowY, uArrowDir, uArrowSize;
+uniform float uAspect, uAngle, uPhase, uPeriod, uTone, uArrows, uArrowY, uArrowDir, uArrowSize, uArrowMax;
 varying vec2 vUv;
 const vec3 INK = ${v3(ink)}, SIG = ${v3(sig)}, PAPER = ${v3(paper)};
 void main() {
@@ -37,11 +37,11 @@ void main() {
   // Lighter in the middle, darker to the corners (the reference's gradient), all of it held down under the cubes.
   float r = length(p);
   vec3 col = mix(INK, SIG * (1.05 - 0.6 * r), clamp(stripe, 0.0, 1.0)) * uTone;
-  // The arrows: a row of ▶ along y = uArrowY, pointing uArrowDir, the last one growing.
+  // The arrows: a row of ▶ along y = uArrowY, pointing uArrowDir, the last one growing (uArrowMax at most).
   if (uArrows > 0.0) {
-    float h = uArrowSize, gap = h * 2.3, x0 = -uArrowDir * gap * 3.5;
+    float h = uArrowSize, gap = h * 2.3, x0 = -uArrowDir * gap * (uArrowMax - 1.0) * 0.5;
     for (int i = 0; i < ${ARROWS}; i++) {
-      float k = clamp(uArrows - float(i), 0.0, 1.0);
+      float k = clamp(min(uArrows, uArrowMax) - float(i), 0.0, 1.0);
       if (k <= 0.0) break;
       vec2 q = vec2((p.x - (x0 + uArrowDir * gap * float(i))) * uArrowDir, p.y - uArrowY) / max(k, 0.05);
       float tri = step(-h, q.x) * step(q.x, h) * step(abs(q.y), (h - q.x) * 0.62);
@@ -57,6 +57,7 @@ attribute vec3 aPos;
 attribute vec4 aRot;
 attribute vec3 aMeta;
 uniform float uTravel, uT, uKick, uBurst;
+uniform vec2 uShape;
 uniform float uBand[${NB}];
 varying vec3 vN;
 varying float vTint, vFog, vLev;
@@ -67,7 +68,7 @@ void main() {
   float size = aMeta.x * (0.3 + 1.0 * lev) * (1.0 + 0.2 * uKick) * smoothstep(0.0, 3.0, d);
   vec3 axis = normalize(aRot.xyz);
   float ang = uT * aRot.w + aPos.z * 3.1;
-  vec3 c = vec3(aPos.xy * (1.0 + 0.22 * uBurst), -${NEAR.toFixed(1)} - d);
+  vec3 c = vec3(aPos.xy * uShape * (1.0 + 0.22 * uBurst), -${NEAR.toFixed(1)} - d);
   vec4 mv = modelViewMatrix * vec4(c + turn(position * size, axis, ang), 1.0);
   vN = turn(normal, axis, ang);
   vTint = aMeta.z;
@@ -118,7 +119,7 @@ export class Cubes implements MvScene {
     // The stripes, on the frame.
     this.backU = {
       uAspect: { value: 16 / 9 }, uAngle: { value: 0.6 }, uPhase: { value: 0 }, uPeriod: { value: 0.16 }, uTone: { value: 0.4 },
-      uArrows: { value: 0 }, uArrowY: { value: 0 }, uArrowDir: { value: 1 }, uArrowSize: { value: 0.05 },
+      uArrows: { value: 0 }, uArrowY: { value: 0 }, uArrowDir: { value: 1 }, uArrowSize: { value: 0.05 }, uArrowMax: { value: ARROWS },
     };
     const back = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
       vertexShader: BACK_VERT, fragmentShader: backFrag(ink, hue(palette.signal), palette.paper), uniforms: this.backU, depthTest: false, depthWrite: false,
@@ -137,7 +138,7 @@ export class Cubes implements MvScene {
     const random = rng(0xc5a7);
     for (let i = 0; i < N; i++) {
       const a = random() * Math.PI * 2, r = CLEAR + (SPREAD - CLEAR) * Math.pow(random(), 1.6);
-      pos.set([Math.cos(a) * r, Math.sin(a) * r * 0.75, random() * DEPTH], i * 3);
+      pos.set([Math.cos(a) * r, Math.sin(a) * r, random() * DEPTH], i * 3);
       rot.set([random() - 0.5, random() - 0.5, random() - 0.5, (random() < 0.5 ? -1 : 1) * (0.4 + 1.6 * random())], i * 4);
       // Mostly small, a few big; the bass bands nearer the line, the treble further out.
       const size = 0.2 + 1.1 * Math.pow(random(), 4);
@@ -148,7 +149,7 @@ export class Cubes implements MvScene {
     geo.setAttribute('aRot', new THREE.InstancedBufferAttribute(rot, 4));
     geo.setAttribute('aMeta', new THREE.InstancedBufferAttribute(meta, 3));
     geo.instanceCount = N;
-    this.cubeU = { uTravel: { value: 0 }, uT: { value: 0 }, uKick: { value: 0 }, uBurst: { value: 0 }, uBand: { value: Array.from(this.lev) } };
+    this.cubeU = { uTravel: { value: 0 }, uT: { value: 0 }, uKick: { value: 0 }, uBurst: { value: 0 }, uShape: { value: new THREE.Vector2(1, 0.75) }, uBand: { value: Array.from(this.lev) } };
     const cubes = new THREE.Mesh(geo, new THREE.ShaderMaterial({
       vertexShader: CUBE_VERT, fragmentShader: cubeFrag(ink, hue(palette.signal), hue(palette.accent), palette.paper), uniforms: this.cubeU,
     }));
@@ -164,6 +165,11 @@ export class Cubes implements MvScene {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
     this.backU.uAspect.value = aspect;
+    // The tube the frame's shape: a wide ellipse (3:4) on a wide frame, a tall one on a portrait frame, where the wide
+    // one left the frame's sides bare and the swarm only above and below the words. The arrows: half as many there.
+    const n = clamp01((narrowness(aspect) - 0.316) / (1 - 0.316));
+    (this.cubeU.uShape.value as THREE.Vector2).set(0.6 + 0.4 * n, 1.0 - 0.25 * n);
+    this.backU.uArrowMax.value = n < 0.5 ? ARROWS / 2 : ARROWS;
     this.blocks.setAspect(aspect);
   }
 
@@ -230,18 +236,22 @@ export class Cubes implements MvScene {
       const r = rng((shot.seed ^ (bar * 2654435761)) >>> 0);
       b.uArrowY.value = (r() - 0.5) * 0.6;
       b.uArrowDir.value = r() < 0.5 ? -1 : 1;
-      b.uArrowSize.value = 0.035 + 0.03 * r();
+      b.uArrowSize.value = Math.min(0.035 + 0.03 * r(), 0.09 * ctx.aspect);
     }
-    b.uArrows.value = Math.min(ARROWS, arrows);
+    b.uArrows.value = Math.min(b.uArrowMax.value, arrows);
 
     // The words: each line comes in with the swarm from deep in the flight line, slowing to a stop 14 units ahead as
     // it is sung (its speed falling to nothing), square to the camera; the next line's coming breaks it into dust.
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-    this.blocks.update(ctx.lyrics, t, sec.energy, (st, time, root) => {
+    // (Set down to fit the frame where it stops: a portrait frame is 7.7 units across there, a line of 13 em was cut
+    // off both sides.)
+    const tan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2);
+    this.blocks.update(ctx.lyrics, t, sec.energy, (st, time, root, _leave, size) => {
       const x = clamp01((time - (st.line.start - 0.7)) / 0.7);
       const depth = 14 + 34 * (1 - x) * (1 - x);
       root.position.copy(this.camera.position).addScaledVector(fwd, depth);
       root.quaternion.copy(this.camera.quaternion);
+      root.scale.setScalar(Math.min(1, (0.84 * 2 * 14 * tan * ctx.aspect) / Math.max(1e-3, size[0]), (0.5 * 2 * 14 * tan) / Math.max(1e-3, size[1])));
       return smooth(x / 0.4);
     });
 

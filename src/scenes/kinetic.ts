@@ -242,6 +242,34 @@ export class KineticType implements MvScene {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
     this.W = H * aspect;
+    this.upright = aspect < 0.83;
+  }
+
+  /**
+   * A portrait page (issue #4): the layouts were set for a wide one and, fitted to a third of its width, left the
+   * words half as big in an empty column. Upright, a unit of three or more CJK characters stands in two rows, the
+   * chip's square goes over its word, the panel is a band across the top, and the ticker takes the whole width.
+   */
+  private upright = false;
+
+  /** The rows `text` (the unit's text sung so far) is set in: two for a long CJK unit on an upright page. */
+  private rowsOf(u: Unit, text: string): string[] {
+    // (By its own characters: a Latin word in a Japanese line is a unit of a CJK line too.)
+    const full = Array.from(whole(u));
+    if (!this.upright || !u.cjk || full.length < 3 || !hasCjk(whole(u))) return [text];
+    const k = Math.ceil(full.length / 2), cs = Array.from(text);
+    const second = cs.slice(k).join('');
+    return second ? [cs.slice(0, k).join(''), second] : [cs.slice(0, k).join('')];
+  }
+
+  /** The widest row of a unit, set at an em of 1. */
+  private rowAdv(u: Unit, px: number): number {
+    return Math.max(...this.rowsOf(u, whole(u)).map(r => this.adv(r, px)));
+  }
+
+  /** Rows of a word, the first's middle at `cy` and the rest below it `step` apart, each flush left at `x0`. */
+  private rowsAt(rows: string[], px: number, em: number, x0: number, cy: number, step: number, color: THREE.Color, opacity: number, extra: Partial<WordCmd> = {}): void {
+    rows.forEach((r, i) => { if (r) this.word(r, px, em, x0 + (this.adv(r, px) * em) / 2, cy - i * step, color, opacity, extra); });
   }
 
   private quad(frag: string, uniforms: Record<string, THREE.IUniform>): Quad {
@@ -328,10 +356,10 @@ export class KineticType implements MvScene {
 
   /** echo: the block's words pile up (newest at the bottom, pushing the rest up); strong drums repeat the word. */
   private echo(b: Block, t: number): void {
-    const W = this.W, units = this.shown(b, t), random = rng(b.seed);
+    const W = this.W, units = this.shown(b, t), random = rng(b.seed), up = this.upright;
     const cjk = units[0]?.cjk ?? false, px = PX.mid;
     const maxAdv = Math.max(...b.units.map(u => this.adv(whole(u), px)));
-    const em0 = Math.min(H * 0.24, (W * 0.8) / Math.max(0.3, maxAdv));
+    const em0 = Math.min(H * 0.24, (W * (up ? 0.9 : 0.8)) / Math.max(0.3, maxAdv));
     type Row = { text: string; start: number; color: THREE.Color; ghost: boolean; size: number };
     const rows: Row[] = [];
     units.forEach((u, k) => {
@@ -349,14 +377,15 @@ export class KineticType implements MvScene {
     });
     rows.forEach((r, i) => { r.size = ECHO_SIZES[(i + (b.seed % 3)) % ECHO_SIZES.length]; });
     const step = (r: Row) => em0 * r.size * (cjk ? STEP.cjk : STEP.latin);
-    const x0 = -W / 2 + W * (0.09 + 0.1 * random());
-    const base = -H * 0.2;
+    // (Upright: from nearer the edge and lower, the stack taller — its rows are smaller.)
+    const x0 = -W / 2 + W * (up ? 0.05 + 0.04 * random() : 0.09 + 0.1 * random());
+    const base = up ? -H * 0.3 : -H * 0.2;
     for (let i = rows.length - 1, lift = 0; i >= 0; i--) {
       const r = rows[i], age = t - r.start;
       // Rows above the newest ride up as each newer one comes in.
       const y = base + lift + step(r) / 2;
       const newer = rows.length - 1 - i;
-      if (y - step(r) / 2 > H * 0.62 || newer > 5) break;
+      if (y - step(r) / 2 > H * 0.62 || newer > (up ? 8 : 5)) break;
       const [off, v] = this.slide(age, (i % 2 ? -1 : 1) * b.dir * W * 0.75);
       const em = em0 * r.size * (1 + 0.035 * this.knock(t, r.start));
       const w = this.adv(r.text, px) * em;
@@ -381,41 +410,45 @@ export class KineticType implements MvScene {
   private barLayout(b: Block, t: number): void {
     const W = this.W, units = this.shown(b, t), random = rng(b.seed), age = t - b.start;
     const px = PX.big;
-    const maxAdv = Math.max(...b.units.map(u => this.adv(whole(u), px)));
-    const em = Math.min(H * 0.3, (W * 0.78) / Math.max(0.3, maxAdv));
+    const maxAdv = Math.max(...b.units.map(u => this.rowAdv(u, px)));
+    const em = Math.min(H * 0.3, (W * (this.upright ? 0.84 : 0.78)) / Math.max(0.3, maxAdv));
     const cjk = units[0]?.cjk ?? false, capH = em * (cjk ? CAP.cjk : CAP.latin);
-    const y0 = H * (random() * 0.16 - 0.06);
+    // (Two rows of a long CJK unit on an upright page: the bar as tall as both.)
+    const step = em * (cjk ? STEP.cjk : STEP.latin), nRows = Math.max(...b.units.map(u => this.rowsOf(u, whole(u)).length));
+    const barH = capH * 1.32 + (nRows - 1) * step;
+    const y0 = H * (random() * 0.16 - 0.06), top = y0 + ((nRows - 1) * step) / 2;
     const hatch = b.hue % 2 ? this.colors[2] : this.colors[0];
     const [bo, bv] = this.slide(age, -b.dir * W * 1.3, 0.24);
     const belt = this.steps(b.start, t, 0.14);
     // The bar, over-wide so its ends are never seen; its stripes thicken with the level.
     const level = this.init.music.env('rms', t);
-    this.bar(bo, y0, W * 1.6, capH * 1.32, hatch, { phase: belt, duty: 0.38 + 0.22 * level, vx: bv, period: H * 0.034 });
+    this.bar(bo, y0, W * 1.6, barH, hatch, { phase: belt, duty: 0.38 + 0.22 * level, vx: bv, period: H * 0.034 });
     // Under it, solid and thin, a bass meter from the left edge.
     const low = this.init.music.env('low', t);
     const [mo, mv] = this.slide(age - 0.06, -b.dir * W * 1.3, 0.24);
     const mw = W * (0.08 + 0.55 * low);
-    this.bar(-W / 2 + mw / 2 + mo, y0 - capH * 0.66 - H * 0.03, mw, H * 0.018, this.colors[1], { duty: 1, vx: mv });
+    this.bar(-W / 2 + mw / 2 + mo, y0 - barH / 2 - H * 0.03, mw, H * 0.018, this.colors[1], { duty: 1, vx: mv });
     // The words: the one being sung slides in, the one before slides off the other way.
     const x0 = -W / 2 + W * 0.08;
     units.forEach((u, k) => {
       const next = units[k + 1];
-      const text = sung(u, t), w = this.adv(text, px) * em;
+      const text = sung(u, t), rows = this.rowsOf(u, text);
       if (next) {
         const out = t - next.start;
         if (out >= EXIT) return;
         const go = snap(out / EXIT) * b.dir * W * 1.1, gv = (b.dir * W * 1.1 * snapRate(out / EXIT)) / EXIT;
-        this.word(text, px, em, x0 + w / 2 + go, y0, this.paper, 1, { vx: gv, order: 21 });
+        this.rowsAt(rows, px, em, x0 + go, top, step, this.paper, 1, { vx: gv, order: 21 });
         return;
       }
       const [o, v] = this.slide(t - u.start, -b.dir * W * 0.7);
       const grow = 1 + 0.03 * this.knock(t, u.start);
-      this.word(text, px, em * grow, x0 + w / 2 + o, y0, this.paper, 1, { vx: v, order: 22 });
-      // A strong drum on a held word leaves a dim copy above the bar.
+      this.rowsAt(rows, px, em * grow, x0 + o, top, step * grow, this.paper, 1, { vx: v, order: 22 });
+      // A strong drum on a held word leaves a dim copy above the bar (never wider than the page).
       const echo = this.hitsIn(u.start + 0.3, t).find(h => this.hits.strength[lastIndex(this.hits.times, h)] >= 0.55);
       if (echo !== undefined) {
         const [eo, ev] = this.slide(t - echo, -b.dir * W * 0.4);
-        this.word(text, px, em * 0.62, x0 + (w * 0.62) / 2 + eo, y0 + capH * 1.05, this.color(b, k), 0.7, { vx: ev });
+        const eem = Math.min(em * 0.62, (W * 0.84) / Math.max(0.3, this.adv(text, px))), w = this.adv(text, px) * eem;
+        this.word(text, px, eem, x0 + w / 2 + eo, y0 + barH / 2 + capH * 0.39, this.color(b, k), 0.7, { vx: ev });
       }
     });
   }
@@ -428,21 +461,23 @@ export class KineticType implements MvScene {
     const W = this.W, units = this.shown(b, t), age = t - b.start;
     const px = PX.big;
     const u = units[units.length - 1], prev = units[units.length - 2];
-    const text = sung(u, t);
-    const em = this.fit(whole(u), px, W * 0.9, H * 0.4);
+    const text = sung(u, t), rows = this.rowsOf(u, text);
+    const em = Math.min(H * 0.4, (W * 0.9) / Math.max(0.3, this.rowAdv(u, px)));
     const drift = (t - b.start) * W * 0.03 + this.steps(b.start, t, 0.2) * W * 0.016;
     const [o, v] = this.slide(t - u.start, -b.dir * W * 0.8);
-    const w = this.adv(text, px) * em;
-    // (In a colour, never the paper of the word behind it.)
+    // (In a colour, never the paper of the word behind it. Two rows upright: the last on the word's line.)
     const tint = this.colors[(b.hue + units.length) % 2 ? 2 : 0];
-    this.word(text, px, em * (1 + 0.03 * this.knock(t, u.start)), -W / 2 + W * 0.05 + w / 2 + o + drift * b.dir * 0.4, -H * 0.17, tint, 1, { vx: v, order: 22 });
+    const step = em * (u.cjk ? STEP.cjk : STEP.latin), lift = (this.rowsOf(u, whole(u)).length - 1) * step;
+    const grow = 1 + 0.03 * this.knock(t, u.start);
+    this.rowsAt(rows, px, em * grow, -W / 2 + W * 0.05 + o + drift * b.dir * 0.4, -H * 0.17 + lift, step, tint, 1, { vx: v, order: 22 });
     // The one before (the first word: itself), stepping up out of the word's place as the next comes in.
     const back = prev ?? u, bt = whole(back);
     const bem = Math.max(H * 0.6, em * 1.4), bw = this.adv(bt, px) * bem;
     const bcap = bem * (back.cjk ? CAP.cjk : CAP.latin);
     const rise = snap((t - u.start) / (ENTER * 1.2));
-    // (Its foot a little above the middle, its head cut by the top edge.)
-    const by = H * 0.08 + bcap / 2 - (1 - rise) * H * 0.35;
+    // (Its foot a little above the middle — upright, clear of the word's rows — its head cut by the top edge.)
+    const foot = Math.max(H * 0.08, -H * 0.17 + lift + em * (u.cjk ? CAP.cjk : CAP.latin) * 0.5 + H * 0.04);
+    const by = foot + bcap / 2 - (1 - rise) * H * 0.35;
     this.word(bt, px, bem, W / 2 - bw / 2 + W * 0.1 - drift * b.dir, by, this.paper, (prev ? 0.92 : 0.5) * rise, { order: 18 });
     // A hatched square low in the free corner turns a quarter on each drum.
     const s = H * 0.12, turn = (this.steps(b.start, t, 0.16) * Math.PI) / 2;
@@ -450,8 +485,46 @@ export class KineticType implements MvScene {
     this.bar(W / 2 - W * 0.08 + co, -H / 2 + H * 0.13, s, s, this.colors[2], { rot: turn, period: H * 0.022, vx: cv, order: 12 });
   }
 
+  /**
+   * panel, upright: the paper a band across the top, the word in ink in three rows along it, each row stepping its
+   * own way on the drums (Latin copies mirrored every other one); below, the word in colour, the ones before it dim
+   * over it.
+   */
+  private panelUpright(b: Block, t: number): void {
+    const W = this.W, units = this.shown(b, t), age = t - b.start;
+    const u = units[units.length - 1], text = sung(u, t), full = whole(u);
+    const ph = H * 0.38, [po] = this.slide(age, ph * 1.1, 0.24);
+    const cy0 = H / 2 - ph / 2 + po;
+    this.bar(0, cy0, W * 1.2, ph, this.paper, { duty: 1, order: 5 });
+    const px = PX.mid, n = 3, ch = ph / n, em = ch * 0.78;
+    const len = this.adv(full, px) * em + em * 0.6;
+    const belt = this.steps(u.start, t, 0.14);
+    for (let r = 0; r < n; r++) {
+      const y = cy0 + ph / 2 - ch * (r + 0.5), dir = r % 2 ? -1 : 1;
+      const shift = (((belt + r * 0.37) * em * 1.4 * dir) % len + len) % len;
+      for (let k = -2; k <= Math.ceil(W / len) + 1; k++) {
+        const x = -W / 2 + k * len + shift;
+        if (x - len / 2 > W / 2 || x + len / 2 < -W / 2) continue;
+        this.word(full, px, em, x, y, this.ink, 1, { mirror: !u.cjk && (r + k) % 2 === 1, order: 8 });
+      }
+    }
+    const rows = this.rowsOf(u, text);
+    const mem = Math.min(H * 0.2, (W * 0.84) / Math.max(0.3, this.rowAdv(u, px)));
+    const rstep = mem * (u.cjk ? STEP.cjk : STEP.latin);
+    const [o, v] = this.slide(t - u.start, -b.dir * W * 0.6);
+    const cy = -H * 0.14 + ((rows.length - 1) * rstep) / 2;
+    const x0 = -W / 2 + W * 0.08;
+    this.rowsAt(rows, px, mem * (1 + 0.03 * this.knock(t, u.start)), x0 + o, cy, rstep, this.color(b, units.length - 1), 1, { vx: v, order: 22 });
+    units.slice(Math.max(0, units.length - 3), -1).reverse().forEach((p, k) => {
+      const pem = Math.min(mem * 0.42, (W * 0.84) / Math.max(0.3, this.adv(whole(p), PX.small)));
+      const pw = this.adv(whole(p), PX.small) * pem;
+      this.word(whole(p), PX.small, pem, x0 + pw / 2, cy + rstep * 0.5 + pem * (0.9 + k * 0.95), this.paper, 0.55 - k * 0.15, { order: 20 });
+    });
+  }
+
   /** panel: paper over one side, the word stood up on it in ink, repeated, every other copy mirrored. */
   private panel(b: Block, t: number): void {
+    if (this.upright) { this.panelUpright(b, t); return; }
     const W = this.W, units = this.shown(b, t), age = t - b.start;
     const u = units[units.length - 1], text = sung(u, t);
     const side = b.side, pw = W * 0.4;
@@ -486,8 +559,41 @@ export class KineticType implements MvScene {
     });
   }
 
+  /** chip, upright: the square over the word (in two rows if it is a long CJK one), the meters under it. */
+  private chipUpright(b: Block, t: number, idleText?: string): void {
+    const W = this.W, age = t - b.start;
+    const units = this.shown(b, t), u = units[units.length - 1];
+    const text = idleText ?? sung(u, t), full = idleText ?? whole(u);
+    const px = PX.mid;
+    const cjk = idleText ? hasCjk(idleText) : u.cjk;
+    const rows = idleText ? [idleText] : this.rowsOf(u, text);
+    const widest = idleText ? this.adv(full, px) : this.rowAdv(u, px);
+    const em = Math.min(idleText ? H * 0.1 : H * 0.2, (W * 0.8) / Math.max(0.3, widest));
+    const capH = em * (cjk ? CAP.cjk : CAP.latin), step = em * (cjk ? STEP.cjk : STEP.latin);
+    const nRows = idleText ? 1 : this.rowsOf(u, full).length, blockH = capH + (nRows - 1) * step;
+    const s = Math.max(capH * 1.05, H * 0.07), gap = capH * 0.4;
+    const top = H * 0.03 + (s + gap + blockH) / 2;
+    const left = -(widest * em) / 2;
+    const since = idleText ? b.start : u.start;
+    const [o, v] = idleText ? this.slide(age, -b.dir * W * 0.5) : this.slide(t - u.start, -b.dir * W * 0.5);
+    const [co, cv] = this.slide(age, b.dir * W * 0.6, 0.22);
+    const turn = (this.steps(b.start, t, 0.16) * Math.PI) / 2 + (idleText ? 0 : units.length - 1) * (Math.PI / 2) * snap((t - since) / 0.18);
+    this.bar(left + s / 2 + co, top - s / 2, s, s, this.colors[2], { rot: turn, period: H * 0.02, vx: cv, order: 12 });
+    const color = idleText ? this.paper : this.color(b, units.length - 1);
+    this.rowsAt(rows, px, em * (1 + 0.03 * this.knock(t, since)), left + o, top - s - gap - capH / 2, step, color, 1, { vx: v, order: 22 });
+    const m = this.init.music;
+    const levels: Array<[number, THREE.Color]> = [[m.env('low', t), this.colors[0]], [m.env('mid', t), this.colors[1]], [m.env('high', t), this.colors[2]]];
+    const mh = H * 0.02, mtop = top - s - gap - blockH - H * 0.04, span = Math.max(widest * em, W * 0.5);
+    levels.forEach(([lv, c], k) => {
+      const lw = Math.max(H * 0.02, span * Math.min(1, lv));
+      const [mo, mv] = this.slide(age - 0.04 * (k + 1), -b.dir * W * 0.8, 0.22);
+      this.bar(left + lw / 2 + mo, mtop - k * mh * 1.7, lw, mh, c, { phase: t * 1.5 + k, period: H * 0.016, duty: 0.55, vx: mv, order: 11 });
+    });
+  }
+
   /** chip: the word beside a hatched square that turns on the drums; three level meters below. */
   private chip(b: Block, t: number, idleText?: string): void {
+    if (this.upright) { this.chipUpright(b, t, idleText); return; }
     const W = this.W, age = t - b.start;
     const units = this.shown(b, t), u = units[units.length - 1];
     const text = idleText ?? sung(u, t);
@@ -523,25 +629,40 @@ export class KineticType implements MvScene {
     if (!st || st.line.backing) return;
     const fade = 1 - st.exit;
     if (fade <= 0) return;
-    const em = H * 0.034, y = -H / 2 + H * 0.09, margin = W * 0.06;
+    // (Upright: the whole width, lower, a little smaller; a long translation in two rows.)
+    const up = this.upright;
+    const em = up ? H * 0.03 : H * 0.034, y = -H / 2 + (up ? H * 0.1 : H * 0.09), margin = W * (up ? 0.07 : 0.06);
+    const room = W * (up ? 0.86 : 0.5);
     const cjk = hasCjk(st.line.text);
     const done = st.words.filter(w => w.age >= 0).map(w => (cjk ? w.word.text : w.word.text.toUpperCase()).trim()).filter(Boolean);
     if (!done.length) return;
-    // The trailing words that fit in half the width (measured a word at a time: each is drawn once and kept).
+    // The trailing words that fit (measured a word at a time: each is drawn once and kept).
     const space = cjk ? 0 : 0.28;
     let from = done.length - 1, width = this.adv(done[from], PX.tick);
-    while (from > 0 && (width + space + this.adv(done[from - 1], PX.tick)) * em < W * 0.5) width += space + this.adv(done[--from], PX.tick);
+    while (from > 0 && (width + space + this.adv(done[from - 1], PX.tick)) * em < room) width += space + this.adv(done[--from], PX.tick);
     const text = done.slice(from).join(cjk ? '' : ' ');
     const w = this.adv(text, PX.tick) * em;
     const x = avoid < 0 ? W / 2 - margin - w / 2 : -W / 2 + margin + w / 2;
     this.word(text, PX.tick, em, x, y, this.paper, 0.85 * fade, { order: 30 });
     const tr = st.line.translation?.trim();
-    if (tr) {
-      const tem = Math.min(em * 0.8, (W * 0.6) / Math.max(0.3, this.adv(tr, PX.trans)));
-      const tw = this.adv(tr, PX.trans) * tem;
-      const tx = avoid < 0 ? W / 2 - margin - tw / 2 : -W / 2 + margin + tw / 2;
-      this.word(tr, PX.trans, tem, tx, y - em * 1.3, this.paper, 0.55 * fade, { reveal: st.translationProgress * 1.02, order: 30 });
+    if (!tr) return;
+    const troom = W * (up ? 0.86 : 0.6);
+    let rows = [tr];
+    if (up && this.adv(tr, PX.trans) * em * 0.8 > troom) {
+      // Two rows, broken near the middle (at a space in Latin text).
+      const cs = Array.from(tr), mid = Math.ceil(cs.length / 2);
+      let k = mid;
+      if (!hasCjk(tr)) { const sp = tr.lastIndexOf(' ', tr.length / 2 + 4); if (sp > 0) k = Array.from(tr.slice(0, sp)).length; }
+      rows = [cs.slice(0, k).join('').trim(), cs.slice(k).join('').trim()].filter(Boolean);
     }
+    const tem = Math.min(em * 0.8, ...rows.map(r => troom / Math.max(0.3, this.adv(r, PX.trans))));
+    const p = st.translationProgress * 1.02;
+    rows.forEach((r, i) => {
+      const tw = this.adv(r, PX.trans) * tem;
+      const tx = avoid < 0 ? W / 2 - margin - tw / 2 : -W / 2 + margin + tw / 2;
+      const reveal = rows.length === 1 ? p : Math.min(1.02, Math.max(0, p * rows.length - i));
+      this.word(r, PX.trans, tem, tx, y - em * 1.3 - i * tem * 1.25, this.paper, 0.55 * fade, { reveal, order: 30 });
+    });
   }
 
   private compose(b: Block, t: number): void {

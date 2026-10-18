@@ -425,9 +425,11 @@ export interface OrbitOptions {
   transFace?: Face;
 }
 
-interface OrbitGlyph { mesh: TextMesh; s: number }
+/** A glyph at arc length `s` along its row (`row`: the translation's row on a band, 0 elsewhere). */
+interface OrbitGlyph { mesh: TextMesh; s: number; row?: number }
 const edgeP = new THREE.Vector3();
-interface OrbitLine { root: THREE.Group; glyphs: OrbitGlyph[]; word: number[]; wordS: number[]; trans: OrbitGlyph[]; transLen: number }
+/** `transRows`: each translation row's length (one row unless setWidth broke it). */
+interface OrbitLine { root: THREE.Group; glyphs: OrbitGlyph[]; word: number[]; wordS: number[]; trans: OrbitGlyph[]; transLen: number; transRows: number[] }
 
 /**
  * The line set round a circle. The circle turns a notch as each word begins (eased over a fifth of a second). Flat,
@@ -442,6 +444,19 @@ export class LyricOrbit {
 
   constructor(private palette: Palette, private opts: OrbitOptions) {
     this.group.userData.lyrics = true;
+  }
+
+  /**
+   * The arc a band's translation row may take (the group's units) before it breaks into more rows: what the frame
+   * shows across where the words stand. A portrait frame sees a third of a wide one's width, and a translation in one
+   * row ran off both sides (issue #4). Lines on screen are set again when it changes.
+   */
+  private width = Infinity;
+  setWidth(width: number): void {
+    if (Math.abs(width - this.width) < this.width * 0.03) return;
+    this.width = width;
+    for (const b of this.lines.values()) dispose(b.root);
+    this.lines.clear();
   }
 
   private glyph(ch: string, em: number, face: Face, px: number): TextMesh {
@@ -473,18 +488,45 @@ export class LyricOrbit {
     });
     const trans: OrbitGlyph[] = [];
     let transLen = 0;
+    const transRows: number[] = [];
     if (o.trans && state.line.translation) {
       const text = state.line.translation;
       for (const ch of Array.from(text)) {
         if (!ch.trim()) { transLen += o.trans.em * 0.35; continue; }
         const mesh = this.glyph(ch, o.trans.em, o.transFace ?? 'bold', 96), adv = mesh.userData.width as number;
         root.add(mesh);
-        trans.push({ mesh, s: transLen + adv / 2 });
+        trans.push({ mesh, s: transLen + adv / 2, row: 0 });
         transLen += adv;
+      }
+      transRows.push(transLen);
+      // On a band wider than the frame: rows of about equal length, broken between characters (at a space in Latin
+      // text, after a mark in CJK when one is near).
+      if (o.mode === 'band' && transLen > this.width && trans.length > 1) {
+        const n = Math.ceil(transLen / this.width), target = transLen / n, chars = Array.from(text).filter(c => c.trim());
+        const latin = !hasCjk(text);
+        let row = 0, from = 0, start = trans[0].s - (trans[0].mesh.userData.width as number) / 2;
+        transRows.length = 0;
+        for (let i = 0; i < trans.length; i++) {
+          const g = trans[i], half = (g.mesh.userData.width as number) / 2, at = g.s + half - start;
+          const next = trans[i + 1];
+          const gapAfter = next ? next.s - (next.mesh.userData.width as number) / 2 - (g.s + half) > 1e-4 : false;
+          const mark = /[，。、！？；：,.!?;:]/.test(chars[i] ?? '');
+          const breakable = !next ? false : latin ? gapAfter : true;
+          const due = at >= target * (mark ? 0.8 : 1) && row < n - 1;
+          g.row = row;
+          if (breakable && due) {
+            transRows.push(at);
+            for (let k = from; k <= i; k++) trans[k].s -= start;
+            row++; from = i + 1; start = next.s - (next.mesh.userData.width as number) / 2;
+          }
+        }
+        for (let k = from; k < trans.length; k++) trans[k].s -= start;
+        const last = trans[trans.length - 1];
+        transRows.push(last.s + (last.mesh.userData.width as number) / 2);
       }
     }
     this.group.add(root);
-    return { root, glyphs, word, wordS, trans, transLen };
+    return { root, glyphs, word, wordS, trans, transLen, transRows };
   }
 
   /**
@@ -584,8 +626,9 @@ export class LyricOrbit {
           g.mesh.rotation.set(0, 0, th + Math.PI / 2);
           if (view) g.mesh.material.opacity *= this.edge(g.mesh.position, b.root, view);
         } else {
-          const th = base + (g.s - b.transLen / 2) / tr.radius;
-          g.mesh.position.set(tr.radius * Math.sin(th), -o.em * 1.25, tr.radius * Math.cos(th));
+          const row = g.row ?? 0;
+          const th = base + (g.s - b.transRows[row] / 2) / tr.radius;
+          g.mesh.position.set(tr.radius * Math.sin(th), -o.em * 1.25 - row * tr.em * 1.3, tr.radius * Math.cos(th));
           g.mesh.rotation.set(0, th, 0);
           g.mesh.material.opacity *= smooth((Math.cos(th - now) + 0.15) / 0.5) * (view ? this.edge(g.mesh.position, b.root, view) : 1);
         }
