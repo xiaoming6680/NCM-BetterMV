@@ -1420,7 +1420,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
 
   // The optional aligner pack: its state follows the download while the page is open.
   let packState: PackState = { kind: 'checking' };
-  page('lyrics', '歌词与对齐', () => (packState.kind === 'ready' ? '对齐包已安装' : packState.kind === 'installing' ? '正在下载对齐包' : '对齐包未安装'));
+  page('lyrics', '歌词与对齐', () => (packState.kind === 'ready' ? '对齐包已安装' : packState.kind === 'installing' ? '正在下载对齐包' : packState.kind === 'outdated' ? '对齐包需要更新' : '对齐包未安装'));
   const words = group(section('歌词与对齐'));
   if (song) lyricDelayRow(words, song);
   // The MV page's panel is built anew each time it opens, so an old one stops listening once it is gone; BetterNCM's
@@ -1473,15 +1473,18 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     const mb = (n: number) => Math.round(n / 1048576);
     if (st.kind === 'checking') { state('正在检查…'); set?.('off', '正在检查'); }
     else if (st.kind === 'none') {
-      ctl.append(button(full ? '下载对齐包（约 400 MB）' : '下载（约 400 MB）', () => void installPack()));
-      set?.('off', '未安装：逐句歌词按音节估算');
+      ctl.append(button(full ? '下载对齐包（约 490 MB）' : '下载（约 490 MB）', () => void installPack()));
+      set?.('off', '未安装：逐句歌词按音节估算，节拍由插件自己识别');
+    } else if (st.kind === 'outdated') {
+      ctl.append(button(full ? '更新对齐包（约 130 MB）' : '更新（约 130 MB）', () => void installPack()));
+      set?.('new', '需要更新：新版本按音频识别节拍');
     } else if (st.kind === 'installing') {
       const downloading = st.total && st.note.indexOf('正在下载') === 0;
       ctl.append(meter(downloading ? `正在下载 ${mb(st.done)} / ${mb(st.total)} MB` : st.note, st.total ? st.done / st.total : 0));
       set?.('off', '正在安装');
     } else if (st.kind === 'ready') {
       if (full) { state('已安装'); ctl.append(button('删除', () => void removePack())); }
-      set?.('ok', '已安装：逐句歌词按音频对齐');
+      set?.('ok', '已安装：逐句歌词按音频对齐，节拍按音频识别');
     } else if (st.kind === 'removing') { state('正在删除…'); set?.('off', '正在删除'); }
     else {
       state('安装失败：' + st.message, true);
@@ -1539,8 +1542,8 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   const pack = el('div', 'bmv-row-c');
   pack.style.margin = '0';
   packInto(pack, true);
-  row(words, '逐字对齐', pack, undefined,
-    '只有逐句歌词的歌曲，按音频对齐每个字的演唱时间。在本机运行，每首歌首次播放时分析数秒至半分钟。');
+  row(words, '对齐包', pack, undefined,
+    '按音频识别每首歌的节拍，并为只有逐句歌词的歌曲对齐每个字的演唱时间。在本机运行，每首歌首次播放时分析数秒至半分钟。');
 
   let updateState: UpdateState = { kind: 'idle' };
   watchUpdate(st => { updateState = st; });
@@ -1855,7 +1858,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     const running = group(section('运行状态'));
     const cache = statusRow(running, '歌曲缓存');
     const gpuRow = statusRow(running, '显卡');
-    const packRow = statusRow(running, '逐字对齐包');
+    const packRow = statusRow(running, '对齐包');
     packInto(packRow.ctl, false, packRow.set);
     const ver = statusRow(running, '版本');
     updateInto(ver.r, ver.ctl, ver.sub, ver.set);

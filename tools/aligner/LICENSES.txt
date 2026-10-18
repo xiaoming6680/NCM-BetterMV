@@ -1,6 +1,6 @@
 BetterMV 歌词对齐包 / BetterMV aligner pack
 
-align.py, fa.py — part of BetterMV (https://github.com/xiaoming6680/NCM-BetterMV), GPL-3.0-or-later.
+align.py, fa.py, beats.py — part of BetterMV (https://github.com/xiaoming6680/NCM-BetterMV), GPL-3.0-or-later.
 
 Third-party components in this pack:
 
@@ -9,6 +9,25 @@ Third-party components in this pack:
   Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0),
   https://creativecommons.org/licenses/by-nc/4.0/ . Changes: exported to ONNX, matrix multiplications
   quantised to 8 bits. Non-commercial use only.
+- Beat This! beat tracker (beat_this.onnx, beat_mel.npy): from "Beat This! Accurate Beat Tracking Without DBN
+  Postprocessing" (Foscarin, Schlüter, Widmer, ISMIR 2024), https://github.com/CPJKU/beat_this , model "final0".
+  Changes: exported to ONNX; the mel filterbank of its input saved as beat_mel.npy. MIT License:
+
+    Copyright (c) 2024 Institute of Computational Perception, JKU Linz, Austria
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+    documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and
+    to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+    the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+    THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+    CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+    IN THE SOFTWARE.
 - Python 3.12 embeddable distribution: Python Software Foundation License, https://docs.python.org/3/license.html
 - NumPy: BSD 3-Clause License (bundled OpenBLAS: BSD 3-Clause), see python/Lib/site-packages/numpy-*.dist-info
 - ONNX Runtime (onnxruntime-directml): MIT License, with Microsoft DirectML (DirectML.dll) redistributed under

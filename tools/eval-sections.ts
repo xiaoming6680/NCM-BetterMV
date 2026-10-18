@@ -1,6 +1,6 @@
 // Sections against NetEase's own chorus marks (tools/truth/chorus.json: the 副歌 NetEase plays as a song's highlight),
 // on the songs decoded in dev/eval-pcm/ (see eval-tempo.ts) with their lyrics from dev/ncm-cache/ (the dev server's):
-//   bun tools/eval-sections.ts [--song id[,id…]] [--json out.json] [--worst n] [--no-lyrics] [--hint] [--detail]
+//   bun tools/eval-sections.ts [--song id[,id…]] [--json out.json] [--worst n] [--no-lyrics] [--hint] [--detail] [--beats]
 // Per song, for NetEase's chorus [cs, ce]:
 //   cover  the share of it the analysis calls chorus or drop (the climaxes: what NetEase marks is one of them)
 //   start  how far the nearest chorus / drop start is from cs, in bars (signed: + the analysis starts later)
@@ -25,6 +25,8 @@ const worstN = Number(opt('--worst') || 25);
 const useLyrics = !args.includes('--no-lyrics');
 const useHint = args.includes('--hint');
 const detail = args.includes('--detail');
+// --beats: with Beat This!'s beats (tools/eval-beats.ts), as the plugin with the aligner pack.
+const useBeats = args.includes('--beats');
 
 const marks: Record<string, [number, number] | null> = JSON.parse(readFileSync(join(ROOT, 'tools/truth/chorus.json'), 'utf8')).chorus;
 const names: Record<string, string> = {};
@@ -33,6 +35,7 @@ try {
 } catch {}
 
 const { analyze } = await import('../src/analysis/index.ts');
+const { evalBeats } = await import('./eval-beats.ts');
 const { parseNeteaseLyric } = await import('../src/lyrics/parse.ts');
 const { sungLines } = await import('../src/analysis/sections.ts');
 let sectionInfo: Array<Record<string, number>> = [];
@@ -64,7 +67,7 @@ for (const id of ids) {
   const wiki = existsSync(meta) ? JSON.parse(readFileSync(meta, 'utf8')).wikiBpm ?? undefined : undefined;
   const lyrics = useLyrics && existsSync(lyricFile) ? parseNeteaseLyric(JSON.parse(readFileSync(lyricFile, 'utf8')), x.length / SR) : [];
   let a: Analysis;
-  try { a = analyze(x, SR, { lyrics, bpmHint: wiki, chorusHint: useHint ? mark : undefined }); } catch (e) { skipped++; console.log(`skip ${id}: ${(e as Error).message}`); continue; }
+  try { a = analyze(x, SR, { lyrics, bpmHint: wiki, chorusHint: useHint ? mark : undefined, beatThis: useBeats ? evalBeats(id) : undefined }); } catch (e) { skipped++; console.log(`skip ${id}: ${(e as Error).message}`); continue; }
   const secs: Section[] = a.sections;
   if (detail) {
     const barAt = (t: number) => { let i = 0; while (i + 1 < a.downbeats.length && a.downbeats[i + 1] <= t + 0.01) i++; return i; };

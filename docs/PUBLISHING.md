@@ -27,7 +27,7 @@ bun run plugin   # 装进 BetterNCM 的 plugins_dev，重启网易云生效
 - 标签 `v主.次.修`，非预发布。附件：`BetterMV-版本号.plugin`（即 `dist/ncm-better-mv.plugin` 改名）和 `SHA256SUMS.txt`。
 - 插件的检查更新（`src/plugin/update.ts`）只认这个格式：标签 `v主.次.修`、非预发布、附件含 `.plugin`、下载地址在本仓库的 `releases/download/` 下。改标签或附件格式前先改 `update.ts`。
 - 0.9.2 起新版本启动时会删除同 slug 的旧包。从 0.9.1 及更早版本升级要手动删除旧的 `.plugin`（同 slug 的包只有文件名排在最后的生效），Release 说明里写明。
-- 对齐包单独用 `aligner-v1` 标签，标成预发布，免得被 GitHub 当成最新版本。包格式变了才发新标签（见 [ALIGNER.md](ALIGNER.md)）。
+- 对齐包单独用 `aligner-v格式号` 标签（现在是 `aligner-v2`，加了节拍；`aligner-v1` 留给旧插件），标成预发布，免得被 GitHub 当成最新版本。包格式变了才发新标签（见 [ALIGNER.md](ALIGNER.md)）。新包要先于插件发布：插件一更新就会去新标签下载。
 - 只在 GitHub 发布，不上架 BetterNCM 插件商店。
 
 ## 客户端验收

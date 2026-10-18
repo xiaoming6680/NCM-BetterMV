@@ -8,7 +8,7 @@
 - 没有 Worker，只能在主线程分片：`analyzeSteps` 是生成器，每 `sliceMs`（默认 8 ms）交还一次控制权。插件用 `yieldToPage`（`src/app/prepare.ts`，MessageChannel）让出，页面照常处理输入、出帧，但不等下一帧；用 requestAnimationFrame 会空等一半时间，且网易云最小化时分析会停住。
 - 纯 TypeScript，无依赖（FFT 自写），结果确定。
 - 输入：`OfflineAudioContext` 解码到 22 050 Hz 后混成单声道的 `Float32Array`（16 kHz 以上的采样率都可以）。
-- 可选输入：歌词（帮助找段落）、`bpmHint`（音乐百科的 BPM，只用来选倍频或 3∶2 那一档）、`chorusHint`（网易云的副歌标记）。
+- 可选输入：歌词（帮助找段落）、`bpmHint`（音乐百科的 BPM，只用来选倍频或 3∶2 那一档）、`chorusHint`（网易云的副歌标记）、`beatThis`（对齐包给的 Beat This! 节拍和每帧概率，见“节拍：Beat This!”）。
 
 ## 方法
 
@@ -106,6 +106,22 @@
 - `bpm` 本身不变：用它的场景（巡航速度、多面体选型）要的是“歌走得多快”。
 - HUD 和图版标签显示 `Music.shownBpm(t)`：网格在整首速度 3% 以内时显示整首的通行速度，否则显示前后 8 拍间隔的中位数（乘同样倍数），避免数字每拍跳动。
 - 试过把起音强度按每拍 8 个相位折叠、看十六分位置是否和拍点一样满，两类歌的边界只差 0.01，没用。
+
+### 11. 节拍：Beat This!（对齐包）
+
+装了对齐包时，`src/plugin/aligner.ts` 的 `trackSongBeats` 把分析用的 22.05 kHz 单声道音频交给包里的 `beats.py`（Beat This!，CPJKU，ISMIR 2024，主模型 final0 导出的 ONNX；梅尔前端用 numpy 照 `beat_this.preprocessing.LogMelSpect` 算，198 首与 PyTorch 版节拍一致度最低 0.9985），拿回它的节拍、重拍和每帧（50 fps）的节拍与重拍概率，作为 `beatThis` 传给分析（`src/analysis/beatthis.ts`）：
+
+1. **合并版**：Beat This! 的节拍概率按帧插值到本机的 100 fps，与起音曲线各自除以标准差后相加；速度档按它的主速度（`beatThisTempo`：与中位拍间隔相差 15% 以内的拍间隔的平均）选，不再按 `bpmHint`。其余照常（速度路径、DP、恒速锁定），得到的节拍记为合并版。
+2. **整理**（`tidyBeats`）：Beat This! 的节拍里，连续 8 拍以上、2 s 以上、每个间隔都在本段中位数 ±15% 以内的是稳定段，原样保留（段内按 ±4 拍线性拟合去掉 20 ms 的帧量化），稳定段之间的速度档变化也保留。两段稳定段之间的乱段依次用：
+   - 两倍速网格（`dense`）：这段里 Beat This! 的拍数达到较快一侧速度的 1.4 倍以上，或它的拍全都落在两倍速网格上、三成以上相邻（`onFinerGrid`：在一倍和两倍之间零碎交替，只是漏拍）；网格从前一段最后一拍接着数；
+   - 合并版的拍，当它们在这一段落在两侧之一的速度档上、两端都接得上（间隔在两侧周期的 0.6–1.6 倍之间）；
+   - 都不行时：两侧速度相差不到 1.5 倍的按周期渐变补拍（渐快的歌），约 2 倍的在节拍概率最高处切换。
+   首尾按最近一段延长，拍落在两倍速网格上时按两倍速延长。全部节拍提前 12 ms（Beat This! 比 Clarity 手工标注晚的中位数）。Beat This! 整首没有一段稳定段时不用它（`usableBeatThis`），连合并也不做。
+3. **一首一个节奏档**（`onePace`）：导演的切镜长度、小节、飞行场景的巡航速度都是按本机网格调的，而本机网格把鼓打贝斯和音游曲跟在半速上。所以主速度 160 BPM 以上的歌整首每两拍取一拍；主速度以下但局部达到主速度 1.7 倍以上的段（128 的歌里的 256 段），也折回主速度。取哪一半拍看 Beat This! 的重拍概率之和。渐快和 3∶2 的变速不受影响。`beatLevel: 'full'` 保留全部拍，只用于对照。
+4. **小节**：仍由 `meter.ts` 定，Beat This! 在每拍上的重拍概率作为一条证据加进重拍证据，权重同低音变化（1.0）。Beat This! 自己的重拍在不少歌里给出 2、3 拍一组的小节（Clarity 0.93，本机 1.0），不直接用。
+5. **显示速度**：仍是 `namedTempo`。另加两条：百科 BPM 约为显示速度的两倍时翻倍（Beat This! 把 200 BPM 的歌大半跟在 100 上）；整首折过半的，显示 Beat This! 听到的速度。
+
+对齐包的任务格式、打包和发布见 [ALIGNER.md](ALIGNER.md)。
 
 ## 实测
 
@@ -235,6 +251,27 @@ Clarity_MV 的鼓轨起点只认 < 120 Hz 的陡升，漏了叠在上一下尾�
 - 曲中大幅变速：《ℵ0》（35–400，基础 250）超过速度状态的上限 230，路径贴在 230，DP 拍哪一段都对不上；《Aegleseeker》前 200 s 路径停在 93.6（= 234 × 0.4，和 117 差 5∶4），网格不贴起音，后段才到 117；节拍转换很多的《Distorted Fate》按听感分成 100 / 150 两段锁住，显示的是时间更长的 100。见下节。
 - 前奏无鼓时速度路径会漂（《The Other Side》前 70 s 网格在 195–204，主体 75）；锁定段以外的 DP 拍偶尔有一拍被挤成正常间隔的 1/3。
 
+### Beat This!
+
+评测集的 Beat This! 结果存在 `dev/eval-pcm/beats/`（`tools/aligner/eval_beats.py`，用包的 Python 跑），各评测脚本加 `--beats` 时读它，和插件装了对齐包时一样。
+
+| | 本机 | 加 Beat This! |
+|---|---|---|
+| 显示速度对公认速度（197 首） | 166 | 166 |
+| 其中高置信度（65 首） | 56 | 60 |
+| 网格（不计倍频） | 184 | 187 |
+| Clarity 节拍 F / 渐快段 / 重拍 F | 1.000 / 1.000 / 1.000 | 0.943 / 0.841 / 0.927 |
+| Clarity 底鼓 F / 军鼓 F（对鼓轨） | 0.78 / 0.65 | 0.79 / 0.66 |
+| 副歌标记覆盖（`eval-sections --hint`） | 85.0% | 83.9% |
+| 起点在 1 / 2 / 4 小节内 | 105 / 134 / 155 | 105 / 128 / 151 |
+| Falling Again 段落边界 ±0.5 s / ±1 小节 | 7/12 / 10/12 | 8/12 / 9/12 |
+
+- 只看指标，本机和 Beat This! 互有胜负：Clarity 是本机调参用的歌，`eval-grid` 的拍上起音强度偏向本机的 DP 拍（2.364 → 2.095）。决定用它的依据是逐首听：双轨谱面视频（两条节拍从右往左滚向判定线）和同一种子、同一风格下只换节拍的 MV 并排片段。Beat This! 在落点上明显更准：Jackpot、Make it better 本机落在反拍上；RENDA JOCEKY 本机按半速、相位也偏。它的毛病是零碎乱跳（197 首里 98 首超过 5 拍）和重拍，这两样由上面的整理和小节规则兜住。
+- 网格倍数：141 首不变，44 首翻倍，8 首减半（未折算前）。`onePace` 之后，鼓打贝斯和音游曲的小节长度回到本机的 2.5–2.8 s。
+- 鼓点：场景用到的强底鼓（≥0.35）新旧一致度中位数 0.97，总数 +0.8%；强军鼓 0.89，总数 +13%（军鼓要看第 2、4 拍，随小节相位变）。拟合集的鼓轨参照不在仓库里，没有重测 F。
+- 耗时：显卡（DirectML）上一个任务 2.1–2.4 s，其中载入模型约 1.3 s、推理 0.6–0.8 s；只用 CPU 时推理 2.4–8.3 s。提前分析下一首时用 CPU、2 线程。
+- 小模型 small0（8 MB）和 final0 只有 90/197 首基本一致（节拍 F ≥ 0.95），不用。
+
 ### 变速与网格贴合
 
 没有逐拍标注，用 `tools/eval-grid.ts` 看网格贴不贴起音：拍上的平滑起音强度（以整首的标准差为单位，按响度加权）和锁定覆盖。它偏向 DP 的拍（DP 本来就选起音峰），只用来比较同一批歌的不同版本。看单首用拍内相位图：每拍一行，横轴是相对网格的相位，颜色是起音强度；网格贴住时亮线竖直落在 0 和 1 上，周期偏了是斜线，变速处的滑坡是弯线。
@@ -296,8 +333,10 @@ Clarity_MV 的鼓轨起点只认 < 120 Hz 的陡升，漏了叠在上一下尾�
 ## 评测
 
 ```sh
-bun tools/eval-analysis.ts [--song id,…] [--no-hint] [--no-lyrics] [--quick | --no-timing] [--bars] [--debug-sections]
+bun tools/eval-analysis.ts [--song id,…] [--no-hint] [--no-lyrics] [--quick | --no-timing] [--bars] [--debug-sections] [--beats]
 ```
+
+`--beats`（`eval-analysis`、`eval-sections`、`eval-tempo`、`eval-grid` 都有）：带上 `dev/eval-pcm/beats/` 里的 Beat This! 结果，先跑 `dev/aligner/python/python.exe tools/aligner/eval_beats.py`（已有的跳过）。
 
 - 歌单在 `SONGS`：clarity、clarity-ncm、ticking、maybe、falling、shanlu、uify、stronger、hurricane、takemylove、combine、timeflies、su（有标注），spacewalk、limit、her（无标注）。`bun run eval` 是它的别名。
 - `--no-timing`：每首只跑一次、不计时，调参用。`--no-lyrics`：不给歌词。

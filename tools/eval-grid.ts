@@ -1,5 +1,5 @@
 // How squarely the beat grid sits on the onsets, per song (no beat annotations needed):
-//   bun tools/eval-grid.ts [--song id[,id…]] [--dir <pcm folder>] [--json out.json] [--compare old.json]
+//   bun tools/eval-grid.ts [--song id[,id…]] [--dir <pcm folder>] [--json out.json] [--compare old.json] [--beats]
 // For each song: lock coverage (share of beats on an exact constant grid: 32+ beats whose intervals agree within
 // 0.5 ms — the constant-tempo lock's grids, or smoothed DP beats as steady as one), on-beat novelty (the smoothed beat novelty at the beats, in
 // standard deviations, weighted by loudness: higher = beats closer to the onset peaks) and its contrast against the
@@ -14,6 +14,7 @@ import { analyze, beatNovelty, loudnessWeight, BEAT_LATENCY } from '../src/analy
 import { computeSpectra } from '../src/analysis/spectrum.ts';
 import { computeOnsets } from '../src/analysis/onset.ts';
 import { Slicer, gaussianSmooth, std } from '../src/analysis/util.ts';
+import { evalBeats } from './eval-beats.ts';
 
 const SR = 22050;
 const ROOT = join(import.meta.dir, '..');
@@ -37,7 +38,7 @@ for (const id of ids) {
   const buf = readFileSync(pcm), s16 = new Int16Array(buf.buffer, buf.byteOffset, buf.byteLength >> 1);
   const x = new Float32Array(s16.length);
   for (let i = 0; i < s16.length; i++) x[i] = s16[i] / 32768;
-  const a = analyze(x, SR, { bpmHint: m.wikiBpm ?? undefined });
+  const a = analyze(x, SR, { bpmHint: m.wikiBpm ?? undefined, beatThis: args.includes('--beats') ? evalBeats(id) : undefined });
   // The novelty the beat tracker follows, as the lock sees it (smoothed, in standard deviations).
   const slicer = new Slicer(Infinity);
   const spec = drain(computeSpectra(x, SR, slicer, 0, 1)), ons = drain(computeOnsets(spec, slicer, 0, 1));

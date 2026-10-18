@@ -10,6 +10,7 @@ import { computeSpectra, FPS } from './spectrum.ts';
 import { computeOnsets } from './onset.ts';
 import { namedTempo, pathTempo, tempoFactor, tempogram, tempoPath } from './tempo.ts';
 import { trackBeats, regularizeBeats, lockConstantTempo, cleanBeats } from './beats.ts';
+import { beatThisTempo, downbeatEvidence, onePace, tidyBeats, usableBeatThis, type BeatThisInput } from './beatthis.ts';
 import { beatFeatures } from './features.ts';
 import { detectMeter } from './meter.ts';
 import { findSections, makeBars } from './sections.ts';
@@ -35,6 +36,16 @@ export interface AnalyzeOptions {
    * the sections found have no chorus or drop over it (src/analysis/sections.ts).
    */
   chorusHint?: [number, number];
+  /**
+   * Beat This!'s beats and probabilities from the aligner pack (src/analysis/beatthis.ts): its probability is added to
+   * the novelty, its tempo picks the octave instead of `bpmHint`, and the beats and bars are its own, tidied.
+   */
+  beatThis?: BeatThisInput;
+  /**
+   * With beatThis: 'half' (default) keeps one pace per song, fast songs on half their tempo as the plugin's own grid
+   * had them (onePace); 'full' keeps every beat Beat This! found, double-time passages included.
+   */
+  beatLevel?: 'half' | 'full';
 }
 
 /** Yields progress 0..1 roughly every sliceMs of work; returns the finished Analysis. */
@@ -58,12 +69,25 @@ export function* analyzeSteps(samples: Float32Array, sampleRate: number, opts: A
   const levelDb = new Float32Array(spec.nFrames);
   for (let i = 0; i < spec.nFrames; i++) levelDb[i] = 10 * Math.log10(spec.power[i] + 1e-12);
   const nov = beatNovelty(ons.flux, ons.low, fps);
+  // (Not at all when it held no steady beat anywhere: its probability and tempo would only mislead the tracker.)
+  const bt = opts.beatThis && usableBeatThis(opts.beatThis) ? opts.beatThis : undefined;
+  if (bt) {
+    // Beat This!'s beat probability (at its frame rate) added to the novelty, both in standard deviations.
+    const ext = new Float32Array(nov.length), p = bt.beatProb;
+    for (let i = 0; i < ext.length; i++) {
+      const f = (i / fps) * bt.fps, k = Math.floor(f), r = f - k;
+      ext[i] = k + 1 < p.length ? p[k] * (1 - r) + p[k + 1] * r : 0;
+    }
+    const se = std(ext) || 1, sn = std(nov) || 1;
+    for (let i = 0; i < nov.length; i++) nov[i] = nov[i] / sn + ext[i] / se;
+  }
+  const bpmHint = (bt && beatThisTempo(bt.beats)) || opts.bpmHint;
   yield* pause(0.77);
   const loudW = loudnessWeight(levelDb, fps);
   const tg = yield* tempogram(nov, fps, slicer, 0.77, 0.83, loudW);
   let curve = tempoPath(tg);
   // Octave from the hint; a dotted pulse (drum & bass) moved to the beat.
-  const factor = tempoFactor(pathTempo(tg, curve), opts.bpmHint, tg);
+  const factor = tempoFactor(pathTempo(tg, curve), bpmHint, tg);
   if (factor !== 1) {
     // A path sent to another tempo can settle on a strong peak a fifth of the way off it (4∶5); held closer then.
     const target = pathTempo(tg, curve) * factor;
@@ -83,12 +107,20 @@ export function* analyzeSteps(samples: Float32Array, sampleRate: number, opts: A
   const smooth = cleanBeats(regularizeBeats(locked.beats, locked.regions), duration);
   let beats = cleanBeats(fitToAudible(smooth, levelDb, fps, duration), duration);
   if (beats.length < 8 || quantile(levelDb, 0.95) < -90) beats = fallbackGrid(duration);
+  // With Beat This!: its beats, tidied, the stretches it lost filled from these, on one pace.
+  const tidy = bt ? tidyBeats(bt, beats) : null;
+  let heard = 0;
+  if (tidy && bt) {
+    heard = dominantTempo(tidy);
+    const t = cleanBeats(opts.beatLevel === 'full' ? tidy : onePace(tidy, bt.downProb, bt.fps, heard), duration);
+    if (t.length >= 8) beats = t;
+  }
   const tempoPerBeat = localTempo(beats);
   yield* pause(0.89);
 
   const feats = beatFeatures(spec, ons, beats);
   yield* pause(0.9);
-  const bars = detectMeter(feats, beats, lyrics);
+  const bars = detectMeter(feats, beats, lyrics, tidy && bt ? downbeatEvidence(bt, beats) : undefined);
   const beatInBar = bars.beatInBar;
   const downbeats = beats.filter((_, i) => beatInBar[i] === 0);
   yield* pause(0.91);
@@ -109,12 +141,18 @@ export function* analyzeSteps(samples: Float32Array, sampleRate: number, opts: A
   yield* pause(0.99);
   const env: Envelopes = { fps, rms: rmsEnv, low: lowEnv, mid: midEnv, high: highEnv, onset: normalizeQuantile(ons.flux) };
   const bpm = dominantTempo(beats);
+  let named = namedTempo(bpm, beats, beatInBar, bars.meter, hits.kick, hits.snare, levelDb, fps);
+  // Beat This! may hold a half-time pulse the song is cited at twice (a 200 BPM rhythm-game song tracked at 100): with
+  // its beats the wiki BPM no longer picks the grid's octave, so it says here when the shown tempo is twice the grid's.
+  if (tidy && opts.bpmHint && Math.abs(Math.log(opts.bpmHint / (2 * named))) <= Math.log(1.09)) named *= 2;
+  // Paced on half the tempo: shown at the tempo Beat This! heard (the one these songs are cited at).
+  if (tidy && heard >= 160 && Math.abs(Math.log(heard / (2 * bpm))) < Math.log(1.06) && named < 1.5 * bpm) named = 2 * bpm;
   yield 1;
   return {
     version: ANALYSIS_VERSION,
     duration,
     bpm,
-    namedBpm: Math.round(namedTempo(bpm, beats, beatInBar, bars.meter, hits.kick, hits.snare, levelDb, fps) * 1000) / 1000,
+    namedBpm: Math.round(named * 1000) / 1000,
     meter: bars.meter,
     beats: beats.map(round4),
     beatInBar,

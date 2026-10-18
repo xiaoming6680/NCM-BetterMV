@@ -10,7 +10,7 @@ import {
 } from './client.ts';
 import { ProgressClock } from './clock.ts';
 import { fetchChorus, fetchLyric, fetchWiki, getAudio, loadCover, songCacheDir, SourceError } from './source.ts';
-import { alignSong, applyAlignment, cachedAlignment, checkPack, needsAlignment } from './aligner.ts';
+import { alignSong, applyAlignment, cachedAlignment, checkPack, needsAlignment, trackSongBeats } from './aligner.ts';
 import { startUpdates } from './update.ts';
 import { isRecordingKeys, keyCombo, keyLabel, loadConfig, mvButton, Overlay, pixelRatio, settingsView, type BarSection, type Config, type QueueTrack } from './ui.ts';
 import type { MenuEntry } from './menu.ts';
@@ -527,6 +527,10 @@ function start(client: Client): void {
           const r = await cachedAlignment(song.id, lines);
           wordsFromPack = !!r && applyAlignment(lines, r) > 0;
         },
+        // Beats from the aligner pack (Beat This!), waited for: they decide the cuts. Ahead of time on the CPU.
+        beats: async (mono, rate, duration) => (await checkPack())
+          ? trackSongBeats(song.id, mono, rate, duration, { background: !job.urgent, cancelled: () => job.cancelled, onProgress: p => job.progress?.('beats', p) })
+          : null,
       },
     );
     return { song: prepared, audio, wordsFromPack };
@@ -610,7 +614,10 @@ function start(client: Client): void {
       let prepared = ready.get(song.id);
       if (!prepared) {
         overlay.status('正在读取歌曲…', { progress: 0.03 });
-        job.progress = (stage, p) => overlay.status(stage === 'decode' ? '正在解码音频…' : '正在分析节拍与段落…', { progress: stage === 'decode' ? 0.08 : 0.15 + 0.73 * p });
+        job.progress = (stage, p) => overlay.status(
+          stage === 'decode' ? '正在解码音频…' : stage === 'beats' ? '正在识别节拍…' : '正在分析节拍与段落…',
+          { progress: stage === 'decode' ? 0.08 : stage === 'beats' ? 0.1 + 0.1 * p : 0.2 + 0.68 * p },
+        );
         const g = (taken && await taken.done) || await gather(song, job);
         if (job.cancelled) return;
         keep(g);

@@ -94,6 +94,19 @@ async function main() {
         if (r.error) console.warn('对齐失败', r.error);
         else console.log('对齐', applyAlignment(lines, r), '/', lines.length, '句', r.ms);
       } : undefined,
+      // ?beats=full: fast songs on every beat instead of half their tempo.
+      beatLevel: params.get('beats') === 'full' ? 'full' : 'half',
+      // ?beats: beats from the aligner pack (Beat This!), through the dev server (the plugin's job).
+      beats: params.has('beats') ? async (mono, rate, duration) => {
+        cover.textContent = '识别节拍…';
+        const json = new TextEncoder().encode(JSON.stringify({ version: 1, task: 'beats', id: songId, rate, channels: 1 }));
+        const pcm = new Int16Array(mono.length);
+        for (let i = 0; i < mono.length; i++) pcm[i] = Math.max(-32768, Math.min(32767, Math.round(mono[i] * 32767)));
+        const r = await fetch(`/align/beats-${songId}-${Math.round(duration)}`, { method: 'POST', body: new Blob([new Uint32Array([json.length]), json, pcm]) }).then(r => r.json());
+        if (r.error) { console.warn('节拍识别失败', r.error); return null; }
+        console.log('节拍', r.beats.length, '拍', r.device, r.ms);
+        return { fps: r.fps, beatProb: r.beatProb, downProb: r.downProb, beats: r.beats, downbeats: r.downbeats };
+      } : undefined,
     },
   );
   const style = styleFor(song, (params.get('style') as StyleId) || 'auto');

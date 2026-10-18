@@ -1,5 +1,5 @@
 // Evaluates src/analysis on local test songs:
-//   bun tools/eval-analysis.ts [--song id[,id…]] [--no-hint] [--no-lyrics] [--quick | --no-timing] [--bars] [--debug-sections]
+//   bun tools/eval-analysis.ts [--song id[,id…]] [--no-hint] [--no-lyrics] [--quick | --no-timing] [--bars] [--debug-sections] [--beats]
 //                              [--json out.json]
 // Local files are decoded in place with ffmpeg (mono, 22050 Hz, f32le); NetEase songs (ncmId) are fetched from the
 // main session's dev server (NCM_DEV, default http://localhost:5190: /ncm/audio/<id>, /ncm/lyric/<id>, and the wiki
@@ -331,6 +331,8 @@ const { parseNeteaseLyric } = await import('../src/lyrics/parse.ts');
 const dir = process.env.EVAL_PCM_CACHE!;
 const manifest: Record<string, Prepared | string> = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'));
 const useHint = !args.includes('--no-hint');
+// --beats: with Beat This!'s beats (tools/eval-beats.ts, keyed by the decoded file's name), as with the aligner pack.
+const { evalBeats } = await import('./eval-beats.ts');
 const timedRuns = args.includes('--quick') ? 1 : 3;
 const noTiming = args.includes('--no-timing');
 const dump: Record<string, unknown> = {};
@@ -348,15 +350,16 @@ for (const song of selected) {
   let lyrics: LyricLine[] = [];
   if (p.lyric && existsSync(p.lyric) && !args.includes('--no-lyrics')) lyrics = parseNeteaseLyric(JSON.parse(readFileSync(p.lyric, 'utf8')), duration);
   const bpmHint = useHint ? p.wikiBpm : undefined;
+  const beatThis = args.includes('--beats') ? evalBeats(p.pcm.replace(/^.*[\\/]/, '').replace(/\.f32$/, '')) : undefined;
   console.log(`\n### ${song.name} (${fmt(duration, 2)} s, ${lyrics.length} lyric lines${p.lyricMissing ? ' (NetEase gave none: rate limit?)' : ''}, wiki BPM ${p.wikiBpm ?? '—'}${bpmHint ? ' → bpmHint' : ''})`);
 
   // (--no-timing: one untimed run, for quick checks of the results.)
-  if (!noTiming) analyze(x, SR, { lyrics, bpmHint }); // JIT warm-up
+  if (!noTiming) analyze(x, SR, { lyrics, bpmHint, beatThis }); // JIT warm-up
   const runs: number[] = [];
   let a!: Analysis;
   for (let r = 0; r < (noTiming ? 1 : timedRuns); r++) {
     const t0 = performance.now();
-    a = analyze(x, SR, { lyrics, bpmHint });
+    a = analyze(x, SR, { lyrics, bpmHint, beatThis });
     runs.push(performance.now() - t0);
   }
   let slices = 0, longest = 0;
@@ -421,7 +424,7 @@ for (const song of selected) {
     let secInfo: Array<Record<string, number | string>> = [];
     (globalThis as any).__bmvSectionDebug = (d: Record<string, ArrayLike<number>>) => { dbg = d; };
     (globalThis as any).__bmvSectionInfo = (d: Array<Record<string, number | string>>) => { secInfo = d; };
-    analyze(x, SR, { lyrics, bpmHint });
+    analyze(x, SR, { lyrics, bpmHint, beatThis });
     (globalThis as any).__bmvSectionDebug = (globalThis as any).__bmvSectionInfo = undefined;
     console.log('  -- labelling inputs per section --');
     for (const s of secInfo) console.log('  ' + Object.entries(s).map(([k, v]) => `${k} ${typeof v === 'number' ? fmt(v, 2) : v}`).join('  '));

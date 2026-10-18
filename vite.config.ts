@@ -153,14 +153,16 @@ function stills(): Plugin {
 
 /**
  * POST /align/<key>: [u32 JSON length][job JSON][16-bit PCM] — runs the aligner pack's align.py (tools/aligner) the way
- * the plugin does and answers with its output. Python and model from an unpacked pack in dev/aligner (or
- * BMV_ALIGNER_PYTHON / BMV_ALIGNER_MODEL); the script itself is always the repo's. Results are kept in dev/align/.
+ * the plugin does (word times, or beats for a job with "task": "beats") and answers with its output. Python and models
+ * from an unpacked pack in dev/aligner (or BMV_ALIGNER_PYTHON / BMV_ALIGNER_MODEL / BMV_BEAT_MODEL); the scripts are
+ * always the repo's. Results are kept in dev/align/.
  */
 function align(): Plugin {
   const dir = path.resolve(import.meta.dirname, 'dev/align');
   const pack = path.resolve(import.meta.dirname, 'dev/aligner');
   const python = process.env.BMV_ALIGNER_PYTHON || path.join(pack, 'python/python.exe');
   const model = process.env.BMV_ALIGNER_MODEL || path.join(pack, 'models/mms_fa.onnx');
+  const beatModel = process.env.BMV_BEAT_MODEL || path.join(pack, 'models/beat_this.onnx');
   return {
     name: 'align',
     configureServer(server) {
@@ -178,7 +180,7 @@ function align(): Plugin {
           const job = JSON.parse(body.subarray(4, 4 + n).toString('utf8'));
           const pcm = path.join(dir, `${key}.pcm`), jobPath = path.join(dir, `${key}.job.json`);
           fs.writeFileSync(pcm, body.subarray(4 + n));
-          fs.writeFileSync(jobPath, JSON.stringify({ ...job, audio: pcm, out, progress: path.join(dir, `${key}.progress.json`), model }));
+          fs.writeFileSync(jobPath, JSON.stringify({ ...job, audio: pcm, out, progress: path.join(dir, `${key}.progress.json`), model, beatModel }));
           const py = spawn(python, [path.resolve(import.meta.dirname, 'tools/aligner/align.py'), jobPath], { stdio: 'inherit' });
           py.on('close', () => (fs.existsSync(out) ? reply() : (res.statusCode = 500, res.end('{"error":"align.py wrote nothing"}'))));
         });

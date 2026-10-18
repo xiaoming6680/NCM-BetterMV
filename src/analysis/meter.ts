@@ -16,7 +16,11 @@ export interface MeterResult {
 
 const PHASE_JUMP = 16;
 
-export function detectMeter(f: BeatFeatures, beats: number[], lyrics?: LyricLine[]): MeterResult {
+/**
+ * `extDown`: another downbeat probability per beat (Beat This!'s, src/analysis/beatthis.ts), weighed like the bass
+ * change.
+ */
+export function detectMeter(f: BeatFeatures, beats: number[], lyrics?: LyricLine[], extDown?: Float32Array): MeterResult {
   const n = f.n;
   if (n < 8) return { meter: 4, beatInBar: beats.map((_, i) => i % 4), evidence: new Float32Array(n) };
   const hc = new Float32Array(n), bc = new Float32Array(n), tc = new Float32Array(n), dd = new Float32Array(n), ly = new Float32Array(n);
@@ -52,12 +56,13 @@ export function detectMeter(f: BeatFeatures, beats: number[], lyrics?: LyricLine
     return z;
   };
   const zh = zc(hc), zb = zc(bc), zt = zc(tc), zd = zc(dd), zk = zc(f.kick), zs = zc(f.snare);
+  const zx = extDown && extDown.length === n ? zc(extDown) : null;
   // Quiet beats (fades, near-silent intros and tails) carry little weight: 1 within 12 dB of the loud level.
   const ref = quantile(f.db, 0.9);
   const down = new Float32Array(n), back = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const w = Math.min(1, Math.max(0, (f.db[i] - (ref - 24)) / 12));
-    down[i] = w * (1.0 * zb[i] + 0.5 * zh[i] + 0.5 * zt[i] + 0.3 * zd[i] + 0.3 * zk[i] + 0.5 * Math.min(1, ly[i]));
+    down[i] = w * (1.0 * zb[i] + 0.5 * zh[i] + 0.5 * zt[i] + 0.3 * zd[i] + 0.3 * zk[i] + 0.5 * Math.min(1, ly[i]) + (zx ? 1.0 * zx[i] : 0));
     back[i] = w * (zs[i] - 0.5 * zk[i]);
   }
   const best4 = viterbiBars(down, back, 4);

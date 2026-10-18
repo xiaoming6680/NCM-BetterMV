@@ -1,23 +1,30 @@
-// The optional aligner pack (tools/aligner, docs/ALIGNER.md): NetEase gives most songs line-timed lyrics only, and the
-// plugin then spreads each line's words over it by syllable count. With the pack installed, the first time such a
-// song is played the pack listens to it on this machine (a separate process: NetEase's page can't run workers) and
-// finds when each word is sung; the result is kept per song and lyric, and used from then on.
+// The optional aligner pack (tools/aligner, docs/ALIGNER.md), a separate process on this machine (NetEase's page can't
+// run workers). Two jobs:
+//   - word times: NetEase gives most songs line-timed lyrics only, and the plugin then spreads each line's words over
+//     it by syllable count. The first time such a song is played the pack listens to it and finds when each word is
+//     sung; the result is kept per song and lyric, and used from then on.
+//   - beats: Beat This! (src/analysis/beatthis.ts) before the song is analysed; kept per song.
 //
-// The pack is not part of the plugin: about 400 MB, downloaded from the project's releases when the user asks for it.
+// The pack is not part of the plugin: about 480 MB, downloaded from the project's releases when the user asks for it.
 import type { LyricLine } from '../types.ts';
+import type { BeatThisInput } from '../analysis/beatthis.ts';
 import { syllables } from '../lyrics/parse.ts';
 import { execArg } from './exec.ts';
 
-const RELEASE = 'https://github.com/xiaoming6680/NCM-BetterMV/releases/download/aligner-v1/';
+const RELEASE = 'https://github.com/xiaoming6680/NCM-BetterMV/releases/download/aligner-v2/';
 /** The pack format this plugin speaks (the pack's version.json). */
-const PACK_VERSION = 1;
+const PACK_VERSION = 2;
 /** Lines whose letters fit the audio worse than this (mean probability) keep the spread estimate (docs/ALIGNER.md). */
 const MIN_CONF = 0.005;
 const JOB_TIMEOUT_MS = 8 * 60 * 1000;
+/** Beats are waited for before the MV starts: past this the song goes on with the plugin's own beats. */
+const BEATS_TIMEOUT_MS = 40 * 1000;
 
 export type PackState =
   | { kind: 'checking' }
   | { kind: 'none' }
+  /** An earlier version is installed (without beats): updating downloads only what is new. */
+  | { kind: 'outdated' }
   | { kind: 'installing'; done: number; total: number; note: string }
   | { kind: 'ready' }
   | { kind: 'removing' }
@@ -57,11 +64,11 @@ export async function checkPack(): Promise<boolean> {
     const dir = await packDir();
     // (Also written by hand when the pack is installed manually, README: an editor may put a BOM before it.)
     const v = JSON.parse((await betterncm.fs.readFileText(`${dir}\\installed.json`)).replace(/^\uFEFF/, ''));
-    const ok = v?.version === PACK_VERSION;
-    if (state.kind === 'checking' || state.kind === 'ready' || state.kind === 'none') set({ kind: ok ? 'ready' : 'none' });
+    const ok = v?.version === PACK_VERSION, old = typeof v?.version === 'number' && v.version < PACK_VERSION;
+    if (state.kind === 'checking' || state.kind === 'ready' || state.kind === 'none' || state.kind === 'outdated') set({ kind: ok ? 'ready' : old ? 'outdated' : 'none' });
     return ok;
   } catch {
-    if (state.kind === 'checking' || state.kind === 'ready') set({ kind: 'none' });
+    if (state.kind === 'checking' || state.kind === 'ready' || state.kind === 'outdated') set({ kind: 'none' });
     return false;
   }
 }
@@ -107,7 +114,11 @@ export async function installPack(): Promise<void> {
     await mkdirs(`${dir}\\download`);
     // A pack left half-installed is not trusted.
     if (await betterncm.fs.exists(`${dir}\\installed.json`)) await betterncm.fs.remove(`${dir}\\installed.json`);
+    // A model already there (from an earlier version of the pack, same name: joined from its parts on first use,
+    // or still in parts) is kept rather than downloaded again.
+    const have = async (name: string) => await betterncm.fs.exists(`${dir}\\models\\${name}`) || await betterncm.fs.exists(`${dir}\\models\\${name.replace(/\.\d{3}$/, '')}`);
     for (const [i, f] of manifest.files.entries()) {
+      if (f.kind === 'model' && await have(f.name)) { done += f.size; continue; }
       const note = `正在下载 ${i + 1}/${manifest.files.length}`;
       set({ kind: 'installing', done, total, note });
       let shown = 0;
@@ -228,6 +239,69 @@ export function alignSong(id: number, lines: LyricLine[], duration: number, audi
   };
   const job = queue.then(run, run).catch(e => { console.warn('[BetterMV] 歌词对齐出错', e); return null; });
   queue = job;
+  return job;
+}
+
+export interface BeatsResult { version: number; id: number; task: 'beats'; fps: number; beats: number[]; downbeats: number[]; beatProb: number[]; downProb: number[]; device?: string; ms?: Record<string, number>; error?: string }
+
+const beatsKey = (id: number, duration: number) => `beats-${id}-${Math.round(duration)}`;
+const asInput = (r: BeatsResult): BeatThisInput => ({ fps: r.fps, beatProb: r.beatProb, downProb: r.downProb, beats: r.beats, downbeats: r.downbeats });
+const validBeats = (r: BeatsResult | null) => !!r && !r.error && r.task === 'beats' && Array.isArray(r.beats) && Array.isArray(r.beatProb);
+
+/** Beats found before for this song, or null. */
+export async function cachedBeats(id: number, duration: number): Promise<BeatThisInput | null> {
+  if (state.kind === 'checking') await checkPack();
+  if (state.kind !== 'ready') return null;
+  try {
+    const dir = await packDir();
+    const r: BeatsResult = JSON.parse(await betterncm.fs.readFileText(`${dir}\\cache\\${beatsKey(id, duration)}.json`));
+    return validBeats(r) ? asInput(r) : null;
+  } catch { return null; }
+}
+
+let beatQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * A song's beats from the pack (Beat This!), from its mono samples at 22 050 Hz (the analysis' own decode). One job at
+ * a time, apart from the word-time jobs. In the background (a song prepared ahead while an MV plays) on the CPU, so the
+ * MV keeps the GPU. Null when the pack is missing, fails or takes too long.
+ */
+export function trackSongBeats(id: number, mono: Float32Array, rate: number, duration: number, opts: { background?: boolean; onProgress?: (p: number) => void; cancelled?: () => boolean } = {}): Promise<BeatThisInput | null> {
+  const run = async (): Promise<BeatThisInput | null> => {
+    if (state.kind === 'checking') await checkPack();
+    if (state.kind !== 'ready' || opts.cancelled?.()) return null;
+    const cached = await cachedBeats(id, duration);
+    if (cached) return cached;
+    const dir = await packDir();
+    const key = beatsKey(id, duration);
+    await mkdirs(`${dir}\\work`);
+    await mkdirs(`${dir}\\cache`);
+    const pcm = new Int16Array(mono.length);
+    for (let i = 0; i < mono.length; i++) pcm[i] = Math.max(-32768, Math.min(32767, Math.round(mono[i] * 32767)));
+    const pcmPath = `${dir}\\work\\${key}.pcm`, jobPath = `${dir}\\work\\${key}.job.json`;
+    const out = `${dir}\\cache\\${key}.json`, progress = `${dir}\\work\\${key}.progress.json`;
+    await betterncm.fs.writeFile(pcmPath, new Blob([pcm]));
+    await betterncm.fs.writeFileText(jobPath, JSON.stringify({
+      version: 1, task: 'beats', id, audio: pcmPath, rate, channels: 1, out, progress, ...(opts.background ? { device: 'cpu', threads: 2 } : {}),
+    }));
+    await betterncm.app.exec(`"${dir}\\python\\pythonw.exe" ${execArg(`${dir}\\align.py`)} ${execArg(jobPath)}`, false, false);
+    const t0 = Date.now();
+    while (Date.now() - t0 < BEATS_TIMEOUT_MS * (opts.background ? 4 : 1)) {
+      await sleep(300);
+      if (await betterncm.fs.exists(out)) {
+        const r: BeatsResult = JSON.parse(await betterncm.fs.readFileText(out));
+        if (r.error) { console.warn('[BetterMV] 节拍识别失败', r.error); await betterncm.fs.remove(out); return null; }
+        return validBeats(r) ? asInput(r) : null;
+      }
+      if (opts.onProgress) {
+        try { opts.onProgress(Number(JSON.parse(await betterncm.fs.readFileText(progress)).progress) || 0); } catch { /* not written yet */ }
+      }
+    }
+    console.warn('[BetterMV] 节拍识别超时');
+    return null;
+  };
+  const job = beatQueue.then(run, run).catch(e => { console.warn('[BetterMV] 节拍识别出错', e); return null; });
+  beatQueue = job;
   return job;
 }
 

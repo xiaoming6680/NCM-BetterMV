@@ -4,7 +4,7 @@
 |---|---|
 | [CLIENT.md](CLIENT.md) | 网易云 3.x 和 BetterNCM 给插件的接口：内部模块、播放状态与控制、窗口、音频缓存、文件接口、插件包的解压与更新 |
 | [ANALYSIS.md](ANALYSIS.md) | 歌曲分析：速度、节拍、段落、鼓点、示波器音乐、显示速度；评测工具 |
-| [ALIGNER.md](ALIGNER.md) | 可选的歌词对齐包：流程、效果、打包与发布 |
+| [ALIGNER.md](ALIGNER.md) | 可选的对齐包（逐字歌词与节拍）：流程、效果、打包与发布 |
 | [PERFORMANCE.md](PERFORMANCE.md) | 配置要求、帧耗时与优化、自动画质、准备时间；`tools/bench` |
 | [OBS.md](OBS.md) | OBS 输出：本机服务、歌曲数据格式、对时、已知限制 |
 | [EXPORT.md](EXPORT.md) | MV 页右键菜单；下载 MV：导出选项、逐帧渲染、显卡里打包 NV12、编码程序（Media Foundation）、送帧的限制、兼容模式（MediaRecorder）、实测数据 |

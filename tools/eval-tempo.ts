@@ -1,5 +1,5 @@
 // Tempo check against the BPM cited for songs of the NetEase cache (tools/truth/tempo.json):
-//   bun tools/eval-tempo.ts [--song id[,id…]] [--no-hint] [--conf high|medium] [--json out.json]
+//   bun tools/eval-tempo.ts [--song id[,id…]] [--no-hint] [--conf high|medium] [--json out.json] [--beats]
 // For each song: the shown tempo (analysis.namedBpm) against the cited one — right (±4 %, or the listed alternative),
 // an octave off, 3∶2 / 4∶3 off, or other — and the beat grid's tempo (analysis.bpm) octave-free, since the grid may
 // follow a half-time pulse. The summary counts both, per confidence of the cited value.
@@ -23,6 +23,8 @@ const opt = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1
 const only = opt('--song') ? new Set(opt('--song').split(',').map(Number)) : null;
 const minConf = opt('--conf');
 const useHint = !args.includes('--no-hint');
+// --beats: with Beat This!'s beats (tools/eval-beats.ts), as the plugin with the aligner pack.
+const useBeats = args.includes('--beats');
 const rank = { high: 0, medium: 1, low: 2 };
 const songs = (JSON.parse(readFileSync(join(ROOT, 'tools/truth/tempo.json'), 'utf8')).songs as Cited[])
   .filter(s => (!only || only.has(s.id)) && (!minConf || rank[s.confidence] <= rank[minConf as keyof typeof rank]));
@@ -81,6 +83,7 @@ function relation(est: number, c: Cited): string {
 const gridOk = (est: number, c: Cited) => [0.25, 0.5, 1, 2, 4].some(k => near(est / c.bpm, k) || (!!c.alt && near(est / c.alt, k)));
 
 const { analyze } = await import('../src/analysis/index.ts');
+const { evalBeats } = await import('./eval-beats.ts');
 const total: Record<string, Record<string, number>> = {};
 const gridTotal: Record<string, [number, number]> = {};
 const dump: unknown[] = [];
@@ -89,7 +92,7 @@ let skipped = 0;
 for (const c of songs) {
   const s = await load(c.id);
   if (typeof s === 'string') { skipped++; console.log(`skip ${c.song}: ${s}`); continue; }
-  const a = analyze(s.x, SR, { bpmHint: useHint ? s.wiki : undefined });
+  const a = analyze(s.x, SR, { bpmHint: useHint ? s.wiki : undefined, beatThis: useBeats ? evalBeats(String(c.id)) : undefined });
   const named = a.namedBpm ?? a.bpm, rel = relation(named, c), g = gridOk(a.bpm, c);
   (total[c.confidence] ??= {})[rel] = (total[c.confidence][rel] ?? 0) + 1;
   const gt = (gridTotal[c.confidence] ??= [0, 0]);
@@ -97,7 +100,7 @@ for (const c of songs) {
   dump.push({ id: c.id, song: c.song, cited: c.bpm, alt: c.alt, confidence: c.confidence, wiki: s.wiki, grid: a.bpm, named, relation: rel, gridOk: g });
   if (rel !== 'ok' || !g) wrong.push(`${rel.padEnd(5)} ${g ? '      ' : 'grid! '} shown ${named.toFixed(1).padStart(6)}  grid ${a.bpm.toFixed(1).padStart(6)}  cited ${String(c.bpm).padStart(7)}${c.alt ? ` (${c.alt})` : ''}  wiki ${String(s.wiki ?? '—').padStart(4)}  ${c.confidence.padEnd(6)} ${c.song}`);
 }
-console.log(`\n${useHint ? 'with the wiki BPM as hint' : 'without hint'}; ${songs.length - skipped} songs (${skipped} skipped)\n`);
+console.log(`\n${useHint ? 'with the wiki BPM as hint' : 'without hint'}${useBeats ? ', with Beat This!' : ''}; ${songs.length - skipped} songs (${skipped} skipped)\n`);
 console.log(wrong.sort().join('\n'));
 console.log('\n=== shown tempo (namedBpm) vs cited; grid octave-free ===');
 const all: Record<string, number> = {};
