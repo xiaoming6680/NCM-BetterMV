@@ -1,6 +1,6 @@
 // Turns the analysis into shots for a style: which scene, which camera, cut on which beat, how each cut lands.
-// With `accelerate`, cuts speed up towards a louder section (bars → single bars → every beat); consecutive
-// shots never reuse a camera.
+// A plate holds about eight seconds in a chorus or drop, about twelve elsewhere, on a phrase (style.ts holdBars);
+// with `accelerate`, a build's last two bars speed up into the louder section; consecutive shots never reuse a camera.
 import * as THREE from 'three';
 import type { Music } from './music.ts';
 import type { LyricTrack } from './lyrics.ts';
@@ -20,15 +20,22 @@ import { lastIndex } from './music.ts';
 import { Accents } from '../scenes/hits.ts';
 import { findPushes, findStops, plateTime, stopAt, type Push, type Stop } from './moments.ts';
 
-/** Cut times inside a section, on downbeats or their bar's hit (and on beats at the end of a build). */
-function cutTimes(music: Music, style: Style, section: Section, next: Section | undefined): number[] {
+/**
+ * Cut times inside a section, on downbeats or their bar's hit, and `rush`: where the speeding-up cuts at the end of a
+ * build begin (Infinity: none). Only a build (or whatever runs into a drop) rising into a louder section speeds up, and
+ * only over its last two bars: a shot each, the last bar halved. (Every section before a louder one used to: its last
+ * four bars a shot each and its last two cut on every beat — half the shots of a verse were under a second.)
+ */
+function cutTimes(music: Music, style: Style, section: Section, next: Section | undefined): { cuts: number[]; rush: number } {
   const beats = Array.from(music.beats).filter(b => b > section.start + 0.05 && b < section.end - 0.05);
   const downs = Array.from(music.downbeats).filter(d => d > section.start + 0.05 && d < section.end - 0.05);
   const cuts = [section.start];
-  const per = style.baseBars(section);
-  const hero = style.heroBars?.(section) ?? per;
-  const rising = style.accelerate && !!next && next.energy > section.energy + 0.08 && section.label !== 'intro';
-  const accelFrom = rising ? Math.max(0, downs.length + 1 - 4) : Infinity;
+  const bar = (60 / Math.max(40, music.at(section.start + 0.01).bpm)) * music.meter;
+  const per = style.baseBars(section, bar);
+  const hero = style.heroBars?.(section, bar) ?? per;
+  const builds = section.label === 'build' || section.label === 'pre' || next?.label === 'drop';
+  const rising = style.accelerate && !!next && builds && next.energy > section.energy + 0.08 && section.label !== 'intro';
+  const rush = rising && downs.length >= 2 ? downs[downs.length - 2] : Infinity;
   // A cut on a downbeat goes to that bar's hit (the strongest from 0.4 beat before to half a beat after), so it lands
   // on a drum: in a syncopated song the grid's downbeat often has none.
   const barHits = Accents.of(music).barHits();
@@ -36,19 +43,26 @@ function cutTimes(music: Music, style: Style, section: Section, next: Section | 
     const beat = 60 / Math.max(40, music.at(d).bpm), i = lastIndex(barHits, d + 0.5 * beat);
     return i >= 0 && barHits[i] >= d - 0.4 * beat && barHits[i] > section.start + 0.12 && barHits[i] < section.end - 0.12 ? barHits[i] : d;
   };
+  const regular: number[] = [];
   for (let i = 0; i < downs.length; i++) {
-    const bar = i + 1;
-    // (Not the speeding-up cuts of a build: they run on every beat, and a moved one would leave a sliver of a shot.)
-    if (bar >= accelFrom) cuts.push(downs[i]);
-    else if (bar >= hero && bar % per === 0) cuts.push(onHit(downs[i]));
+    const n = i + 1;
+    // (Not the speeding-up cuts: moved to a hit, one would leave a sliver of a shot.)
+    if (downs[i] >= rush - 1e-3) cuts.push(downs[i]);
+    else if (n >= hero && n % per === 0) regular.push(onHit(downs[i]));
   }
-  if (rising) {
-    const lastTwo = downs.length >= 2 ? downs[downs.length - 2] : section.start;
-    for (const b of beats) if (b > lastTwo + 0.05 && !cuts.some(c => Math.abs(c - b) < 0.05)) cuts.push(b);
+  // A section that isn't a whole number of shots long would end on a stub of a bar or two: the shot before runs on.
+  const tail = Math.min(rush, section.end);
+  while (regular.length && tail - regular[regular.length - 1] < 0.5 * per * bar - 0.1) regular.pop();
+  cuts.push(...regular);
+  if (Number.isFinite(rush)) {
+    // The last bar cut again halfway.
+    const last = downs[downs.length - 1], half = Math.floor(music.meter / 2);
+    const mid = beats.filter(b => b > last + 0.05)[half - 1];
+    if (half >= 1 && mid !== undefined && mid < section.end - 0.15) cuts.push(mid);
   }
   cuts.sort((a, b) => a - b);
   cuts.push(section.end);
-  return cuts;
+  return { cuts, rush };
 }
 
 // (Drops too: they take turns opening on the push tunnel and the spectrum tube, so a song with two drops doesn't
@@ -95,6 +109,8 @@ export function planShots(music: Music, style: Style, songSeed: number, song: So
   const used = new Map<string, number>(); // plate -> times used, so the rotation reaches every plate
   const seen = new Map<string, number>(); // label -> sections so far with it
   const barLen = (t: number) => (60 / Math.max(40, music.at(t).bpm)) * music.meter;
+  /** Shots that only change the camera, cut short at the end of a build (joinRuns). */
+  const rushed = new Set<Shot>();
   // A plate missing from the record (new, or never yet in a pool that was played) counts as seen as the middle one.
   const known = exposure ? [...exposure.values()].sort((a, b) => a - b) : [];
   const middle = known.length ? known[known.length >> 1] : 0;
@@ -103,7 +119,7 @@ export function planShots(music: Music, style: Style, songSeed: number, song: So
   const JITTER = 12;
   sections.forEach((section, sectionIndex) => {
     const pool = allowed(style.pool(section, song), off, sections, sectionIndex, style, song);
-    const cuts = cutTimes(music, style, section, sections[sectionIndex + 1]);
+    const { cuts, rush } = cutTimes(music, style, section, sections[sectionIndex + 1]);
     const random = rng((songSeed ^ (sectionIndex * 2654435761)) >>> 0);
     // Verses, choruses, breaks, bridges and drops take turns opening on their first two plates (the drop's push tunnel
     // and spectrum tube…); the others always open on their signature (the build's tunnel…).
@@ -123,8 +139,9 @@ export function planShots(music: Music, style: Style, songSeed: number, song: So
     const here = new Map<string, number>([[hero.scene, 1]]);
     for (let i = 0; i + 1 < cuts.length; i++) {
       if (cuts[i + 1] - cuts[i] < 0.12) continue;
-      // Shots shorter than a bar (the end of a build) keep the plate and only change the camera.
-      const short = cuts[i + 1] - cuts[i] < barLen(cuts[i]) * 0.9;
+      // The speeding-up cuts at the end of a build keep the plate and only change the camera (as does a shot
+      // shorter than a bar).
+      const short = cuts[i] >= rush - 1e-3 || cuts[i + 1] - cuts[i] < barLen(cuts[i]) * 0.9;
       if (i === 0) plate = hero; // a section opens on its hero plate
       else if (!short) {
         // The plate least used in this section, then in the song, that isn't the one just shown; ties broken by the
@@ -141,10 +158,12 @@ export function planShots(music: Music, style: Style, songSeed: number, song: So
       used.set(plate.scene, (used.get(plate.scene) ?? 0) + 1);
       prevScene = plate.scene;
       prevVariant = variant;
-      shots.push({ scene: plate.scene, start: cuts[i], end: cuts[i + 1], section, sectionIndex, variant, seed: (songSeed * 131 + shots.length * 7919) >>> 0 });
+      const shot: Shot = { scene: plate.scene, start: cuts[i], end: cuts[i + 1], section, sectionIndex, variant, seed: (songSeed * 131 + shots.length * 7919) >>> 0 };
+      if (short && i > 0) rushed.add(shot);
+      shots.push(shot);
     }
   });
-  joinRuns(shots, barLen);
+  joinRuns(shots, rushed);
   // Most plays end on the canvas rising over the cover this song has painted; the others on the armillary closing up
   // (under ink the canvas is a brush writing the cover on rice paper, and there is no armillary).
   const finale = !off.has('canvas') && rng((songSeed ^ 0xf1a1e) >>> 0)() < 0.6;
@@ -158,11 +177,12 @@ export function planShots(music: Music, style: Style, songSeed: number, song: So
  * its camera move afresh: the same move replayed on every beat, which the user saw as a twitch (“快速循环一个动作，看起来
  * 就和抽搐了一样”; the outro of a two-bar build cut eight times onto the one camera its plate has). Now consecutive
  * shots that would look the same (same plate and camera, same kind of section, one of them under a bar) are one shot,
- * and a run of shorter shots on one plate shares one clock for its moves (Shot.run).
+ * and a run of shorter shots on one plate shares one clock for its moves (Shot.run). `rushed`: the shots cut short
+ * (the speeding-up cuts of a build, a shot under a bar), which only change the camera.
  */
-function joinRuns(shots: Shot[], barLen: (t: number) => number): void {
-  const short = (s: Shot) => s.end - s.start < barLen(s.start) * 0.9;
-  // (Whether a shot was cut under a bar, kept through the merging: joined pieces can add up to a bar.)
+function joinRuns(shots: Shot[], rushed: ReadonlySet<Shot>): void {
+  const short = (s: Shot) => rushed.has(s);
+  // (Whether a shot was cut short, kept through the merging.)
   const hurried = shots.map(short);
   for (let i = shots.length - 1; i > 0; i--) {
     const a = shots[i - 1], b = shots[i];
@@ -192,10 +212,15 @@ function placeOpening(shots: Shot[], music: Music, songSeed: number): Shot[] {
   const end = inIntro.length >= 3 ? inIntro[2] : inIntro.length >= 2 ? inIntro[1] : NaN;
   if (!(end > 1.5)) return shots;
   const out: Shot[] = [{ scene: 'cards', start: 0, end, section: first, sectionIndex: 0, variant: 'stack', seed: (songSeed * 131 + 7) >>> 0 }];
-  for (const s of shots) {
-    if (s.end <= end + 1e-3) continue;
-    out.push(s.start < end ? { ...s, start: end } : s);
-  }
+  // (What is left of a shot the cards cut into, under SLIVER seconds, goes to the shot after it.)
+  let early = false;
+  shots.forEach((s, k) => {
+    if (s.end <= end + 1e-3) return;
+    const next = shots[k + 1];
+    if (s.start < end && s.end - end < SLIVER && next && next.section === s.section) { early = true; return; }
+    out.push(s.start < end || early ? { ...s, start: end } : s);
+    early = false;
+  });
   return out;
 }
 
@@ -204,14 +229,21 @@ function placeOpening(shots: Shot[], music: Music, songSeed: number): Shot[] {
  * before each drop (bullet time round it, then the push down its rings, in the styles that punch into drops), and
  * the song's last bars (its rings closing up; not in ink, whose paper it would black out).
  */
+/** Seconds under which what a carved-in shot leaves of another goes to its neighbour: a cut so soon reads as a flash. */
+const SLIVER = 1.2;
+/** Shots that keep their own timing (never lengthened to take in a sliver). */
+const TIMED: ReadonlySet<SceneId> = new Set<SceneId>(['cards', 'crystal', 'canvas']);
+
 /** Puts a shot of its own over [from, to), trimming the shots it overlaps. (Also the films' cuts, film/reel.ts.) */
 export function carve(shots: Shot[], music: Music, scene: SceneId, from: number, to: number, sectionIndex: number, variant: string, songSeed: number): void {
   if (to - from < 0.8) return;
   const out: Shot[] = [];
   for (const s of shots) {
     if (s.end <= from + 1e-3 || s.start >= to - 1e-3) { out.push(s); continue; }
-    // Shots overlapping the new one keep what lies outside it.
-    if (s.start < from - 0.05) out.push({ ...s, end: from });
+    // Shots overlapping the new one keep what lies outside it; a sliver before it goes to the shot before.
+    const prev = out[out.length - 1];
+    if (s.start < from - 0.05 && from - s.start < SLIVER && prev && Math.abs(prev.end - s.start) < 1e-3 && prev.section === s.section && !TIMED.has(prev.scene)) prev.end = from;
+    else if (s.start < from - 0.05) out.push({ ...s, end: from });
     if (s.end > to + 0.05) out.push({ ...s, start: to });
   }
   out.push({ scene, start: from, end: to, section: music.a.sections[sectionIndex], sectionIndex, variant, seed: (songSeed * 131 + Math.round(from * 1000)) >>> 0 });

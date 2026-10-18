@@ -208,7 +208,8 @@ export class MvPlayer {
       yield;
       if (this.loads !== token) return;
     }
-    const sections = song.analysis.sections;
+    // (The director's sections, joined: Shot.sectionIndex counts these.)
+    const sections = music.a.sections;
     const looks = song.xyMusic || forceLook === 'none' ? [] : forceLook ? sections.map(s => (s.label === 'drop' ? null : forceLook)) : planLooks(sections, style, this.seed, off);
     yield* this.engine.settingLooks(song.palette, song.lines.map(l => l.text + (l.translation ?? '')).join(''));
     yield;

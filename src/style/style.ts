@@ -29,11 +29,11 @@ export interface Style {
    * retold in many visual languages). Consecutive shots never repeat a plate while the pool has others.
    */
   pool(section: Section, song: SongTraits): Plate[];
-  /** Bars per shot before any speeding up. */
-  baseBars(section: Section): number;
+  /** Bars per shot before any speeding up; `bar`: seconds a bar lasts at the section's start (see holdBars). */
+  baseBars(section: Section, bar: number): number;
   /** Bars the section's opening (hero) shot holds before the rotation starts, when longer than baseBars. */
-  heroBars?(section: Section): number | undefined;
-  /** Cuts speed up towards a louder section (bars → single bars → beats). */
+  heroBars?(section: Section, bar: number): number | undefined;
+  /** Cuts speed up out of a build into a louder section (its last two bars a shot each, the last one halved). */
   accelerate: boolean;
   transitions: {
     /** Flash into a louder section. */
@@ -56,6 +56,16 @@ export interface Style {
 
 const P = (scene: SceneId, ...variants: string[]): Plate => ({ scene, variants });
 
+/**
+ * Bars a shot holds to last about `seconds`: 2, 4 or 8 (the nearest by ratio), so cuts keep to the phrases. Shots
+ * used to be two or four bars whatever the tempo — a plate every 3.7 s in a 130 BPM chorus, a new world 10–12 times
+ * a minute in every style (the user: “切换的过于频繁了”); now a chorus holds a plate about 8 s, a verse about 12.
+ */
+export function holdBars(seconds: number, bar: number, min = 2, max = 8): number {
+  const n = 2 ** Math.round(Math.log2(Math.max(1e-3, seconds / Math.max(0.2, bar))));
+  return Math.max(min, Math.min(max, n));
+}
+
 /** Without lyrics the word plates drop out; a pool left with a single plate is topped up from `fill`. */
 function forSong(pool: Plate[], song: SongTraits, fill: Plate[]): Plate[] {
   if (song.lyrics) return pool;
@@ -70,14 +80,14 @@ export const PULSE: Style = {
   look: 'pulse',
   glyph: '△',
   pool: (s, song) => forSong(pulsePool(s), song, [P('kaleido', 'petal', 'spiral'), P('flip', 'wave', 'burst')]),
-  baseBars: s => {
+  baseBars: (s, bar) => {
     switch (s.label) {
-      case 'build': case 'pre': case 'chorus': case 'drop': return 2;
-      default: return 4;
+      case 'build': case 'pre': case 'chorus': case 'drop': return holdBars(8, bar);
+      default: return holdBars(12, bar);
     }
   },
   // A drop opens on the push tunnel (or the spectrum tube) and stays in it long enough to pick up speed.
-  heroBars: s => (s.label === 'drop' ? 4 : undefined),
+  heroBars: (s, bar) => (s.label === 'drop' ? holdBars(14, bar, 4) : undefined),
   accelerate: true,
   transitions: { flash: true, glitch: true, dropPunch: true, dip: 0 },
   fx: { bloom: 0.35, grain: 0.04, vignette: 0.5 },
@@ -123,7 +133,7 @@ export const BALLAD: Style = {
   look: 'ballad',
   glyph: '○',
   pool: (s, song) => forSong(balladPool(s, song), song, [P('rings', 'front', 'tilt'), P('bokeh', 'rise')]),
-  baseBars: s => (s.label === 'intro' || s.label === 'outro' ? 4 : 2),
+  baseBars: (s, bar) => holdBars(s.label === 'intro' || s.label === 'outro' ? 14 : 10, bar),
   accelerate: false,
   transitions: { flash: false, glitch: false, dropPunch: false, dip: 0 },
   fx: { bloom: 0.5, grain: 0.055, vignette: 0.6 },
@@ -147,7 +157,8 @@ function balladPool(s: Section, song: SongTraits): Plate[] {
 /**
  * 字 (rap): the words are the picture. Verses take turns opening on the type wall and walking down the street of neon
  * signs (each chunk a sign that strikes on as it is rapped), between halftone prints and posters; builds slam one
- * word at a time; choruses cut every two bars between walls of words, the neon street, kinetic type, posters and prints.
+ * word at a time; choruses cut about every eight seconds between walls of words, the neon street, kinetic type,
+ * posters and prints.
  */
 export const WORD: Style = {
   id: 'word',
@@ -155,8 +166,8 @@ export const WORD: Style = {
   look: 'pulse',
   glyph: '□',
   pool: (s, song) => forSong(wordPool(s), song, [P('halftone', 'pan', 'in', 'out'), P('ridges', 'front', 'low')]),
-  baseBars: s => (s.label === 'intro' || s.label === 'outro' ? 4 : 2),
-  heroBars: s => (s.label === 'verse' || s.label === 'chorus' ? 4 : undefined),
+  baseBars: (s, bar) => holdBars(s.label === 'intro' || s.label === 'outro' ? 12 : 8, bar),
+  heroBars: (s, bar) => (s.label === 'verse' || s.label === 'chorus' ? holdBars(14, bar, 4) : undefined),
   accelerate: true,
   transitions: {
     flash: true, glitch: true, dropPunch: true, dip: 0,
@@ -196,7 +207,7 @@ export const INK: Style = {
   look: 'ballad',
   glyph: '〇',
   pool: (s, song) => forSong(inkPool(s, song), song, [P('ink', 'scroll', 'mist'), P('bokeh', 'rise', 'haze')]),
-  baseBars: s => (s.label === 'chorus' || s.label === 'drop' ? 2 : 4),
+  baseBars: (s, bar) => holdBars(s.label === 'chorus' || s.label === 'drop' ? 10 : 14, bar),
   accelerate: false,
   // Ink seeps in from a blot, or the cover's own shapes, or a round moon gate opens; sections change by seeping.
   transitions: {
