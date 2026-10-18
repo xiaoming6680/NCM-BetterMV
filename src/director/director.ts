@@ -6,7 +6,7 @@ import type { Music } from './music.ts';
 import type { LyricTrack } from './lyrics.ts';
 import type { FrameCtx, LookId, MvScene, SceneId, Shot } from '../scenes/types.ts';
 export type { LookId } from '../scenes/types.ts';
-import { clamp01, rng, smooth } from '../scenes/types.ts';
+import { clamp01, outExpo, punch, rng, smooth } from '../scenes/types.ts';
 import type { Palette } from '../render/palette.ts';
 import { defaultFx, type Fx } from '../render/engine.ts';
 import { THROUGH_CUT, TransitionKind, type Transition } from '../render/shots.ts';
@@ -18,6 +18,7 @@ import { norm } from './lyrics.ts';
 import { STYLES, type Plate, type SongTraits, type Style } from '../style/style.ts';
 import { lastIndex } from './music.ts';
 import { Accents } from '../scenes/hits.ts';
+import { findPushes, findStops, plateTime, stopAt, type Push, type Stop } from './moments.ts';
 
 /** Cut times inside a section, on downbeats or their bar's hit (and on beats at the end of a build). */
 function cutTimes(music: Music, style: Style, section: Section, next: Section | undefined): number[] {
@@ -393,7 +394,18 @@ export class Director {
     this.snares = Float64Array.from(music.a.hits.snare.filter(h => h[1] > 0.6), h => h[0]);
     this.stutters = findStutters(lyrics.lines);
     this.boxes = pure ? [] : letterboxed(music, style);
+    this.stops = pure ? [] : findStops(music);
+    this.pushes = pure ? [] : findPushes(music, this.stops);
+    this.pushTimes = Float64Array.from(this.pushes, p => p.at);
   }
+
+  /** Where the sound falls off a cliff and the plates' time stands still (moments.ts). */
+  readonly stops: Stop[];
+  /** Spikes that push the frame in (moments.ts), and the stops' ends. */
+  readonly pushes: Push[];
+  private pushTimes: Float64Array;
+  /** The cameras pushed in last frame: their zoom is put back before the next. */
+  private zoomed = new Set<THREE.PerspectiveCamera>();
 
   private snares: Float64Array;
   /** Stretches of the song in letterbox (letterboxed). */
@@ -536,7 +548,9 @@ export class Director {
     // Scenes see a shot inside a run as the whole run (Shot.run): its moves carry on across the cuts.
     const timed = (s: Shot): Shot => (s.run ? { ...s, start: s.run.start, end: s.run.end } : s);
     const own = timed(shot);
-    const ctx: FrameCtx = { t, dt, music: this.music, lyrics: this.lyrics, palette: this.palette, shot: own, shotT: t - own.start, aspect, fx };
+    // (Through a time stop the plate's time stands, then catches up — while the shot it began in is on screen.)
+    const pt = this.plateTime(t, shot);
+    const ctx: FrameCtx = { t: pt, dt, music: this.music, lyrics: this.lyrics, palette: this.palette, shot: own, shotT: pt - own.start, aspect, fx };
     scene.update(ctx);
 
     // Both shots keep moving under a transition; only the one on screen (the shot at t) sets the post effects and
@@ -552,7 +566,7 @@ export class Director {
     if (cut.kind && prev && since < cut.post) {
       const from = this.scenes[prev.scene]!;
       const before = timed(prev);
-      from.update({ ...ctx, shot: before, shotT: t - before.start, fx: defaultFx() });
+      from.update({ ...ctx, t, shot: before, shotT: t - before.start, fx: defaultFx() });
       transition = { from, hide: 'from', ...join(cut, shot) };
     } else if (nextCut && nextCut.kind && following && following.start - t < nextCut.pre) {
       drawn = this.scenes[following.scene]!;
@@ -584,9 +598,58 @@ export class Director {
     if (this.palette.light && COVER_PLATES.has(shot.scene) && this.style.id !== 'ink') { fx.exposure *= 0.72; fx.bloom *= 0.12; fx.flash *= 0.5; fx.vignette = Math.max(fx.vignette, 0.55); }
     if (!light && !this.pure) this.grade(t, shot, fx, beat);
     if (!this.pure) this.flashback(t, fx);
+    if (!this.pure) this.moments(t, shot, scene, fx);
     if (!this.pure && !light) this.applyLook(shot, fx);
     this.overlay.update(t, shot, fx, light);
     return { scene: drawn, fx, shot, transition };
+  }
+
+  /** The plate's time at t: held through a time stop begun in this shot, then catching up (moments.ts). */
+  private plateTime(t: number, shot: Shot): number {
+    const s = stopAt(this.stops, t);
+    return s && this.shotAt(s.at) === shot ? plateTime(this.stops, t) : t;
+  }
+
+  /**
+   * Time stops and pushes (moments.ts). Through a stop the held frame drains to the cover's duotone and creeps in;
+   * when the sound comes back the colour returns at once and the frame pushes in. A push is a lunge of the lens
+   * (its zoom: the overlay stays put) up in 50 ms and back over a few tenths, a radial blur, and ribbons of light
+   * rushing out of the middle (the overlay). Ballads get half of it and no ribbons; not on the opening cards or the
+   * armillary, which are moments of their own.
+   */
+  private moments(t: number, shot: Shot, scene: MvScene, fx: Fx): void {
+    for (const cam of this.zoomed) { cam.zoom = 1; cam.updateProjectionMatrix(); }
+    this.zoomed.clear();
+    this.overlay.rush = null;
+    if (shot.scene === 'cards' || shot.scene === 'crystal') return;
+    const soft = this.style.look === 'ballad';
+    let zoom = 1;
+    const s = stopAt(this.stops, t);
+    if (s && this.shotAt(s.at) === shot) {
+      const drain = soft ? 0.5 : 0.85, held = Math.max(0.5, s.end - s.at);
+      if (t < s.end) {
+        const age = t - s.at, k = outExpo(age / 0.08);
+        fx.duotone = Math.max(fx.duotone, drain * k);
+        fx.ca = Math.max(fx.ca, 0.35 * k);
+        zoom *= 1 + 0.035 * smooth(age / held);
+      } else {
+        const after = t - s.end;
+        fx.duotone = Math.max(fx.duotone, drain * Math.exp(-after / 0.07));
+        zoom *= 1 + 0.035 * (1 - smooth(after / 0.5));
+      }
+    }
+    const i = lastIndex(this.pushTimes, t);
+    if (i >= 0 && t - this.pushTimes[i] < 0.8) {
+      const p = this.pushes[i], age = t - p.at, k = p.strength * (soft ? 0.5 : 1);
+      zoom *= 1 + 0.11 * k * punch(age, 0.2, 0.05);
+      fx.zoom = Math.max(fx.zoom, 0.9 * k * punch(age, 0.11, 0.03));
+      if (!soft) this.overlay.rush = { age, k, seed: Math.round(p.at * 1000) };
+    }
+    if (Math.abs(zoom - 1) > 1e-4) {
+      scene.camera.zoom = zoom;
+      scene.camera.updateProjectionMatrix();
+      this.zoomed.add(scene.camera);
+    }
   }
 
   /**

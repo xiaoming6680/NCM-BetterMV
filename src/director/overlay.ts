@@ -19,7 +19,7 @@ import type { Music } from './music.ts';
 import type { Style } from '../style/style.ts';
 import type { Palette } from '../render/palette.ts';
 import type { Shot } from '../scenes/types.ts';
-import { clamp01, outExpo, rng } from '../scenes/types.ts';
+import { clamp01, outExpo, rng, surge } from '../scenes/types.ts';
 import type { Fx } from '../render/engine.ts';
 import type { SectionLabel } from '../types.ts';
 import { lastIndex } from './music.ts';
@@ -149,6 +149,9 @@ export class MgOverlay {
   /** Only the song's name and artists (oscilloscope music: nothing drawn over the scope's picture). */
   quiet = false;
 
+  /** A push (src/director/moments.ts) under way: seconds since it, its strength, its seed. */
+  rush: { age: number; k: number; seed: number } | null = null;
+
   update(t: number, shot: Shot, fx: Fx, light = false): void {
     const busy = !this.quiet;
     const L = this.lines;
@@ -212,6 +215,19 @@ export class MgOverlay {
         const r = 0.03 + outExpo(x) * (0.03 + 0.03 * s);
         poly(px, py, r, 3, random() * Math.PI * 2, 1.2, signal, (1 - x) * (1 - x) * 0.55);
       });
+    }
+
+    // A push: ribbons of light rush out of the middle, from rest to past the corners in a few tenths, fading.
+    if (busy && this.rush && this.rush.age < 0.45) {
+      const { age, k, seed } = this.rush, random = rng(seed);
+      const fade = (1 - age / 0.45) * (1 - age / 0.45) * k;
+      const colors = [signal, this.palette.accent, paper];
+      for (let n = 0; n < 30; n++) {
+        const a = random() * Math.PI * 2, speed = 0.7 + 0.6 * random(), len = 0.15 + 0.45 * random(), w = 1.5 + 5 * random();
+        const r0 = 0.08 + 2.6 * speed * surge(age, 0.07);
+        const r1 = r0 + len * Math.min(1, 0.3 + age / 0.06);
+        seg(Math.cos(a) * r0, Math.sin(a) * r0, Math.cos(a) * r1, Math.sin(a) * r1, w, colors[n % 3], fade * (0.5 + 0.5 * random()));
+      }
     }
 
     // Countdown through a build that rises into a louder section: a bar low in the frame fills towards the drop, a
