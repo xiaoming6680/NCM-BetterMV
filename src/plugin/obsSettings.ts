@@ -27,7 +27,7 @@ export interface ObsSettings {
 
 const CSS = `
 .bmv-obs-url{display:inline-flex;align-items:center;gap:6px;max-width:100%;height:26px;padding:0 10px;border-radius:7px;background:var(--group);
-  color:var(--t1);font:500 12.5px/1 Consolas,"Cascadia Mono",monospace;text-decoration:none;cursor:grab;user-select:none;white-space:nowrap}
+  color:var(--t1);font:500 12.5px/1 Consolas,"Cascadia Mono",monospace;text-decoration:none;cursor:grab;user-select:none;-webkit-user-drag:element;white-space:nowrap}
 .bmv-obs-url:active{cursor:grabbing}
 .bmv-obs-url svg{flex:none;opacity:.6}
 .bmv-obs-off .bmv-obs-url{opacity:.45;cursor:default}
@@ -114,13 +114,15 @@ export function obsSettings(kit: SettingsKit, config: Config, onChange: (c: Conf
   kit.row(main, 'OBS 输出', onSwitch, '直播画面中只显示 MV，不含声音');
 
   // The address, to drag into OBS (it makes a browser source the size of its canvas, named by layer-name) or copy.
-  const url = el('a', 'bmv-obs-url');
+  // (Not an <a>: NetEase's own stylesheet gives links `-webkit-user-drag: none`, which beats the one `draggable` brings — the
+  // address could not be dragged at all. The property is set on the element itself too, whatever the page says.)
+  const url = el('div', 'bmv-obs-url');
   url.innerHTML = GRIP;
   const urlText = el('span');
   url.append(urlText);
   url.draggable = true;
+  url.style.setProperty('-webkit-user-drag', 'element');
   url.title = '拖到 OBS 的预览区';
-  url.onclick = e => e.preventDefault();
   url.addEventListener('dragstart', e => {
     if (!config.obs) { e.preventDefault(); return; }
     const dt = e.dataTransfer!;
@@ -178,7 +180,6 @@ export function obsSettings(kit: SettingsKit, config: Config, onChange: (c: Conf
     if (document.activeElement !== port) port.value = String(config.obsPort);
     const s = obs.status;
     urlText.textContent = s.url;
-    url.href = s.url;
     urlRow.classList.toggle('bmv-obs-off', !config.obs);
     const t = stateText(config.obs ? s : { ...s, kind: 'off' });
     state.textContent = t.text;

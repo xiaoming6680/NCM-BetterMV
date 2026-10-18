@@ -8,6 +8,7 @@
 - 有 WebGL2（ANGLE D3D11）、OffscreenCanvas、AudioWorklet、OfflineAudioContext；没有 WebGPU。
 - **blob Worker 被 CSP 禁止**，重计算只能在主线程分片做。页面的 CSP 是 `<meta>` 里的 `script-src 'self' 'unsafe-inline' 'unsafe-eval' … orpheus:`：允许 `new Function`（lamejs 这类经典脚本可以这样执行），不允许 blob: 和 data: 脚本。
 - MediaRecorder 支持 `video/x-matroska;codecs=avc1`、`video/webm;codecs=h264`、`vp9`、`vp8`，不支持 `video/mp4`；没有 WebCodecs（Chrome 94 才有）。1080p 的 H.264 由 Windows 自带的 “Microsoft H.264 Encoder” 编码（30 帧配置、每 30 帧一个关键帧、Baseline、按帧到达的时间分配码率），低于 640×480 时改用 OpenH264，详见 [EXPORT.md](EXPORT.md)。requestAnimationFrame 不受垂直同步限制，约 270–300 次/秒。
+- 网易云自己的样式给链接（`<a>`）设了 `-webkit-user-drag: none`，盖过 `draggable="true"`：`<a>` 上 `dragstart` 不触发，要拖出页面的元素用 `div` 并在元素上写 `-webkit-user-drag: element`（OBS 地址的拖动，见 [OBS.md](OBS.md)）。用 CDP 的 `Input.dispatchMouseEvent` 测拖放不可靠：页面里的 `dragstart` 能触发，但原生拖放要真实的鼠标，用 `SendInput` 加一个接收拖放的小窗口才能看到拖出去的数据。
 - 页面里往本机服务发请求（OBS 服务、编码程序）：`fetch` 的 body 传 `ArrayBuffer` 只有约 33 MB/s，传 `Blob` 约 390 MB/s；Blob 的数据留在浏览器里直到页面垃圾回收，响应不读完或回收不来，累计约 2 GB 后报 `net::ERR_BLOB_OUT_OF_MEMORY`。同步的 `getBufferSubData` 排在已提交的命令后面，要等后面的帧画完。网易云里的 JS 比无头 Edge 慢 3–4 倍。详见 [EXPORT.md](EXPORT.md) 的“读回与送帧”。
 - 插件可用 `betterncm.fs`（文件）、`betterncm.app`（数据目录、执行程序）。`betterncm.ncm.getPlaying()` 在 3.x 上报错，不要用。
 - 客户端代码在安装目录的 `package/orpheus.ntpk`（zip，开头多 100 字节，`unzip` 能直接解），主体在 `pub/hybrid/app.chunk.*.js`，`async:hostResource` 模型在另一个 chunk。

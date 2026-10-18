@@ -32,6 +32,7 @@ src/plugin/obs.ts  ──POST /api/song/<文件>──▶ 内存里留 2 首  �
 - 先请求 `/api/status`：同版本的服务在运行就直接用（网易云在它退出前重新打开）；版本不同先让它退出再换；端口被别的程序占用则报错，端口可在设置中改。
 - 程序从插件文件夹复制到 `<数据目录>\BetterMV\obs\bettermv-obs.exe` 再运行：BetterNCM 每次启动都重新解压插件文件夹，而运行中的程序文件被占用。
 - 启动用 `cmd /c start "" /b`（与对齐包启动 `pythonw` 相同）。服务消失后自动重启；首次启动失败时 2 s 后重新复制并启动一次（旧服务退出时程序文件和端口可能还被占用）。
+- 设置里的地址能拖进 OBS（`src/plugin/obsSettings.ts`）：地址是一个 `draggable` 的 `div`，`dragstart` 里把 `地址?layer-name=BetterMV` 同时写进 `text/uri-list` 和 `text/plain`，OBS 据此建一个同画布尺寸、名为 BetterMV 的浏览器源。它不能是 `<a>`：网易云自己的样式给链接设了 `-webkit-user-drag: none`，盖过 `draggable` 带来的 `element`，在 `<a>` 上 `dragstart` 根本不触发（地址“拖不动”的原因）；元素上另写了 `-webkit-user-drag: element`，不依赖页面的样式。用自己编的一个小窗口接住真实的鼠标拖放验证过：收到 `UnicodeText`、`UniformResourceLocator(W)`、`text/x-moz-url`、`FileGroupDescriptorW`，内容是该地址，和从浏览器里拖一个链接出去一样；没有拖进真的 OBS（会改动用户的场景集合）。
 - “OBS 输出”默认关闭，关闭时不启动服务，PlayProgress 钩子第一行就返回。
 
 ### 安全
