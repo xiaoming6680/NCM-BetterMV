@@ -170,7 +170,8 @@ export class MgOverlay {
     const big = sec.label === 'chorus' || sec.label === 'drop';
 
     // Drum shapes in big sections, each drum's hits since the section began (newest first) while they last.
-    const shapes = busy && big && !FILMED.has(shot.scene);
+    // (Kinetic type is a page of its own, the dot wall a screen: shapes over them fight their own.)
+    const shapes = busy && big && !FILMED.has(shot.scene) && shot.scene !== 'kinetic' && shot.scene !== 'dots';
     const each = (hits: Hits, life: number, draw: (i: number, age: number, x: number, s: number) => void) => {
       for (let i = lastIndex(hits.t, t); i >= 0; i--) {
         const age = t - hits.t[i];
@@ -317,7 +318,7 @@ export class MgOverlay {
     const idx = shot.sectionIndex, sec = shot.section;
     const age = t - sec.start, life = beat * this.music.meter * 1.6;
     // (The type wall and the poster set their own type up there.)
-    const show = vis > 0 && idx > 0 && age >= 0 && age < life && shot.scene !== 'typewall' && shot.scene !== 'poster';
+    const show = vis > 0 && idx > 0 && age >= 0 && age < life && shot.scene !== 'typewall' && shot.scene !== 'poster' && shot.scene !== 'kinetic';
     if (!show) {
       if (this.card) this.card.label.visible = false;
       return;

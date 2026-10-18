@@ -314,7 +314,7 @@ export function planLooks(sections: Section[], style: Style, songSeed: number, o
  * (LyricLayer; the words can't be drawn apart), and the soft ones that fill the frame with haze (clouds, bokeh), which
  * characters turn into a wall of the same glyph.
  */
-const NO_CHARACTERS: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'halftone', 'shatter', 'ink', 'clouds', 'bokeh']);
+const NO_CHARACTERS: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'halftone', 'ink', 'clouds', 'bokeh']);
 
 /**
  * Where the picture goes to letterbox (2.39:1 bars in the cover's ink, under the overlay): the opening and the end of
@@ -334,7 +334,7 @@ function letterboxed(music: Music, style: Style): Array<[number, number]> {
 }
 
 /** Plates that show the cover itself large (its white is the picture's white; the canvas paints it). */
-const COVER_PLATES: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'shatter', 'align', 'canvas']);
+const COVER_PLATES: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'canvas']);
 
 const { zoom, spin, whip } = TransitionKind;
 /**
@@ -343,12 +343,12 @@ const { zoom, spin, whip } = TransitionKind;
  */
 const MOTION: Record<SceneId, TransitionKind[]> = {
   tunnel: [zoom], drive: [zoom], relief: [zoom], bokeh: [zoom], particles: [zoom, spin],
-  kaleido: [spin], rings: [spin], shatter: [spin, zoom], flip: [whip, spin],
+  kaleido: [spin], rings: [spin], flip: [whip, spin],
   poster: [whip], typewall: [whip], halftone: [whip, zoom], ridges: [whip, zoom], diorama: [whip, zoom], ink: [TransitionKind.ink],
-  crystal: [zoom, spin], cards: [zoom], debug: [whip, zoom], scope: [zoom, whip], subdivide: [spin, zoom], align: [whip, spin],
+  crystal: [zoom, spin], cards: [zoom], debug: [whip, zoom], scope: [zoom, whip], subdivide: [spin, zoom],
   vinyl: [spin, zoom], clouds: [zoom], city: [zoom], aurora: [zoom], canvas: [zoom], pillars: [spin, zoom],
   ripple: [spin, zoom], channel: [zoom], orb: [spin, zoom],
-  menger: [zoom], sierpinski: [zoom], cantor: [zoom], papercut: [spin, zoom], rain: [TransitionKind.matte, zoom], lanterns: [zoom], neon: [zoom, whip],
+  menger: [zoom], sierpinski: [zoom], cantor: [zoom], papercut: [spin, zoom], rain: [TransitionKind.matte, zoom], lanterns: [zoom], neon: [zoom, whip], kinetic: [whip], blackhole: [spin, zoom], cubes: [zoom, spin], dots: [whip, zoom],
 };
 const SOFT: TransitionKind[] = [zoom, TransitionKind.matte, TransitionKind.iris, spin];
 
@@ -579,7 +579,7 @@ export class Director {
     // A plate on paper: trails and the duotone would grey its darks, and the overlay's glowing lines would vanish.
     const bg = scene.scene.background;
     const light = bg instanceof THREE.Color && bg.r * 0.2126 + bg.g * 0.7152 + bg.b * 0.0722 > 0.45;
-    // A light cover shown whole (tiles, shards, the aligned cover) is mostly near-white: held a step down and
+    // A light cover shown whole (the tiles, the canvas) is mostly near-white: held a step down and
     // without most of the glow it stays a picture instead of washing out (the user: “过曝+歌词看不清”).
     if (this.palette.light && COVER_PLATES.has(shot.scene) && this.style.id !== 'ink') { fx.exposure *= 0.72; fx.bloom *= 0.12; fx.flash *= 0.5; fx.vignette = Math.max(fx.vignette, 0.55); }
     if (!light && !this.pure) this.grade(t, shot, fx, beat);

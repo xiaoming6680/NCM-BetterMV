@@ -6,7 +6,6 @@ import { Music } from '../director/music.ts';
 import { LyricTrack } from '../director/lyrics.ts';
 import { Director, planLooks, planShots, type LookId } from '../director/director.ts';
 import { Relief } from '../scenes/relief.ts';
-import { Shatter } from '../scenes/shatter.ts';
 import { Diorama } from '../scenes/diorama.ts';
 import { Bokeh } from '../scenes/bokeh.ts';
 import { Tunnel } from '../scenes/tunnel.ts';
@@ -25,7 +24,6 @@ import { ArmillaryScene } from '../scenes/armillary.ts';
 import { CardsScene } from '../scenes/cards.ts';
 import { DebugScene } from '../scenes/debug.ts';
 import { SubdivideScene } from '../scenes/subdivide.ts';
-import { AlignScene } from '../scenes/align.ts';
 import { ScopeScene } from '../scenes/scope.ts';
 import { Vinyl } from '../scenes/vinyl.ts';
 import { Clouds } from '../scenes/clouds.ts';
@@ -43,6 +41,10 @@ import { PaperCut } from '../scenes/papercut.ts';
 import { RainScene } from '../scenes/rain.ts';
 import { LanternScene } from '../scenes/lanterns.ts';
 import { NeonScene } from '../scenes/neon.ts';
+import { KineticType } from '../scenes/kinetic.ts';
+import { BlackHole } from '../scenes/blackhole.ts';
+import { Cubes } from '../scenes/cubes.ts';
+import { DotMatrix } from '../scenes/dots.ts';
 import { FractalPlate } from '../scenes/fractal.ts';
 import { armillarySpec } from '../sigil/armillary.ts';
 import type { MvScene, SceneId, SceneInit, Shot } from '../scenes/types.ts';
@@ -181,15 +183,16 @@ export class MvPlayer {
     // The plates with a version of their own on rice paper (the 墨 style); the rest draw ink as they draw a ballad.
     const paper = style.id === 'ink' ? 'ink' : look;
     const make: Record<SceneId, () => MvScene> = {
-      relief: () => new Relief(init), shatter: () => new Shatter(init), diorama: () => new Diorama(init), bokeh: () => new Bokeh(init),
+      relief: () => new Relief(init), diorama: () => new Diorama(init), bokeh: () => new Bokeh(init),
       tunnel: () => new Tunnel(init, look), drive: () => new Drive(init), kaleido: () => new Kaleido(init, look), flip: () => new Flip(init, look),
       rings: () => new Rings(init, look), poster: () => new Poster(init, look), ridges: () => new Ridges(init, paper), halftone: () => new Halftone(init, look), particles: () => new Particles(init, look),
-      typewall: () => new TypeWall(init), ink: () => new Ink(init, song.name), crystal: () => new ArmillaryScene(init), cards: () => new CardsScene(init), debug: () => new DebugScene(init), subdivide: () => new SubdivideScene(init, look), align: () => new AlignScene(init), scope: () => new ScopeScene(init),
+      typewall: () => new TypeWall(init), ink: () => new Ink(init, song.name), crystal: () => new ArmillaryScene(init), cards: () => new CardsScene(init), debug: () => new DebugScene(init), subdivide: () => new SubdivideScene(init, look), scope: () => new ScopeScene(init),
       vinyl: () => new Vinyl(init, look), clouds: () => new Clouds(init, paper), city: () => new City(init, look), aurora: () => new Aurora(init, look),
       canvas: () => new CanvasScene(init, paper, init.seed), pillars: () => new Pillars(init, look, init.seed),
       ripple: () => new Ripple(init, look), channel: () => new Channel(init, look), orb: () => new Orb(init, look),
       menger: () => new Menger(init, look), sierpinski: () => new Sierpinski(init, look), cantor: () => new Cantor(init, look),
       papercut: () => new PaperCut(init), rain: () => new RainScene(init), lanterns: () => new LanternScene(init), neon: () => new NeonScene(init),
+      kinetic: () => new KineticType(init), blackhole: () => new BlackHole(init, look), cubes: () => new Cubes(init, look), dots: () => new DotMatrix(init, look),
     };
     // (The plates slow to build even alone, built in steps of their own: the canvas's stroke plan, the subdivided
     // ball's levels; 0.1–0.25 s each in NetEase's Chromium.)
@@ -248,11 +251,12 @@ export class MvPlayer {
     (this.scenes.crystal as ArmillaryScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.cards as CardsScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.debug as DebugScene | undefined)?.setViewport(canvas.width, canvas.height);
-    (this.scenes.align as AlignScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.scope as ScopeScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.orb as Orb | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.clouds as Clouds | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.city as City | undefined)?.setViewport(canvas.width, canvas.height);
+    (this.scenes.blackhole as BlackHole | undefined)?.setViewport(canvas.width, canvas.height, pr);
+    (this.scenes.dots as DotMatrix | undefined)?.setViewport(canvas.width, canvas.height);
     for (const s of Object.values(this.scenes)) if (s instanceof FractalPlate) s.setViewport(canvas.width, canvas.height, pr);
     this.director?.overlay.resize(this.engine.aspect);
     this.director?.overlay.setViewport(canvas.width, canvas.height, pr);

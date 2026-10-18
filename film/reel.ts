@@ -70,8 +70,8 @@ const CUTS: Cut[] = [
     plates: [['poster', 'stack', 1], ['canvas', 'chase', 1]],
     captions: [{ title: '歌词长在画面里', line: '逐字出现，唱得越久，字越大', at: 0, bars: 2 }],
   },
-  // The Place (Au5 Remix): the shards, the Menger sponge, the light pillars.
-  { id: 29755251, label: 'drop', n: 2, bars: 3, seed: 1, lead: 1, plates: [['shatter', 'swarm-a', 1], ['menger', 'glide', 1], ['pillars', 'top', 1]] },
+  // The Place (Au5 Remix): the cubes (the shards until the plate was dropped), the Menger sponge, the light pillars.
+  { id: 29755251, label: 'drop', n: 2, bars: 3, seed: 1, lead: 1, plates: [['cubes', 'flow', 1], ['menger', 'glide', 1], ['pillars', 'top', 1]] },
   // If The Sun Burns Out Tonight again, its last drop: the tunnel; the same bars played three times; the grid; the name
   // over its outro.
   {

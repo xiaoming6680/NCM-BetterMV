@@ -17,9 +17,7 @@ export const SCENE_GROUPS: Array<{ name: string; scenes: SceneInfo[] }> = [
   {
     name: '封面',
     scenes: [
-      { id: 'shatter', name: '碎片', note: '封面切分为三角形墙面，响处的三角片凸出发亮；drop 时碎裂散开，镜头从中穿过' },
       { id: 'flip', name: '翻牌', note: '封面铺成翻牌板，每拍掠过一道翻转波，每列随一个频段从底部亮起' },
-      { id: 'align', name: '错位拼合', note: '数百块封面碎片散在不同深度，随响度前后移动；镜头转到特定角度时拼合成完整封面' },
       { id: 'kaleido', name: '万花筒', note: '封面折叠为万花筒，持续推进，按拍旋转，花纹随频谱从中心涌出' },
       { id: 'halftone', name: '半调', note: '封面以网点印刷呈现，网点大小随频谱变化，军鼓使色版错位' },
       { id: 'particles', name: '粒子', note: '封面分解为三万个光点，响处亮起浮出，重拍时散开又落回' },
@@ -49,6 +47,9 @@ export const SCENE_GROUPS: Array<{ name: string; scenes: SceneInfo[] }> = [
       { id: 'ripple', name: '声浪', note: '封面居中，外圈是此刻的频谱，不断向外流出、旋成旋臂；底鼓时冲击环向外扩散' },
       { id: 'channel', name: '声道', note: '在频谱围成的光管中飞行，前方是即将到来的声音；drop 时光管收紧、加速' },
       { id: 'orb', name: '声核', note: '数千根光刺组成的球体，刺长即各频段此刻的响度；底鼓时球体一胀，放出冲击波' },
+      { id: 'dots', name: '点阵', note: '一整面 LED 点阵墙：歌词以点阵字逐词点亮，底部是点阵频谱，鼓点时光带横扫过墙' },
+      { id: 'cubes', name: '条纹方块', note: '音游 BGA 式的两色斜条纹上，成千方块翻滚涌来，每块随一个频段的响度胀缩，鼓点上条纹错位' },
+      { id: 'blackhole', name: '黑洞', note: '光被引力弯曲的黑洞，吸积盘就是声音：每个音从视界边缘流出、铺满盘面，底鼓是一圈光波' },
       { id: 'scope', name: '示波器', note: '实时显示歌曲的波形，示波器音乐会显现其中的图案' },
     ],
   },
@@ -66,6 +67,7 @@ export const SCENE_GROUPS: Array<{ name: string; scenes: SceneInfo[] }> = [
       { id: 'poster', name: '图版', note: '海报排版：正在演唱的句子以大字排出，辅以色块、细线与网格' },
       { id: 'typewall', name: '字墙', note: '歌词逐行落下、堆叠成墙，正在演唱的词以强调色显示（说唱）' },
       { id: 'neon', name: '霓虹街', note: '走进夜里的窄街，每段歌词一块招牌，唱到时像霓虹灯管一样逐字点亮（说唱）' },
+      { id: 'kinetic', name: '叠字', note: '音游 BGA 式的动态字：唱到的词放大、重复叠起，压在斜纹色条上，随鼓点错位滑动' },
     ],
   },
   {

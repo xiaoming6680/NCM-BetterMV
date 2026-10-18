@@ -44,6 +44,8 @@ export const PLATE_LENS: Partial<Record<SceneId, PlateLens>> = {
   subdivide: { aperture: 0.4, motion: 1, focus: 'subject' },
   aurora: { aperture: 0, motion: 1, focus: 'subject' },
   drive: { aperture: 0, motion: 0.2, focus: 8, depthless: 8 },
+  // (Its stripes are on the frame, at the far plane: barely softened, never streaked.)
+  cubes: { aperture: 0.3, motion: 1, focus: 14 },
 };
 
 /** Largest blur disc, px at 1080p (aperture 1). */

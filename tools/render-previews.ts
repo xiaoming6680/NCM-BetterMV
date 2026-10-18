@@ -23,9 +23,7 @@ const PLAN: Record<SceneId, { style: string; variants: string; in: SectionLabel;
   rings: { style: 'pulse', variants: 'tilt', in: 'verse', at: 0.75 },
   ridges: { style: 'pulse', variants: 'front', in: 'verse', at: 0.75 },
   scope: { style: 'pulse', variants: 'wave', in: 'chorus', at: 0.15 },
-  shatter: { style: 'pulse', variants: 'swarm-a', in: 'drop', at: 0.55 },
   flip: { style: 'pulse', variants: 'wave', in: 'chorus', at: 0.15 },
-  align: { style: 'pulse', variants: 'swing', in: 'chorus', at: 0.55 },
   kaleido: { style: 'pulse', variants: 'petal', in: 'chorus', at: 0.55 },
   halftone: { style: 'pulse', variants: 'in', in: 'chorus', at: 0.35 },
   particles: { style: 'pulse', variants: 'burst', in: 'chorus', at: 0.35 },
@@ -57,6 +55,11 @@ const PLAN: Record<SceneId, { style: string; variants: string; in: SectionLabel;
   rain: { style: 'ballad', variants: 'pane', in: 'verse', at: 0.35 },
   lanterns: { style: 'ballad', variants: 'shore', in: 'chorus', at: 0.6 },
   neon: { style: 'word', variants: 'walk', in: 'verse', at: 0.35 },
+  // (These four were picked against BMV_PREVIEW_SONG=435278010.)
+  kinetic: { style: 'pulse', variants: 'flat', in: 'chorus', at: 0.35 },
+  blackhole: { style: 'pulse', variants: 'edge', in: 'chorus', at: 0.15 },
+  cubes: { style: 'pulse', variants: 'flow', in: 'chorus', at: 0.35 },
+  dots: { style: 'pulse', variants: 'flat', in: 'chorus', at: 0.35 },
 };
 
 /** The looks: a plate drawn in each. */
@@ -107,7 +110,8 @@ async function encode(f: { w: number; h: number; px: Buffer }, out: string, filt
 for (const id of scenes) {
   const look = id.startsWith('look-') ? id.slice(5) : null;
   const p = look ? LOOK_PLAN[look] : { plate: id, ...PLAN[id as SceneId] };
-  await page.goto(`${SERVER}/?id=${SONG}&demo&style=${p.style}&plate=${p.plate}&variants=${p.variants}&look=${look ?? 'none'}`);
+  // (A fixed seed: a plate that draws its layout from it, the kinetic type, shows what was picked with --try.)
+  await page.goto(`${SERVER}/?id=${SONG}&demo&seed=1&style=${p.style}&plate=${p.plate}&variants=${p.variants}&look=${look ?? 'none'}`);
   await page.waitForFunction(() => (window as any).bmv?.player?.director, null, { timeout: 240000 });
   // (The HUD off takes the armillary badge with it: the sketch is the plate alone.)
   await page.evaluate(() => { const b = (window as any).bmv; b.audio.pause(); b.player.hud.visible = false; b.player.resize(); });
