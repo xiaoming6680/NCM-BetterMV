@@ -11,7 +11,7 @@
 // the ink. The view moves slowly across them like an unrolled scroll; the words are written in columns in the sky.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { clamp01, inOutCubic, lerp, outExpo, rng } from './types.ts';
+import { clamp01, inOutCubic, lerp, narrowness, outExpo, rng } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
 import { LyricRig } from './lyricRig.ts';
 import { lastIndex } from '../director/music.ts';
@@ -141,10 +141,9 @@ export class Ridges implements MvScene {
     this.scene.add(this.fill, this.lines.mesh);
     this.kicks = Float64Array.from(init.music.a.hits.kick.filter(h => h[1] > 0.35), h => h[0]);
     this.rig = new LyricRig(palette, look === 'ballad' ? 'poem' : 'hook');
-    this.rig.frame = { vh: 6.5, vw: 8.4 };
     this.rig.depthTest = true;
     this.rig.place = (root, st) => {
-      const up = outExpo(clamp01((st.age + 0.5) / 1.1)), x = look === 'ballad' ? (st.index % 2 ? 1 : -1) * 2.2 : 0;
+      const up = outExpo(clamp01((st.age + 0.5) / 1.1)), x = look === 'ballad' ? (st.index % 2 ? 1 : -1) * 2.2 * narrowness(this.camera.aspect) ** 2 : 0;
       // Low over the front ridge only that ridge is in front of the words, so they rise from right behind it, smaller.
       if (this.low) { root.position.set(x * 0.3, 0.95 - (1 - up) * 0.7, -0.4); root.scale.setScalar(0.42); }
       else root.position.set(x, 0.75 - (1 - up) * 1.6, -DEPTH * 0.5);
@@ -214,7 +213,6 @@ export class Ridges implements MvScene {
     // The words: brush-written columns in the sky, over the ranges.
     this.rig = new LyricRig(palette, 'poem');
     this.rig.onLight = true;
-    this.rig.frame = { vh: 6.5, vw: 8.4 };
     this.rig.place = (root, st) => {
       const shot = this.shot;
       if (!shot) return 0;
@@ -223,7 +221,7 @@ export class Ridges implements MvScene {
       const fw = target.sub(eye).normalize(), right = new THREE.Vector3().crossVectors(fw, new THREE.Vector3(0, 1, 0)).normalize();
       const up = new THREE.Vector3().crossVectors(right, fw);
       const d = 20, vh = 2 * d * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2), vw = vh * this.camera.aspect;
-      root.position.copy(eye).addScaledVector(fw, d).addScaledVector(right, (st.index % 2 ? 1 : -1) * vw * 0.3).addScaledVector(up, vh * 0.04);
+      root.position.copy(eye).addScaledVector(fw, d).addScaledVector(right, (st.index % 2 ? 1 : -1) * vw * 0.3 * narrowness(this.camera.aspect)).addScaledVector(up, vh * 0.04);
       root.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, fw.clone().negate()));
       root.scale.setScalar(d * 0.1);
     };
@@ -287,6 +285,9 @@ export class Ridges implements MvScene {
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
+    // The words' frame, as wide as the view is at its height (a portrait frame: a third as wide; rows wrap sooner).
+    // A ballad's column, hung above the ranges, is set for less height than the view's: at 6.5 its top left the frame.
+    this.rig.frame = { vh: this.look === 'ballad' && !this.hills ? 5 : 6.5, vw: 8.4 * narrowness(aspect) };
   }
 
   setViewport(width: number, height: number, pixelRatio: number): void {
@@ -342,8 +343,10 @@ export class Ridges implements MvScene {
       cam.position.set(side * lerp(0.6, -0.6, inOutCubic(k)), 0.55, 2.2);
       cam.lookAt(0, 0.35, -DEPTH * 0.6);
     } else if (shot.variant === 'drift') {
-      cam.position.set(side * lerp(-2.6, 2.6, k), 2.3, 3.4);
-      cam.lookAt(side * lerp(-0.8, 0.8, k), 0, -DEPTH * 0.45);
+      // (Across a narrow frame by as much of its width: the line in the middle stays in it.)
+      const sweep = narrowness(ctx.aspect);
+      cam.position.set(side * lerp(-2.6, 2.6, k) * sweep, 2.3, 3.4);
+      cam.lookAt(side * lerp(-0.8, 0.8, k) * sweep, 0, -DEPTH * 0.45);
     } else {
       cam.position.set(side * lerp(0.35, -0.35, k), lerp(3.2, 2.7, inOutCubic(k)), lerp(4.6, 3.9, inOutCubic(k)));
       cam.lookAt(0, 0.1, -DEPTH * 0.42);

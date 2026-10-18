@@ -5,7 +5,7 @@
 // it: soft in the haze, coming sharp as the focus pulls onto the picture.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, inOutCubic, lerp, punch, rng, smooth } from './types.ts';
+import { clamp01, inOutCubic, lerp, narrowness, punch, rng, smooth } from './types.ts';
 import { Accents } from './hits.ts';
 import { LyricRig } from './lyricRig.ts';
 import { voiceFaces } from './lyricBlock.ts';
@@ -113,7 +113,6 @@ export class Bokeh implements MvScene {
     this.scene.add(points);
     this.rig = new LyricRig(palette, 'poem');
     this.rig.faces = voiceFaces('ballad', init.seed);
-    this.rig.frame = { vh: 7, vw: 11 };
     this.rig.focusable = true;
     this.scene.add(this.rig.group);
     this.resize(init.aspect);
@@ -122,6 +121,8 @@ export class Bokeh implements MvScene {
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
+    // The words' frame, as wide as the view is at its height (a portrait frame: a third as wide; rows wrap sooner).
+    this.rig.frame = { vh: 7, vw: 11 * narrowness(aspect) };
   }
 
   /** Viewport height in device pixels, so disc sizes match the lens. */

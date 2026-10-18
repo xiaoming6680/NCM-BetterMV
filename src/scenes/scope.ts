@@ -9,7 +9,7 @@
 // whole MV is this scope in phosphor green; `xy-near` and `xy-angle` frame it closer or from the side.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, rng } from './types.ts';
+import { clamp01, narrowness, rng } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
 import { BeamBatch } from '../render/beam.ts';
 import { LyricRig } from './lyricRig.ts';
@@ -58,7 +58,6 @@ export class ScopeScene implements MvScene {
     // The words are on the scope's screen, on the glass over the trace.
     this.rig = new LyricRig(init.palette, 'hook');
     this.rig.faces = voiceFaces('pulse', init.seed);
-    this.rig.frame = { vh: H * 1.1, vw: W * 0.95 };
     this.rig.place = root => { root.position.set(0, 0, 0.05); };
     this.scene.add(this.grid.mesh, this.beam.mesh, this.readout, this.readoutXy, this.rig.group);
     this.xyEnergy = this.calibrate();
@@ -68,6 +67,8 @@ export class ScopeScene implements MvScene {
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
+    // The words' frame, as wide as the view is at its height (a portrait frame: a third as wide; rows wrap sooner).
+    this.rig.frame = { vh: H * 1.1, vw: W * 0.95 * narrowness(aspect) };
   }
 
   setViewport(width: number, height: number, pixelRatio: number): void {

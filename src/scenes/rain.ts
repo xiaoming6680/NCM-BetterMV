@@ -220,6 +220,6 @@ export class RainScene implements MvScene {
     ctx.fx.grain = 0.05;
     // (Laid out as if the pane were taller: the strokes come out bigger than the poem type, as a finger writes; the
     // columns keep to the pane's width.)
-    this.layer.update(ctx.lyrics, t, shot.section.energy, ctx.aspect, 1.35, ctx.aspect, 1);
+    this.layer.update(ctx.lyrics, t, shot.section.energy, ctx.aspect, 1.35, ctx.aspect, 1, undefined, ctx.aspect);
   }
 }

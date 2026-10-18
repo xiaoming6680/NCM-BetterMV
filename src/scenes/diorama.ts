@@ -6,7 +6,7 @@
 // covers them where its cut-out reaches, and the camera's moves slide them against the paper.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, inOutCubic, lerp, punch, rng, smooth } from './types.ts';
+import { clamp01, inOutCubic, lerp, narrowness, punch, rng, smooth } from './types.ts';
 import { Accents } from './hits.ts';
 import { LyricRig } from './lyricRig.ts';
 import { voiceFaces } from './lyricBlock.ts';
@@ -272,9 +272,9 @@ export class Diorama implements MvScene {
 
     this.rig = new LyricRig(palette, 'poem');
     this.rig.faces = voiceFaces('ballad', init.seed);
-    this.rig.frame = { vh: 7.5, vw: 10 };
     this.rig.depthTest = true;
-    this.rig.place = (root, st) => { root.position.set((st.index % 2 ? 1 : -1) * SIZE * 0.33, 0.2, -GAP * 0.5); };
+    // (Either side of the picture: nearer the middle on a narrow frame, which shows less of it across.)
+    this.rig.place = (root, st) => { root.position.set((st.index % 2 ? 1 : -1) * SIZE * 0.33 * narrowness(this.camera.aspect), 0.2, -GAP * 0.5); };
     this.scene.add(this.rig.group);
     this.resize(init.aspect);
   }
@@ -282,6 +282,8 @@ export class Diorama implements MvScene {
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
+    // The words' frame, as wide as the view is at its height (a portrait frame: a third as wide; rows wrap sooner).
+    this.rig.frame = { vh: 7.5, vw: 10 * narrowness(aspect) };
   }
 
   update(ctx: FrameCtx): void {

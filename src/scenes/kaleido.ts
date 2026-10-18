@@ -11,7 +11,7 @@
 // dark glass, loud ones light up in the cover's colours, the loudest burn in the signal colour.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, outExpo, rng, smooth, snap as snapTo } from './types.ts';
+import { clamp01, fitFov, outExpo, rng, smooth, snap as snapTo } from './types.ts';
 import { LyricGates } from './lyricSpace.ts';
 import { Accents } from './hits.ts';
 import { lastIndex } from '../director/music.ts';
@@ -25,11 +25,11 @@ const RING = 512;
 const vertexShader = /* glsl */ `varying vec2 vP; void main() { vP = position.xy; gl_Position = vec4(position.xy, 0.9999, 1.0); }`;
 const fragmentShader = /* glsl */ `
   uniform sampler2D uCover, tSpec;
-  uniform float uAspect, uSeg, uRot, uZoom, uKick, uLines, uSpiral, uNow, uSecPerZ, uSpec;
+  uniform float uAspect, uSpan, uSeg, uRot, uZoom, uKick, uLines, uSpiral, uNow, uSecPerZ, uSpec;
   uniform vec3 uPaper, uInk, uGlow;
   varying vec2 vP;
   void main() {
-    vec2 p = vP * vec2(uAspect, 1.0);
+    vec2 p = vP * vec2(uAspect, 1.0) * uSpan;
     float r = length(p);
     float a = atan(p.y, p.x) + uRot;
     float seg = 6.2831853 / uSeg;
@@ -90,7 +90,7 @@ export class Kaleido implements MvScene {
     this.material = new THREE.ShaderMaterial({
       vertexShader, fragmentShader, depthTest: false, depthWrite: false,
       uniforms: {
-        uCover: { value: init.cover }, uAspect: { value: 16 / 9 }, uSeg: { value: 6 }, uRot: { value: 0 }, uZoom: { value: 0 },
+        uCover: { value: init.cover }, uAspect: { value: 16 / 9 }, uSpan: { value: 1 }, uSeg: { value: 6 }, uRot: { value: 0 }, uZoom: { value: 0 },
         uKick: { value: 0 }, uLines: { value: 0.6 }, uSpiral: { value: 0 },
         tSpec: { value: this.ring.texture }, uNow: { value: 0 }, uSecPerZ: { value: 1 }, uSpec: { value: init.stereo ? 1 : 0 },
         uPaper: { value: palette.paper.clone() }, uInk: { value: palette.ink.clone() }, uGlow: { value: glow },
@@ -108,9 +108,14 @@ export class Kaleido implements MvScene {
   }
 
   resize(aspect: number): void {
+    // A portrait frame sees the pattern across it as a square one would, so the arcs of words stay in; the pattern is
+    // drawn on the same scale (uSpan: how much more of it the frame's height spans), so the words still ride its bands.
+    const fov = fitFov(50, aspect);
     this.camera.aspect = aspect;
+    this.camera.fov = fov;
     this.camera.updateProjectionMatrix();
     this.material.uniforms.uAspect.value = aspect;
+    this.material.uniforms.uSpan.value = Math.tan(THREE.MathUtils.degToRad(fov / 2)) / Math.tan(THREE.MathUtils.degToRad(25));
   }
 
   keepUp(t: number): void {

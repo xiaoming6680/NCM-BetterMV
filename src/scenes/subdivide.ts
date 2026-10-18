@@ -5,7 +5,7 @@
 // ball that breathes with the bass, a ripple running over it on each kick. Beside it, the level and the count.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, finish, lerp, punch, rng, smooth } from './types.ts';
+import { clamp01, finish, fitFov, lerp, punch, rng, smooth } from './types.ts';
 import { Accents } from './hits.ts';
 import { lastIndex } from '../director/music.ts';
 import { SEEDS, type Vec } from '../sigil/polyhedron.ts';
@@ -188,6 +188,8 @@ export class SubdivideScene implements MvScene {
 
   resize(aspect: number): void {
     this.camera.aspect = aspect;
+    // (A portrait frame: the ball across it, so the words round it stay in.)
+    this.camera.fov = fitFov(40, aspect);
     this.camera.updateProjectionMatrix();
   }
 
@@ -265,6 +267,6 @@ export class SubdivideScene implements MvScene {
       turn.makeRotationFromEuler(new THREE.Euler(0.35, tt * 0.3 * side, 0)).invert();
       eye.set(Math.sin(0.4 * side), 0.5 / 3.5, Math.cos(0.4 * side)).applyMatrix4(turn);
       return Math.atan2(eye.x, eye.z);
-    });
+    }, this.camera);
   }
 }

@@ -207,9 +207,26 @@ export class LyricGates {
   private banners = new Map<number, Banner>();
   private starts: Float64Array | null = null;
   private color = new THREE.Color();
+  /** What the frame has room for, when narrower than the plate's `maxW` (setWidth). */
+  private width: { sign: number; banner: number } | null = null;
 
   constructor(private palette: Palette, private opts: GateOptions) {
     this.group.userData.lyrics = true;
+  }
+
+  /**
+   * The widest a sign and a row of the translation may be (world units, at scale 1) on this frame: a portrait one sees
+   * a third as much across where the signs strike (issue #4). A sign wider shrinks to fit, a banner breaks into two
+   * rows. When it changes, the signs and banners about are set again.
+   */
+  setWidth(sign: number, banner: number): void {
+    const w = this.width;
+    if (w && Math.abs(w.sign - sign) <= sign * 0.02 && Math.abs(w.banner - banner) <= banner * 0.02) return;
+    this.width = { sign, banner };
+    for (const s of this.signs.values()) dispose(s.root);
+    this.signs.clear();
+    for (const b of this.banners.values()) dispose(b.root);
+    this.banners.clear();
   }
 
   private material(m: TextMesh): TextMesh {
@@ -251,7 +268,7 @@ export class LyricGates {
       const meshes = c.words.map(i => this.material(textMesh(line.words[i].text, face, o.em, { px: 180, halo })));
       const widths = meshes.map(m => m.userData.width as number);
       const total = widths.reduce((a, b) => a + b, 0) + gap * (meshes.length - 1);
-      const s = Math.min(1, o.maxW / Math.max(1e-3, total));
+      const s = Math.min(1, Math.min(o.maxW, this.width?.sign ?? Infinity) / Math.max(1e-3, total));
       let x = (-total * s) / 2;
       meshes.forEach((m, j) => {
         m.userData.baseScale = s;
@@ -301,10 +318,25 @@ export class LyricGates {
       const parts = hasCjk(text) ? Array.from(text) : tokenize(text);
       const meshes = parts.map(p => (p.trim() ? this.material(textMesh(p, this.opts.transFace ?? 'bold', o.em, { px: 112, halo: this.halo })) : null));
       const widths = meshes.map(m => (m ? (m.userData.width as number) + (hasCjk(text) ? 0 : o.em * 0.3) : o.em * 0.35));
-      const total = widths.reduce((a, b) => a + b, 0);
-      let x = -total / 2;
-      meshes.forEach((mesh, i) => { if (mesh) { root.add(mesh); chars.push({ mesh, x, y: 0 }); } x += widths[i]; });
-      root.userData.size = [total, o.em * 1.2];
+      // One row; two, as even as they break, where the frame has no room for it (setWidth).
+      const total = widths.reduce((a, b) => a + b, 0), room = this.width?.banner ?? Infinity;
+      const rows: number[][] = [[]], half = total > room ? total / 2 : Infinity;
+      let acc = 0;
+      widths.forEach((w, i) => {
+        if (acc > 0 && rows.length < 2 && acc + w / 2 > half) { rows.push([]); acc = 0; }
+        if (!rows[rows.length - 1].length && !meshes[i]) return;
+        rows[rows.length - 1].push(i);
+        acc += w;
+      });
+      const lead = o.em * 1.3, top = ((rows.length - 1) * lead) / 2;
+      let widest = 0;
+      rows.forEach((row, r) => {
+        const rowW = row.reduce((a, i) => a + widths[i], 0);
+        widest = Math.max(widest, rowW);
+        let x = -rowW / 2;
+        for (const i of row) { const mesh = meshes[i]; if (mesh) { root.add(mesh); chars.push({ mesh, x, y: top - r * lead }); } x += widths[i]; }
+      });
+      root.userData.size = [widest, o.em * 1.2 + (rows.length - 1) * lead];
     }
     this.group.add(root);
     return { root, chars };
@@ -394,6 +426,7 @@ export interface OrbitOptions {
 }
 
 interface OrbitGlyph { mesh: TextMesh; s: number }
+const edgeP = new THREE.Vector3();
 interface OrbitLine { root: THREE.Group; glyphs: OrbitGlyph[]; word: number[]; wordS: number[]; trans: OrbitGlyph[]; transLen: number }
 
 /**
@@ -480,11 +513,26 @@ export class LyricOrbit {
   }
 
   /**
-   * `anchorAt(t)`: for a band, the angle round its y axis (from +z towards +x) facing the camera at time t, so each
-   * word is set where the camera looked when it was sung (and the band can fade what is turned away now).
+   * How far a glyph at `p` (its line's root's frame) is from the frame's edge, as `camera` sees it: 1 well inside,
+   * falling to 0 as it reaches an edge. A band seen whole in a wide frame shows its sides; a narrow one (a portrait
+   * frame, issue #4) sees only its front, and a close camera has the words pass right by it — they fade there rather
+   * than run off the frame cut in two.
    */
-  update(lyrics: LyricTrack, t: number, energy: number, anchorAt: (t: number) => number = () => 0): void {
+  private edge(p: THREE.Vector3, root: THREE.Object3D, camera: THREE.Camera): number {
+    edgeP.copy(p).applyMatrix4(root.matrixWorld).project(camera);
+    if (edgeP.z > 1) return 0;
+    return (1 - smooth((Math.abs(edgeP.x) - 0.8) / 0.18)) * (1 - smooth((Math.abs(edgeP.y) - 0.84) / 0.14));
+  }
+
+  /**
+   * `anchorAt(t)`: for a band, the angle round its y axis (from +z towards +x) facing the camera at time t, so each
+   * word is set where the camera looked when it was sung (and the band can fade what is turned away now). `camera`
+   * (a band): the plate's, its matrices up to date — the words fade at the frame's edges (see `edge`).
+   */
+  update(lyrics: LyricTrack, t: number, energy: number, anchorAt: (t: number) => number = () => 0, camera?: THREE.Camera): void {
     const o = this.opts, r = o.radius, flat = o.mode === 'flat', states = lyrics.visible(t);
+    const view = !flat && camera ? camera : null;
+    if (view) this.group.updateMatrixWorld(true);
     const keep = new Set(states.map(s => s.index));
     for (const [k, b] of this.lines) if (!keep.has(k)) { dispose(b.root); this.lines.delete(k); }
     const paper = this.palette.paper, now = anchorAt(t);
@@ -511,6 +559,7 @@ export class LyricOrbit {
           g.mesh.position.set(rr * Math.sin(th), 0, rr * Math.cos(th));
           g.mesh.rotation.set(0, th, 0);
           vis = smooth((Math.cos(th - now) + 0.15) / 0.5);
+          if (view && vis > 0) vis *= this.edge(g.mesh.position, b.root, view);
         }
         g.mesh.scale.setScalar(o.style === 'hook' ? 1 + (1 - look.k) * 0.4 : 1);
         g.mesh.material.color.copy(this.color);
@@ -535,7 +584,7 @@ export class LyricOrbit {
           const th = base + (g.s - b.transLen / 2) / tr.radius;
           g.mesh.position.set(tr.radius * Math.sin(th), -o.em * 1.25, tr.radius * Math.cos(th));
           g.mesh.rotation.set(0, th, 0);
-          g.mesh.material.opacity *= smooth((Math.cos(th - now) + 0.15) / 0.5);
+          g.mesh.material.opacity *= smooth((Math.cos(th - now) + 0.15) / 0.5) * (view ? this.edge(g.mesh.position, b.root, view) : 1);
         }
       });
     }
@@ -571,11 +620,12 @@ export class LyricLayer {
 
   /**
    * Lays out the lines on screen at t in a frame vw × vh (the surface's units), over a region rw × rh of the surface
-   * (the frame's size unless given), drawn at most `px` pixels across.
+   * (the frame's size unless given), drawn at most `px` pixels across. `aspect`: the screen's, when the frame isn't
+   * its shape (the type is set smaller, in more rows, on a narrow screen; see LyricRig).
    */
-  update(lyrics: LyricTrack, t: number, energy: number, vw: number, vh: number, rw = vw, rh = vh, px = 2048): void {
+  update(lyrics: LyricTrack, t: number, energy: number, vw: number, vh: number, rw = vw, rh = vh, px = 2048, aspect = vw / vh): void {
     this.rig.frame = { vw, vh };
-    this.rig.update(this.lens, lyrics, t, vw / vh, energy);
+    this.rig.update(this.lens, lyrics, t, aspect, energy);
     const c = this.camera;
     c.left = -rw / 2; c.right = rw / 2; c.top = rh / 2; c.bottom = -rh / 2;
     c.position.set(0, 0, 0);

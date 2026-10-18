@@ -151,3 +151,17 @@ export const surgeRate = (age: number, tau: number) => (age <= 0 ? 0 : (age / (t
 export const punch = (age: number, decay: number, attack = 0.03) =>
   (age < 0 ? 0 : age < attack ? smooth(age / attack) : Math.exp(-(age - attack) / decay));
 export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+// Narrow frames (issue #4: a portrait monitor, 1440×2560, cut most plates' words off at both sides; a 9:16 export the
+// same). The plates are composed for 16:9; on a narrower frame the same height shows less across.
+/** How much of a 16:9 frame's width a frame of this aspect shows at the same height: 1 for 16:9 and wider. */
+export const narrowness = (aspect: number) => Math.min(1, aspect / (16 / 9));
+/**
+ * The vertical field of view (degrees) that shows at least as much across as `fov` does on a frame `minAspect` wide:
+ * `fov` itself on a wider frame. A plate centred on its subject (rings, a disc, a ball) whose words go round it keeps
+ * them in a portrait frame this way — the subject across the frame as in a square one, sky above and below.
+ */
+export function fitFov(fov: number, aspect: number, minAspect = 1): number {
+  if (aspect >= minAspect) return fov;
+  return (2 * Math.atan(Math.tan((fov * Math.PI) / 360) * (minAspect / aspect)) * 180) / Math.PI;
+}

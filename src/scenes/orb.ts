@@ -7,7 +7,7 @@
 // words run round it.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { clamp01, rng, surge } from './types.ts';
+import { clamp01, fitFov, rng, surge } from './types.ts';
 import { LyricOrbit } from './lyricSpace.ts';
 import { voiceOpts } from './lyricBlock.ts';
 import { COLS, Spectrogram } from './viz.ts';
@@ -132,6 +132,8 @@ export class Orb implements MvScene {
 
   resize(aspect: number): void {
     this.camera.aspect = aspect;
+    // (A portrait frame: the ball across it, so the words round it stay in.)
+    this.camera.fov = fitFov(40, aspect);
     this.camera.updateProjectionMatrix();
   }
 
@@ -232,7 +234,7 @@ export class Orb implements MvScene {
     }
     for (let i = m; i < SHELLS; i++) this.shells[i].mesh.visible = false;
 
-    this.orbit.update(ctx.lyrics, t, sec.energy, () => this.az);
+    this.orbit.update(ctx.lyrics, t, sec.energy, () => this.az, this.camera);
 
     ctx.fx.bloom = this.soft ? 0.5 : loud ? 0.45 : 0.6;
     ctx.fx.vignette = 0.6;

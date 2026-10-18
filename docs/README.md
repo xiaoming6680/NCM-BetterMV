@@ -28,7 +28,7 @@
 | `src/export/` | 编码程序 `bettermv-encode.exe` 的 C# 源码（Media Foundation 写 MP4） |
 | `src/obs/` | OBS 页面、歌曲数据格式、本机服务（C#） |
 | `src/dev/` | 浏览器开发页 |
-| `tools/` | 评测、性能测量、示意图渲染、对齐包构建、鼓点拟合 |
+| `tools/` | 评测、性能测量、示意图渲染、对齐包构建、鼓点拟合、歌词出画检查（`lyric-fit.ts`，竖屏等窄画幅） |
 | `film/` | 宣传片与 README 配图的渲染 |
 | `probe/` | 接口探针插件 |
 

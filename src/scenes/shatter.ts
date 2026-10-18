@@ -343,6 +343,6 @@ export class Shatter implements MvScene {
     this.dust.rotation.y = t * 0.02;
     ctx.fx.bloom = 0.5 + energy * 0.35 + kick * 0.35 * e;
     ctx.fx.ca = kick * 0.7 * e;
-    this.layer.update(ctx.lyrics, t, energy, rect.z, rect.w);
+    this.layer.update(ctx.lyrics, t, energy, rect.z, rect.w, undefined, undefined, undefined, ctx.aspect);
   }
 }

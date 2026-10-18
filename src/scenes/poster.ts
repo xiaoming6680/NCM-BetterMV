@@ -20,7 +20,21 @@ const LABELS: Record<SectionLabel, string> = { intro: '前奏', verse: '主歌',
 
 type Mesh = THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
 interface Word { mesh: Mesh; bar: Mesh; x: number; y: number; w: number; h: number }
-interface Line { index: number; root: THREE.Group; words: Word[]; trans: Mesh | null }
+interface Line { index: number; root: THREE.Group; words: Word[]; trans: Mesh[] }
+
+/**
+ * A translation in two rows: broken at the space or mark nearest its middle (in its middle third), else at the middle.
+ */
+function halves(text: string): [string, string] {
+  const chars = Array.from(text), n = chars.length;
+  let at = Math.round(n / 2), best = Infinity;
+  for (let i = Math.ceil(n * 0.3); i <= Math.floor(n * 0.7); i++) {
+    if (!/[\s\p{P}]/u.test(chars[i - 1] + chars[i])) continue;
+    const d = Math.abs(i - n / 2);
+    if (d < best) { best = d; at = /\p{P}/u.test(chars[i]) && !/\s/.test(chars[i]) ? i + 1 : i; }
+  }
+  return [chars.slice(0, at).join('').trim(), chars.slice(at).join('').trim()];
+}
 
 const flat = (color: THREE.Color, opacity = 1) => new THREE.MeshBasicMaterial({ color, transparent: opacity < 1, opacity, toneMapped: false, depthWrite: false });
 
@@ -199,14 +213,32 @@ export class Poster implements MvScene {
         x += w + gap * scale;
       }
     });
-    let trans: Mesh | null = null;
+    // The translation under the words, in one row as wide as the page allows (in the split layout, up to the cover):
+    // two rows when it is wider (a narrow, portrait page ran it off the side), smaller if it still is.
+    const trans: Mesh[] = [];
     if (line.translation) {
-      trans = textMesh(line.translation, 'bold', H * 0.034, { px: 96, halo: 'none' }) as unknown as Mesh;
-      trans.material.toneMapped = false;
-      const bottom = y0 - (rows.length - 1) * lineH - h * 0.9;
-      const tw = trans.userData.width as number;
-      trans.position.set(align === 'left' ? x0 : x0 - tw, variant === 'slab' ? -H * 0.2 : bottom, 0.12);
-      root.add(trans);
+      const th = H * 0.034, room = variant === 'split' ? W * 0.62 - M : W - 2 * M;
+      const mkT = (text: string) => {
+        const m = textMesh(text, 'bold', th, { px: 96, halo: 'none' }) as unknown as Mesh;
+        m.material.toneMapped = false;
+        return m;
+      };
+      const text = line.translation.trim();
+      const one = mkT(text);
+      if ((one.userData.width as number) <= room) trans.push(one);
+      else {
+        one.geometry.dispose();
+        one.material.dispose();
+        for (const part of halves(text)) if (part) trans.push(mkT(part));
+      }
+      const fit = Math.min(1, room / Math.max(1e-3, ...trans.map(m => m.userData.width as number)));
+      const top = variant === 'slab' ? -H * 0.2 : y0 - (rows.length - 1) * lineH - h * 0.9;
+      trans.forEach((m, r) => {
+        m.scale.setScalar(fit);
+        const tw = (m.userData.width as number) * fit;
+        m.position.set(align === 'left' ? x0 : x0 - tw, top - r * th * fit * 1.35, 0.12);
+        root.add(m);
+      });
     }
     this.page.add(root);
     return { index: state.index, root, words, trans };
@@ -277,9 +309,9 @@ export class Poster implements MvScene {
         if (singing && onSlab) w.mesh.material.color.copy(palette.paper);
         w.mesh.material.opacity = k * fade;
       });
-      if (l.trans) {
-        l.trans.material.color.copy(onSlab ? this.fg : this.fg);
-        l.trans.material.opacity = clamp01(st.translationProgress * 3) * 0.75 * fade;
+      for (const m of l.trans) {
+        m.material.color.copy(this.fg);
+        m.material.opacity = clamp01(st.translationProgress * 3) * 0.75 * fade;
       }
     }
 

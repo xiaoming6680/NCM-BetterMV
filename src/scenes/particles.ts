@@ -13,7 +13,7 @@
 // So every kick is a swell running out through the picture, a held chord a raised ring, a quiet passage a flat print.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, inOutCubic, lerp, outExpo, punch, rng, surge } from './types.ts';
+import { clamp01, inOutCubic, lerp, narrowness, outExpo, punch, rng, surge } from './types.ts';
 import { Accents } from './hits.ts';
 import { LyricRig } from './lyricRig.ts';
 import { voiceFaces } from './lyricBlock.ts';
@@ -161,9 +161,8 @@ export class Particles implements MvScene {
     this.rig = new LyricRig(palette, look === 'ballad' ? 'poem' : 'hook');
     this.rig.faces = voiceFaces(look, init.seed);
     this.rig.onLight = onPaper;
-    this.rig.frame = { vh: 5.2, vw: 8.5 };
     this.rig.place = (root, st) => {
-      const s = look === 'ballad' ? (st.index % 2 ? 1 : -1) * 2.6 : 0;
+      const s = look === 'ballad' ? (st.index % 2 ? 1 : -1) * 2.6 * narrowness(this.camera.aspect) ** 2 : 0;
       root.position.set(s, 0, 1.8 - (1 - outExpo((st.age + 0.5) / 0.8)) * 2.5);
     };
     this.scene.add(this.rig.group);
@@ -173,6 +172,8 @@ export class Particles implements MvScene {
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
+    // The words' frame, as wide as the view is at its height (a portrait frame: a third as wide; rows wrap sooner).
+    this.rig.frame = { vh: 5.2, vw: 8.5 * narrowness(aspect) };
   }
 
   /** Viewport height in device pixels: point sizes follow it. */

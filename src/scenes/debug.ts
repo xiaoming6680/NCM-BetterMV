@@ -6,7 +6,7 @@
 // came off at the user's word). Cameras: low along a valley, round the highest peak, high above turning.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { clamp01, lerp, outExpo, rng, smooth } from './types.ts';
+import { clamp01, lerp, narrowness, outExpo, rng, smooth } from './types.ts';
 import { LyricRig } from './lyricRig.ts';
 import { voiceFaces } from './lyricBlock.ts';
 import { COLS, SpecRing, Spectrogram } from './viz.ts';
@@ -186,7 +186,6 @@ export class DebugScene implements MvScene {
 
     this.rig = new LyricRig(palette, 'hook');
     this.rig.faces = voiceFaces('pulse', init.seed);
-    this.rig.frame = { vh: 7, vw: 9 };
     this.scene.add(this.rig.group);
     this.resize(init.aspect);
   }
@@ -194,6 +193,8 @@ export class DebugScene implements MvScene {
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
+    // The words' frame, as wide as the view is at its height (a portrait frame: a third as wide; rows wrap sooner).
+    this.rig.frame = { vh: 7, vw: 9 * narrowness(aspect) };
   }
 
   setViewport(width: number, height: number): void {

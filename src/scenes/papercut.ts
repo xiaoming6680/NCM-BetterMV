@@ -155,8 +155,9 @@ export class PaperCut implements MvScene {
     this.rig.place = (root, st) => {
       const vh = 2 * 10 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)), vw = vh * this.camera.aspect;
       // In the margin beside the flower (it is as tall as the frame), a little above the middle.
+      // (A narrow, portrait frame has no margin: there the columns keep about a tenth of the height off the edge.)
       const margin = Math.max(vw / 2 - vh * 0.46, vh * 0.12);
-      root.position.set((st.index % 2 ? 1 : -1) * (vw / 2 - margin * 0.5), vh * 0.03, 0);
+      root.position.set((st.index % 2 ? 1 : -1) * (vw / 2 - Math.max(margin * 0.5, vh * 0.11)), vh * 0.03, 0);
     };
     this.scene.add(this.rig.group);
     this.resize(init.aspect);

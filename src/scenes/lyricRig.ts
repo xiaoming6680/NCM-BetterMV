@@ -10,7 +10,7 @@ import { textMesh, textPrimer, hasCjk, VERTICAL_STEP, type Face } from '../rende
 import { norm, type LyricTrack, type LineState, type WordState } from '../director/lyrics.ts';
 import { tokenize } from '../lyrics/parse.ts';
 import type { Palette } from '../render/palette.ts';
-import { clamp01, outBack, outExpo, rng, snap } from './types.ts';
+import { clamp01, narrowness, outBack, outExpo, rng, snap } from './types.ts';
 
 export type RigStyle = 'hook' | 'caption' | 'poem';
 export type Align = 'left' | 'center' | 'right';
@@ -186,7 +186,7 @@ export class LyricRig {
    * Poem layout: set in the margin beside a centred picture. Chinese runs vertically, top to bottom, columns
    * right to left; Latin sets as a narrow ragged column.
    */
-  private buildPoem(state: LineState, vh: number, vw: number): Built {
+  private buildPoem(state: LineState, vh: number, vw: number, aspect: number): Built {
     const line = state.line;
     const root = new THREE.Group();
     const cjk = hasCjk(line.text);
@@ -235,8 +235,10 @@ export class LyricRig {
         }
       }
     } else {
-      // Latin: a narrow column; long lines shrink so they stay within four rows.
-      const maxW = vw * 0.24;
+      // Latin: a narrow column; long lines shrink so they stay within four rows. A narrow frame has no margin beside
+      // the picture to keep it to: the column takes more of the width there (not much more: plates set the column off
+      // to one side by up to 0.3 of the width).
+      const maxW = vw * Math.min(0.36, 0.24 / narrowness(aspect));
       const approx = line.text.length * vh * 0.04 * 0.5;
       const h = vh * 0.04 * Math.min(1, Math.sqrt((4 * maxW) / Math.max(1e-3, approx))), gap = h * 0.28, lineH = h * 1.3;
       const meshes = line.words.map(w => textMesh(w.text, this.faces?.main ?? 'serif', h, { px: 160, halo }));
@@ -248,20 +250,84 @@ export class LyricRig {
         const chars = hasCjk(line.translation) ? Array.from(line.translation) : tokenize(line.translation);
         const tm = chars.map(c => (c.trim() ? textMesh(c, this.faces?.trans ?? 'serifLight', th, { px: 96, halo }) : null));
         const widths = tm.map(m => (m ? (m.userData.width as number) : th * 0.35));
-        const rowW = widths.reduce((a, b) => a + b, 0);
-        let x = left ? anchor : anchor - rowW;
-        tm.forEach((mesh, i) => {
-          if (mesh) { const g = { mesh, x, y: bottom - h * 0.9 - th, spin: 0 }; place(g); trans.push(g); }
-          x += widths[i];
-        });
+        for (const g of this.transRows(tm, widths, vw * 0.9, th, bottom - h * 0.9 - th, left ? 'left' : 'right', anchor)) { place(g); trans.push(g); }
       }
     }
+    this.fit(words, trans, vh, vw);
     return this.finish({ index: state.index, vh, vw, root, words, trans });
+  }
+
+  /**
+   * The translation in rows at most `room` wide (two, more only if a word is wider than a row), the first on `y`,
+   * set from `anchorX` (its left or right edge, or its middle). On a wide frame a translation is one row; a narrow one
+   * (a portrait frame) ran it off both sides.
+   */
+  private transRows(meshes: Array<THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> | null>, widths: number[], room: number, th: number, y: number, align: Align, anchorX: number): Glyph[] {
+    const total = widths.reduce((a, b) => a + b, 0);
+    const count = Math.max(1, Math.min(2, Math.ceil(total / room - 0.02)));
+    const target = total / count;
+    const rows: number[][] = [[]];
+    let acc = 0;
+    widths.forEach((w, i) => {
+      if (acc > 0 && (acc + w > room || (rows.length < count && acc + w / 2 > target))) { rows.push([]); acc = 0; }
+      if (!rows[rows.length - 1].length && !meshes[i]) return; // (a space never starts a row)
+      rows[rows.length - 1].push(i);
+      acc += w;
+    });
+    const out: Glyph[] = [];
+    rows.forEach((row, r) => {
+      const rowW = row.reduce((a, i) => a + widths[i], 0);
+      let x = align === 'left' ? anchorX : align === 'right' ? anchorX - rowW : anchorX - rowW / 2;
+      for (const i of row) {
+        const mesh = meshes[i];
+        if (mesh) out.push({ mesh, x, y: y - r * th * 1.3, spin: 0 });
+        x += widths[i];
+      }
+    });
+    return out;
+  }
+
+  /**
+   * Keeps a built line inside its frame (issue #4: a portrait frame cut the words off at both sides): set smaller if
+   * it is wider or taller than the frame, then, riding the lens, moved in from an edge it crosses. A card in the
+   * world is centred on its root afterwards (finish), so there only its size counts. Measured by the planes, whose
+   * margin round the ink (the halo) keeps the words a little off the edge.
+   */
+  private fit(words: Glyph[], trans: Glyph[], vh: number, vw: number, lastRow?: Built['lastRow']): void {
+    const all = [...words, ...trans].filter(Boolean);
+    if (!all.length) return;
+    const box = new THREE.Box3(), one = new THREE.Box3();
+    for (const g of all) {
+      g.mesh.position.set(g.x, g.y, 0);
+      g.mesh.updateMatrix();
+      g.mesh.geometry.computeBoundingBox();
+      box.union(one.copy(g.mesh.geometry.boundingBox!).applyMatrix4(g.mesh.matrix));
+    }
+    const w = box.max.x - box.min.x, h = box.max.y - box.min.y;
+    const s = Math.min(1, vw / w, (vh * 0.94) / h);
+    const lens = !this.place;
+    // About the middle of the frame riding the lens (the line keeps its place in it), about its own middle as a card.
+    const px = lens ? 0 : (box.min.x + box.max.x) / 2, py = lens ? 0 : (box.min.y + box.max.y) / 2;
+    if (s < 1) {
+      for (const g of all) {
+        g.x = px + (g.x - px) * s;
+        g.y = py + (g.y - py) * s;
+        g.mesh.scale.multiplyScalar(s);
+        g.mesh.userData.width = (g.mesh.userData.width as number) * s;
+        g.mesh.userData.baseScale = g.mesh.scale.x;
+      }
+      if (lastRow) { lastRow.room *= s; lastRow.h *= s; }
+    }
+    if (!lens) return;
+    const x0 = px + (box.min.x - px) * s, x1 = px + (box.max.x - px) * s, y0 = py + (box.min.y - py) * s, y1 = py + (box.max.y - py) * s;
+    const dx = x0 < -vw / 2 ? -vw / 2 - x0 : x1 > vw / 2 ? vw / 2 - x1 : 0;
+    const dy = y0 < -vh * 0.47 ? -vh * 0.47 - y0 : y1 > vh * 0.47 ? vh * 0.47 - y1 : 0;
+    if (dx || dy) for (const g of all) { g.x += dx; g.y += dy; }
   }
 
   private build(state: LineState, camera: THREE.PerspectiveCamera, aspect: number): Built {
     const { vh, vw } = this.visible(camera, aspect);
-    if (this.style === 'poem') return this.buildPoem(state, vh, vw);
+    if (this.style === 'poem') return this.buildPoem(state, vh, vw, aspect);
     const look = LOOKS[this.style];
     const line = state.line;
     const root = new THREE.Group();
@@ -269,24 +335,28 @@ export class LyricRig {
     const random = rng(state.index * 977 + 13);
     const align: Align = 'center';
     const anchorX = 0; // hook and caption lines are centred
-    let h = vh * look.size[cjk ? 0 : 1];
+    // A narrow frame (a portrait one) is no taller than a wide one at the same height, only narrower: the type is set
+    // smaller by the square root of how much narrower (about as many pixels as on a wide screen) and may take more
+    // rows, so a line takes about as much of the height as it does on a wide frame.
+    const small = Math.sqrt(narrowness(aspect));
+    let h = vh * look.size[cjk ? 0 : 1] * small;
     const place = (g: Glyph) => { this.dress(g.mesh); root.add(g.mesh); };
 
     let words: Glyph[] = [];
     let lastRow: Built['lastRow'];
     if (this.show.main) {
-      // Fit: shrink the type if the line would need more than three rows.
+      // Fit: shrink the type if the line would need more than three rows (a narrow frame, its type smaller, five).
       const probe = line.words.map(w => textMesh(w.text, this.faces?.main ?? look.face, h, { px: look.px }));
       const gapOf = (hh: number) => (cjk ? hh * 0.06 : hh * 0.3);
       const total = probe.reduce((a, m) => a + (m.userData.width as number), 0) + gapOf(h) * (probe.length - 1);
-      const maxW = vw * look.maxW;
-      if (total > maxW * 3) {
-        const s = (maxW * 3) / total;
+      const maxW = vw * look.maxW, most = Math.round(3 / small);
+      if (total > maxW * most) {
+        const s = (maxW * most) / total;
         h *= s;
         probe.forEach(m => { m.scale.setScalar(s); m.userData.width = (m.userData.width as number) * s; m.userData.baseScale = s; });
       }
       const lineH = h * (cjk ? 1.34 : 1.16);
-      const rowsNeeded = Math.max(1, Math.ceil(Math.min(total, maxW * 3) / maxW));
+      const rowsNeeded = Math.max(1, Math.ceil(Math.min(total, maxW * most) / maxW));
       const top = this.style === 'hook' ? (lineH * (rowsNeeded - 1)) / 2 : -vh * 0.3 + lineH * (rowsNeeded - 1);
       words = this.rows(probe, gapOf(h), maxW, lineH, top, align, anchorX, random);
       words.forEach(place);
@@ -302,19 +372,15 @@ export class LyricRig {
 
     const trans: Glyph[] = [];
     if (this.show.translation && line.translation) {
-      const th = vh * look.transSize;
+      const th = vh * look.transSize * small;
       const chars = hasCjk(line.translation) ? Array.from(line.translation) : tokenize(line.translation);
       const meshes = chars.map(c => (c.trim() ? textMesh(c, this.faces?.trans ?? look.transFace, th, { px: 96 }) : null));
       const widths = meshes.map(m => (m ? (m.userData.width as number) * 0.98 : th * 0.35));
-      const rowW = widths.reduce((a, b) => a + b, 0);
-      let x = anchorX - rowW / 2;
       const mainBottom = words.length ? Math.min(...words.filter(Boolean).map(w => w.y)) : 0;
       const y = this.show.main ? mainBottom - h * 0.78 - th * 1.05 : (this.style === 'hook' ? 0 : -vh * 0.36);
-      meshes.forEach((mesh, i) => {
-        if (mesh) { const g = { mesh, x, y, spin: 0 }; place(g); trans.push(g); }
-        x += widths[i];
-      });
+      for (const g of this.transRows(meshes, widths, vw * look.maxW, th, y, align, anchorX)) { place(g); trans.push(g); }
     }
+    this.fit(words, trans, vh, vw, lastRow);
     // The bed behind the line: the words' extent plus a margin, darker when the cover (and so the picture) is light.
     let scrim: Built['scrim'];
     const all = [...words, ...trans].filter(Boolean);
@@ -465,7 +531,7 @@ export class LyricRig {
       if (style === 'poem' && this.onLight) g.mesh.material.color.setRGB(1, 1, 1);
       else g.mesh.material.color.copy(paper).multiplyScalar(style === 'poem' ? 0.72 : 0.8);
       g.mesh.material.opacity = outExpo(k) * (1 - exit) * 0.9 * fade;
-      if (this.warp) { g.mesh.scale.setScalar(1); this.warp(g.mesh, state.index * 1000 + 500 + i, state.age); }
+      if (this.warp) { g.mesh.scale.setScalar(g.mesh.userData.baseScale ?? 1); this.warp(g.mesh, state.index * 1000 + 500 + i, state.age); }
     });
   }
 }

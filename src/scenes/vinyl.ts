@@ -6,7 +6,7 @@
 // The words run round the label, the word being sung at the top; the translation round the bottom.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, inOutCubic, lerp, punch, rng, smooth } from './types.ts';
+import { clamp01, fitFov, inOutCubic, lerp, punch, rng, smooth } from './types.ts';
 import { Accents } from './hits.ts';
 import { LyricOrbit } from './lyricSpace.ts';
 import { voiceOpts } from './lyricBlock.ts';
@@ -228,6 +228,8 @@ export class Vinyl implements MvScene {
     }
     // The lens knocks in on each hit, as if the deck sat on the speaker (ballads half as hard).
     cam.fov -= (soft ? 0.8 : 1.6) * Math.min(1.2, Accents.of(music).sum(t, 1, age => punch(age, 0.18, 0.04)));
+    // (A portrait frame: the record across it, so the words round the label stay in.)
+    cam.fov = fitFov(cam.fov, ctx.aspect);
     cam.updateProjectionMatrix();
     cam.updateMatrixWorld();
 

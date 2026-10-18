@@ -5,7 +5,7 @@
 // when it tracks alongside; lying on the cover when it rises over it). The translation stands under the words.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { clamp01, inOutCubic, lerp, outExpo, rng, smooth, punch } from './types.ts';
+import { clamp01, inOutCubic, lerp, narrowness, outExpo, rng, smooth, punch } from './types.ts';
 import { textMesh, hasCjk } from '../render/text.ts';
 import type { LineState } from '../director/lyrics.ts';
 import { Accents } from './hits.ts';
@@ -115,6 +115,8 @@ interface Banner {
   root: THREE.Group;
   words: Array<{ mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; x: number; y: number }>;
   trans: Array<{ mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>; x: number; y: number }>;
+  /** Its widest row, world units at scale 1. */
+  width: number;
 }
 
 export class Relief implements MvScene {
@@ -335,11 +337,12 @@ export class Relief implements MvScene {
     }
   }
 
-  private buildBanner(state: LineState): Banner {
+  private buildBanner(state: LineState, aspect: number): Banner {
     const root = new THREE.Group();
     root.userData.lyrics = true;
     const cjk = hasCjk(state.line.text);
-    const h = cjk ? 0.78 : 0.72, gap = cjk ? h * 0.1 : h * 0.3, maxW = 10;
+    // (Rows shorter on a narrow frame, a portrait one: it is set smaller to fit across, in more rows.)
+    const h = cjk ? 0.78 : 0.72, gap = cjk ? h * 0.1 : h * 0.3, maxW = 10 * Math.sqrt(narrowness(aspect));
     const meshes = state.line.words.map(w => textMesh(w.text, 'condensed', h, { px: 180 }));
     const widths = meshes.map(m => m.userData.width as number);
     const rows: number[][] = [[]];
@@ -351,8 +354,10 @@ export class Relief implements MvScene {
     });
     const lineH = h * (cjk ? 1.3 : 1.14);
     const words: Banner['words'] = [];
+    let width = 0;
     rows.forEach((row, r) => {
       const rowW = row.reduce((a, i) => a + widths[i], 0) + gap * (row.length - 1);
+      width = Math.max(width, rowW);
       let x = -rowW / 2;
       for (const i of row) {
         const mesh = meshes[i];
@@ -365,7 +370,7 @@ export class Relief implements MvScene {
         x += widths[i] + gap;
       }
     });
-    // The translation, a smaller row under the words.
+    // The translation, a smaller row under the words; two, as even as they break, when it is wider than the words may be.
     const trans: Banner['trans'] = [];
     const text = state.line.translation;
     if (text) {
@@ -373,20 +378,34 @@ export class Relief implements MvScene {
       const parts = hasCjk(text) ? Array.from(text) : text.split(/(\s+)/);
       const meshes = parts.map(p => (p.trim() ? textMesh(p, 'bold', th, { px: 112 }) : null));
       const widths = meshes.map(m => (m ? (m.userData.width as number) : th * 0.35));
-      let x = -widths.reduce((a, b) => a + b, 0) / 2;
-      meshes.forEach((mesh, i) => {
-        if (mesh) {
-          mesh.material.depthWrite = false;
-          mesh.material.depthTest = false;
-          mesh.renderOrder = 5;
-          root.add(mesh);
-          trans.push({ mesh, x, y });
+      const total = widths.reduce((a, b) => a + b, 0), half = total > maxW ? total / 2 : Infinity;
+      const tRows: number[][] = [[]];
+      let tAcc = 0;
+      widths.forEach((w, i) => {
+        if (tAcc > 0 && tRows.length < 2 && tAcc + w / 2 > half) { tRows.push([]); tAcc = 0; }
+        if (!tRows[tRows.length - 1].length && !meshes[i]) return;
+        tRows[tRows.length - 1].push(i);
+        tAcc += w;
+      });
+      tRows.forEach((row, r) => {
+        const rowW = row.reduce((a, i) => a + widths[i], 0);
+        width = Math.max(width, rowW);
+        let x = -rowW / 2;
+        for (const i of row) {
+          const mesh = meshes[i];
+          if (mesh) {
+            mesh.material.depthWrite = false;
+            mesh.material.depthTest = false;
+            mesh.renderOrder = 5;
+            root.add(mesh);
+            trans.push({ mesh, x, y: y - r * th * 1.3 });
+          }
+          x += widths[i];
         }
-        x += widths[i];
       });
     }
     this.scene.add(root);
-    return { root, words, trans };
+    return { root, words, trans, width };
   }
 
   /**
@@ -408,7 +427,7 @@ export class Relief implements MvScene {
       if (t < line.start - 0.6 || t > pass + 0.1) continue;
       live.add(i);
       const state = lyrics.state(i, t);
-      const b = this.banners.get(i) ?? this.banners.set(i, this.buildBanner(state)).get(i)!;
+      const b = this.banners.get(i) ?? this.banners.set(i, this.buildBanner(state, ctx.aspect)).get(i)!;
       const rise = outExpo((t - (line.start - 0.6)) / 0.5);
       let lift = (1 - rise) * 3;
       if (variant === 'rise') {
@@ -426,7 +445,11 @@ export class Relief implements MvScene {
         b.root.position.set(at.x, variant === 'side' ? 2.5 : 3.9, at.z);
         // Alongside: turned to face the camera's side of the line.
         b.root.rotation.set(0, variant === 'side' ? yaw + side * Math.PI / 2 : yaw, 0);
-        b.root.scale.setScalar(Math.min(1, ctx.aspect / 1.5));
+        // No wider than the view where it rides (before the camera closes in on it and flies through): a long line ran
+        // off both sides, on a narrow frame (a portrait one) by a third.
+        const ride = this.camera.position.distanceTo(this.flyer(t + (variant === 'side' ? RIDE * 0.6 : RIDE)).setY(b.root.position.y));
+        const room = 2 * ride * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * ctx.aspect * 0.86;
+        b.root.scale.setScalar(Math.min(1, ctx.aspect / 1.5, room / b.width));
       }
       b.root.position.y -= lift;
       const dist = this.camera.position.distanceTo(b.root.position);

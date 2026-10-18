@@ -14,7 +14,7 @@
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import type { Music } from '../director/music.ts';
-import { clamp01, lerp, outExpo, rng, smooth, snap } from './types.ts';
+import { clamp01, fitFov, lerp, outExpo, rng, smooth, snap } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
 import { LyricOrbit } from './lyricSpace.ts';
 import { voiceOpts } from './lyricBlock.ts';
@@ -144,6 +144,8 @@ export class ArmillaryScene implements MvScene {
         open: 1, align: smooth((4 - bb) / 1.5), recede, merge: 0, pulse: 0.5 * kick, alpha: 1 }, this.toward);
       glow = 0.8 + 0.5 * k + 0.4 * push;
     }
+    // (A portrait frame: the armillary across it, so the band of words round it stays in.)
+    cam.fov = fitFov(cam.fov, ctx.aspect);
     cam.updateProjectionMatrix();
     cam.updateMatrixWorld();
     this.bg.material.uniforms.uGlow.value = glow * (0.7 + 0.4 * kick);
@@ -167,6 +169,6 @@ export class ArmillaryScene implements MvScene {
       eye(Math.max(shot.start, tt), this.eyeAt);
       this.eyeAt.applyMatrix4(inv);
       return Math.atan2(this.eyeAt.x, this.eyeAt.z);
-    });
+    }, cam);
   }
 }

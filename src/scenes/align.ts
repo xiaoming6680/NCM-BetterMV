@@ -6,7 +6,7 @@
 // again as it falls apart, on round until the shot ends.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, lerp, outExpo, punch, rng, smooth, snap } from './types.ts';
+import { clamp01, lerp, narrowness, outExpo, punch, rng, smooth, snap } from './types.ts';
 import { Accents } from './hits.ts';
 import { LineBatch } from '../render/lines.ts';
 import { LyricRig } from './lyricRig.ts';
@@ -77,8 +77,6 @@ export class AlignScene implements MvScene {
     // scattered, the line would read as jumbled words once the view leaves the angle).
     this.rig = new LyricRig(palette, 'hook');
     this.rig.faces = voiceFaces('pulse', init.seed);
-    const vh = 2 * EYE * Math.tan(THREE.MathUtils.degToRad(20));
-    this.rig.frame = { vh, vw: vh * 1.6 };
     this.rig.place = root => { root.position.set(0, 0, 0.02); };
     this.rig.warp = (m, key, age) => {
       const off = (0.55 + 0.8 * rng(key * 7919 + 13)()) - 1;
@@ -93,6 +91,9 @@ export class AlignScene implements MvScene {
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
+    // The words' frame, as wide as the view is at its height (a portrait frame: a third as wide; rows wrap sooner).
+    const vh = 2 * EYE * Math.tan(THREE.MathUtils.degToRad(20));
+    this.rig.frame = { vh, vw: vh * 1.6 * narrowness(aspect) };
   }
 
   setViewport(width: number, height: number, pixelRatio: number): void {

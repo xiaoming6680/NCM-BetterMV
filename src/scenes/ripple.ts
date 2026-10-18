@@ -7,7 +7,7 @@
 // (face), low across the field towards the cover (low). The words run round the ring.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { clamp01, rng, surge } from './types.ts';
+import { clamp01, fitFov, rng, surge } from './types.ts';
 import { Accents } from './hits.ts';
 import { LyricOrbit } from './lyricSpace.ts';
 import { voiceOpts } from './lyricBlock.ts';
@@ -218,6 +218,8 @@ export class Ripple implements MvScene {
 
   resize(aspect: number): void {
     this.camera.aspect = aspect;
+    // (A portrait frame: the pool across it, so the words round it stay in.)
+    this.camera.fov = fitFov(40, aspect);
     this.camera.updateProjectionMatrix();
   }
 
@@ -286,7 +288,7 @@ export class Ripple implements MvScene {
     const low = shot.variant === 'low';
     this.orbit.group.visible = !low;
     this.band.group.visible = low;
-    if (low) this.band.update(ctx.lyrics, t, sec.energy, () => this.az);
+    if (low) this.band.update(ctx.lyrics, t, sec.energy, () => this.az, this.camera);
     else {
       this.orbit.group.quaternion.setFromEuler(new THREE.Euler(-Math.PI / 2, this.az, 0, 'YXZ'));
       this.orbit.update(ctx.lyrics, t, sec.energy);

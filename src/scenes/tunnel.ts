@@ -9,7 +9,7 @@
 // each line a hanging scroll to one side of the path that the camera glides past (the rig's world mode).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, lerp, rng, smooth, punch } from './types.ts';
+import { clamp01, lerp, narrowness, punch, rng, smooth } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
 import { Accents } from './hits.ts';
 import { LyricRig } from './lyricRig.ts';
@@ -68,6 +68,8 @@ export class Tunnel implements MvScene {
   private bufB: THREE.Vector3[];
   private ringR = new Float32Array(RINGS);
   private ringA = new Float32Array(RINGS);
+  /** Pulse: the widest the translation banner may be where it rides (resize). */
+  private bannerRoom = Infinity;
 
   constructor(private init: SceneInit, look: 'pulse' | 'ballad' = 'pulse') {
     const { palette } = init;
@@ -101,7 +103,6 @@ export class Tunnel implements MvScene {
 
     this.rig = new LyricRig(palette, 'poem');
     this.rig.faces = voiceFaces('ballad', init.seed);
-    this.rig.frame = { vh: 5.6, vw: 9 };
     this.gates = new LyricGates(palette, { style: 'hook', em: 0.7, maxW: 3.3, trans: { em: 0.24, vertical: false }, linger: 5, ...voiceOpts('pulse', init.seed) });
     this.scene.add(this.soft ? this.rig.group : this.gates.group);
     this.resize(init.aspect);
@@ -110,6 +111,13 @@ export class Tunnel implements MvScene {
   resize(aspect: number): void {
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
+    // The words' frame, as wide as the view is at its height (a portrait frame: a third as wide; rows wrap sooner).
+    this.rig.frame = { vh: 5.6, vw: 9 * narrowness(aspect) };
+    // Pulse: what the view has room for across where a sign strikes (GATE ahead, a little off the middle) and where
+    // the translation runs (a portrait frame: about 2.5 units), less a margin for a camera off the axis (wall, roll).
+    const across = (d: number) => 2 * d * Math.tan(THREE.MathUtils.degToRad(FOV / 2)) * aspect;
+    this.bannerRoom = across(GATE * 0.9) * 0.8;
+    this.gates.setWidth(across(GATE) * 0.8 - 0.56, this.bannerRoom);
     this.bg.material.uniforms.uAspect.value = aspect;
   }
 
@@ -166,7 +174,8 @@ export class Tunnel implements MvScene {
     const cb = this.basis(sCam);
     const cam = this.camera;
     cam.position.copy(cb.c);
-    if (shot.variant === 'wall') cam.position.addScaledVector(cb.r, 1.1 * sign).addScaledVector(cb.u, 0.5);
+    // (Off to one side by as much of a narrow frame's width: the signs down the middle stay in it.)
+    if (shot.variant === 'wall') cam.position.addScaledVector(cb.r, 1.1 * sign * narrowness(ctx.aspect)).addScaledVector(cb.u, 0.5);
     cam.up.copy(cb.u);
     cam.lookAt(center(sCam + 7, new THREE.Vector3()));
     // The roll camera keeps turning: the words turn with it (below) and read level instead of going round with the tunnel.
@@ -301,7 +310,7 @@ export class Tunnel implements MvScene {
     if (this.soft) {
       this.rig.place = (root, st) => {
         const s = this.travel(st.line.start - 0.5, drive) + SCROLL, d = s - sCam, side = st.index % 2 ? 1 : -1, b = this.basis(s);
-        poseInTube(root, b.c, b.r, b.u, b.t, side * 0.85, 0.1, spin, side * 0.35);
+        poseInTube(root, b.c, b.r, b.u, b.t, side * 0.85 * narrowness(ctx.aspect), 0.1, spin, side * 0.35);
         return smooth((d - 0.6) / 1.6);
       };
       this.rig.onLight = false;
@@ -320,7 +329,7 @@ export class Tunnel implements MvScene {
         const b = this.basis(s), side = st.index % 2 ? 1 : -1, [w, h] = root.userData.size as [number, number];
         if (root.userData.vertical) poseInTube(root, b.c, b.r, b.u, b.t, side * 1.05, -0.35, 0.25 * K * (d / S) + spin, side * 0.5);
         else poseInTube(root, b.c, b.r, b.u, b.t, 0, -R * 0.42, 0.25 * K * (d / S) + spin);
-        root.scale.setScalar(Math.min(1, (root.userData.vertical ? 2.2 : 3.2) / Math.max(w, h)));
+        root.scale.setScalar(Math.min(1, (root.userData.vertical ? 2.2 : 3.2) / Math.max(w, h), root.userData.vertical ? 1 : this.bannerRoom / w));
         return smooth((d - 0.5) / 1.6);
       });
     }

@@ -5,7 +5,7 @@
 // ring turns a notch as each word begins and the sung words trail away round it; the translation round the bottom.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, inOutCubic, lerp, outExpo, rng, snap } from './types.ts';
+import { clamp01, fitFov, inOutCubic, lerp, outExpo, rng, snap } from './types.ts';
 import { LineBatch } from '../render/lines.ts';
 import { LyricOrbit } from './lyricSpace.ts';
 import { voiceOpts } from './lyricBlock.ts';
@@ -53,6 +53,8 @@ export class Rings implements MvScene {
 
   resize(aspect: number): void {
     this.camera.aspect = aspect;
+    // (A portrait frame: the dial across it, so the words round it stay in.)
+    this.camera.fov = fitFov(42, aspect);
     this.camera.updateProjectionMatrix();
   }
 

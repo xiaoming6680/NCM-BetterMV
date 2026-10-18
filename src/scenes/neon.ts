@@ -9,7 +9,7 @@
 // (looking up at the signs, slower).
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { lerp, rng, smooth, snap } from './types.ts';
+import { fitFov, lerp, rng, smooth, snap } from './types.ts';
 import { LyricGates, chunksOf, type Chunk } from './lyricSpace.ts';
 import type { Music } from '../director/music.ts';
 import { hasCjk } from '../render/text.ts';
@@ -280,6 +280,8 @@ export class NeonScene implements MvScene {
 
   resize(aspect: number): void {
     this.camera.aspect = aspect;
+    // (A portrait frame: both sides of the street as a square frame sees them, so the signs on the boards stay in.)
+    this.camera.fov = fitFov(58, aspect);
     this.camera.updateProjectionMatrix();
   }
 
