@@ -106,7 +106,8 @@ void main() {
 }`;
 
 const lum = (c: THREE.Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
-const CJK_MARKS = /[，。、！？；：,.!?;:"“”‘’()（）「」『』《》〈〉…—~～·\s]/g;
+// (The title marks as escapes: the package check refuses them in the bundle — no work names in the plugin.)
+const CJK_MARKS = /[，。、！？；：,.!?;:"“”‘’()（）「」『』\u300A\u300B〈〉…—~～·\s]/g;
 
 /** A line's words in units: Latin a word each (a word of one or two letters joins the next), CJK in runs of 2–4. */
 export function unitsOf(line: LyricLine, index: number): Unit[] {
@@ -130,7 +131,7 @@ export function unitsOf(line: LyricLine, index: number): Unit[] {
       continue;
     }
     // (Marks inside a word stay — world.execute — those round it go.)
-    const text = w.text.toUpperCase().replace(/[()（）\[\]［］「」『』《》<>]/g, ' ').trim().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').replace(/\s+/g, ' ');
+    const text = w.text.toUpperCase().replace(/[()（）\[\]［］「」『』\u300A\u300B<>]/g, ' ').trim().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').replace(/\s+/g, ' ');
     if (!text) continue;
     if (cur && w.start - cur.start < MIN_GAP && room(cur) + text.length < 18) { cur.parts.push({ text, start: w.start }); continue; }
     if (text.length <= 2 && !carry && w !== line.words[line.words.length - 1]) { carry = { text, start: w.start }; continue; }
