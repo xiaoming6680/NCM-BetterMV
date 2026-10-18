@@ -509,8 +509,11 @@ export class Engine {
     this.composer.setPixelRatio(pixelRatio);
   }
 
+  /** A size to draw at whatever the container's (a recording's: its pixels, at pixel ratio 1); null: the container's. */
+  fixedSize: { width: number; height: number } | null = null;
+
   resize(): void {
-    const w = this.container.clientWidth || window.innerWidth, h = this.container.clientHeight || window.innerHeight;
+    const w = this.fixedSize?.width || this.container.clientWidth || window.innerWidth, h = this.fixedSize?.height || this.container.clientHeight || window.innerHeight;
     this.width = w; this.height = h;
     this.renderer.setSize(w, h, false);
     this.renderer.domElement.style.width = '100%';

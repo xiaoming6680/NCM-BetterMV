@@ -65,6 +65,7 @@ const CSS = `
 .bmv-load.is-note .bmv-load-hint{display:block}
 .bmv-load-retry{display:none;margin-top:16px;pointer-events:auto}
 .bmv-load.is-error .bmv-load-retry{display:block}
+.bmv-load-action{margin-top:18px;pointer-events:auto}
 .bmv-load.is-empty .bmv-load-art,.bmv-load.is-empty .bmv-load-title,.bmv-load.is-empty .bmv-load-artist,.bmv-load.is-empty .bmv-load-line{display:none}
 .bmv-load-mark{display:none;border-radius:16px;box-shadow:0 2px 6px rgba(0,0,0,.3),0 18px 48px rgba(0,0,0,.45)}
 .bmv-load.is-empty .bmv-load-mark{display:block}
@@ -173,6 +174,94 @@ const CSS = `
 .bmv-eq i:nth-child(3){animation-delay:-.8s}
 .bmv-root:not(.is-playing) .bmv-eq i{animation-play-state:paused}
 @keyframes bmv-eq{0%,100%{transform:scaleY(.3)}50%{transform:scaleY(1)}}
+
+/* The right click's menu: a desktop menu in the dark, frosted; the lit item in the accent. */
+.bmv-menu-catch{position:absolute;inset:0}
+.bmv-menu{position:absolute;left:0;top:0;min-width:200px;max-width:320px;padding:5px;border-radius:10px;cursor:default;
+  background:rgba(38,38,42,.8);-webkit-backdrop-filter:blur(30px) saturate(180%);backdrop-filter:blur(30px) saturate(180%);
+  box-shadow:inset 0 0 0 .5px rgba(255,255,255,.15),0 0 0 .5px rgba(0,0,0,.6),0 12px 36px rgba(0,0,0,.42);color:var(--l1);font-size:13px;line-height:1}
+.bmv-menu.is-sub{min-width:120px}
+.bmv-mi{position:relative;display:flex;align-items:center;height:24px;padding:0 10px;border-radius:5px;white-space:nowrap}
+.bmv-menu.has-checks .bmv-mi{padding-left:26px}
+/* (Opacity, not visibility: a hidden submenu's tick would show through its visibility:hidden box.) */
+.bmv-mi-check{position:absolute;left:8px;top:6px;opacity:0}
+.bmv-mi.is-checked .bmv-mi-check{opacity:1}
+.bmv-mi-label{flex:1}
+.bmv-mi-hint{margin-left:32px;color:var(--l3)}
+.bmv-mi-more{margin:0 -3px 0 24px;color:var(--l2)}
+.bmv-mi.is-active{background:var(--accent);color:#fff}
+.bmv-mi.is-active .bmv-mi-hint,.bmv-mi.is-active .bmv-mi-more{color:rgba(255,255,255,.78)}
+.bmv-mi.is-disabled{color:rgba(255,255,255,.3)}
+.bmv-msep{height:1px;margin:5px 10px;background:rgba(255,255,255,.1)}
+
+/* A line along the top: a file saved (and 在文件夹中显示), a download called off. */
+.bmv-notice{position:absolute;left:50%;top:12px;display:flex;align-items:center;gap:8px;height:34px;max-width:calc(100% - 200px);padding:0 16px;border-radius:17px;
+  background:rgba(32,32,35,.8);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);
+  box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14),0 8px 24px rgba(0,0,0,.3);font-size:13px;white-space:nowrap;font-variant-numeric:tabular-nums;
+  opacity:0;visibility:hidden;transform:translate(-50%,-8px);transition:opacity .25s var(--ease),transform .4s var(--ease),visibility 0s .4s}
+.bmv-notice.is-on{opacity:1;visibility:visible;transform:translate(-50%,0);transition:opacity .25s var(--ease),transform .4s var(--ease)}
+.bmv-notice.has-action{padding-right:5px}
+.bmv-notice>span{flex:none}
+.bmv-notice>.bmv-notice-sub{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--l2)}
+.bmv-notice-btn{flex:none;height:24px;margin-left:2px;padding:0 11px;border-radius:12px;background:var(--fill);font-size:12px;transition:background-color .15s}
+.bmv-notice-btn:hover{background:rgba(255,255,255,.22)}
+
+/* An alert that asks first (a download that replays the song, leaving one): centred, the picture dimmed behind. */
+.bmv-alert-scrim{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.3);opacity:0;transition:opacity .2s}
+.bmv-alert-scrim.is-on{opacity:1}
+.bmv-alert{width:316px;padding:20px 18px 16px;border-radius:12px;text-align:center;
+  background:rgba(40,40,44,.86);-webkit-backdrop-filter:blur(40px) saturate(180%);backdrop-filter:blur(40px) saturate(180%);
+  box-shadow:inset 0 0 0 .5px rgba(255,255,255,.15),0 0 0 .5px rgba(0,0,0,.6),0 24px 64px rgba(0,0,0,.5);transform:scale(.96);transition:transform .35s var(--ease)}
+.bmv-alert-scrim.is-on .bmv-alert{transform:none}
+.bmv-alert-icon{display:flex;justify-content:center;margin-bottom:12px}
+.bmv-alert-icon svg{border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+.bmv-alert-title{font:600 15px/1.3 var(--display)}
+.bmv-alert-msg{margin-top:6px;font-size:12px;line-height:1.55;color:var(--l2)}
+.bmv-alert-detail{margin-top:8px;font-size:11px;line-height:1.5;color:var(--l3)}
+.bmv-alert-btns{display:flex;gap:8px;margin-top:18px}
+.bmv-alert-btns button{flex:1;height:28px;border-radius:7px;background:var(--fill);text-align:center;font-size:13px;transition:background-color .15s}
+.bmv-alert-btns button:hover{background:rgba(255,255,255,.2)}
+.bmv-alert-btns button.is-primary{background:var(--accent);color:#fff}
+.bmv-alert-btns button.is-primary:hover{background:#6d6bf0}
+
+/* The export sheet (下载 MV…): what to make, and what it comes to. */
+.bmv-export{width:440px;max-width:calc(100% - 32px);max-height:calc(100% - 32px);overflow:auto;padding:20px 22px 18px;text-align:left}
+.bmv-export-head{display:flex;align-items:center;gap:12px}
+.bmv-export-icon{flex:none}
+.bmv-export-icon svg{border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+.bmv-export-titles{min-width:0}
+.bmv-export-song{margin-top:2px;font-size:12px;color:var(--l2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bmv-export-rows{display:flex;flex-direction:column;gap:10px;margin-top:16px}
+.bmv-xr{display:flex;align-items:flex-start;gap:12px}
+.bmv-xl{flex:none;width:52px;padding-top:5px;font-size:12px;color:var(--l2)}
+.bmv-xc{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start}
+.bmv-xc>.bmv-xnote,.bmv-xcol>*{margin-top:6px}
+.bmv-xcol{align-self:stretch;overflow:hidden}
+.bmv-xseg{display:inline-flex;gap:2px;padding:2px;border-radius:8px;background:rgba(255,255,255,.1)}
+.bmv-xseg button{height:24px;padding:0 12px;border-radius:6px;font-size:12px;color:var(--l2);white-space:nowrap;transition:background-color .2s,color .2s}
+.bmv-xseg button:hover{background:rgba(255,255,255,.1)}
+.bmv-xseg button.is-on{background:rgba(255,255,255,.22);color:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.bmv-xnote{font-size:11px;color:var(--l3);font-variant-numeric:tabular-nums}
+.bmv-xnote:empty{display:none}
+.bmv-xrange{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--l2)}
+.bmv-xin{width:64px;height:26px;padding:0 8px;border:0;border-radius:6px;background:rgba(255,255,255,.1);color:#fff;font:inherit;font-variant-numeric:tabular-nums;text-align:center;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14);transition:box-shadow .15s}
+.bmv-xin:focus{box-shadow:inset 0 0 0 1.5px var(--accent-text)}
+.bmv-xin.is-bad{box-shadow:inset 0 0 0 1.5px #ff6b62}
+.bmv-export-sum{margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,.1);font-size:12px;color:var(--l1);font-variant-numeric:tabular-nums}
+.bmv-export-to{margin-top:8px;font-size:11px;color:var(--l3)}
+.bmv-export-where{font-size:11px;line-height:1.5;color:var(--l2)}
+.bmv-alert-btns button:disabled{opacity:.4;pointer-events:none}
+
+/* A download going on (or just done) while the MV page is closed: a pill above the MV button, opening the page when pressed. */
+.bmv-pill{position:fixed;right:22px;bottom:128px;z-index:2147480000;display:flex;align-items:center;gap:8px;height:34px;padding:0 5px 0 12px;border-radius:17px;
+  background:rgba(28,28,30,.84);-webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);color:#fff;font-size:12px;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums;
+  box-shadow:inset 0 0 0 .5px rgba(255,255,255,.16),0 6px 20px rgba(0,0,0,.26);cursor:pointer;
+  opacity:0;visibility:hidden;transform:translateY(6px);transition:opacity .25s var(--ease),transform .4s var(--ease),visibility 0s .4s}
+.bmv-pill.is-on{opacity:1;visibility:visible;transform:none;transition:opacity .25s var(--ease),transform .4s var(--ease)}
+.bmv-pill-ring{flex:none;width:14px;height:14px;border-radius:50%;background:conic-gradient(#a5a3ff calc(var(--p,0)*1%),rgba(255,255,255,.22) 0);-webkit-mask:radial-gradient(circle,transparent 4px,#000 4.5px);mask:radial-gradient(circle,transparent 4px,#000 4.5px)}
+.bmv-pill-sub{color:rgba(255,255,255,.6);overflow:hidden;text-overflow:ellipsis;max-width:180px}
+.bmv-pill-btn{flex:none;height:24px;padding:0 11px;border-radius:12px;background:rgba(255,255,255,.14);font-size:12px;transition:background-color .15s}
+.bmv-pill-btn:hover{background:rgba(255,255,255,.24)}
 
 /* ---- The button above NetEase's play bar ---- */
 .bmv-mvbtn{position:fixed;right:22px;bottom:92px;z-index:2147480000;display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 12px 0 10px;

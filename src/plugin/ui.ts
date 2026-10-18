@@ -13,6 +13,7 @@ import { updateWindowOn } from './updatePrompt.ts';
 import { ensureStyles } from './uiStyle.ts';
 import { OBS_PORT } from '../obs/snapshot.ts';
 import { obsSettings } from './obsSettings.ts';
+import { ask, Menu, Notice, type AskOptions, type MenuEntry, type NoticeOptions } from './menu.ts';
 
 export interface Config {
   style: 'auto' | StyleId;
@@ -135,6 +136,8 @@ export interface StatusOptions {
   hint?: string;
   /** A plain note rather than progress (the MV page resting while OBS shows the MV): no line, the hint shown. */
   note?: boolean;
+  /** A button under it (a download's 取消). */
+  action?: { label: string; run: () => void };
 }
 /** NetEase's covers come in any size: a small one for the thumbnail, a large one for the waiting view. */
 const sized = (url: string, px: number) => url.replace(/^http:/, 'https:') + (/\?/.test(url) ? '' : `?param=${px}y${px}`);
@@ -212,6 +215,8 @@ export interface OverlayHandlers {
   onRetry?: () => void;
   /** The settings panel's contents, built each time it opens (so it shows the settings as they are now). */
   settings: () => HTMLElement;
+  /** The right click's menu, as things stand when it opens. */
+  menu?: () => MenuEntry[];
 }
 
 /** Width of the MV page's sheet, px; it floats 10 px in from the window's edges. */
@@ -251,6 +256,8 @@ export class Overlay {
   private loadStep = el('span');
   private loadPct = el('b');
   private loadHint = el('div', 'bmv-load-hint');
+  /** What can be done about it (a download's 取消). */
+  private loadAction = el('button', 'bmv-btn bmv-load-action');
   private hasSong = false;
   /** When the waiting view came up (a glimpse of it is faded, not flown). */
   private loadSince = 0;
@@ -316,6 +323,10 @@ export class Overlay {
   private rows: HTMLElement[] = [];
   private rowsFor: QueueTrack[] | null = null;
   private litRow = -1;
+  /** The right click's menu, the line along the top, and an alert's keys while one is up. */
+  private menu = new Menu(this.root);
+  private noticeEl = new Notice();
+  private asking: ((e: KeyboardEvent) => boolean) | null = null;
   showControls = true;
   visible = false;
 
@@ -330,7 +341,7 @@ export class Overlay {
     this.buildGrips();
     this.buildPanel();
     // The waiting view covers the picture (while NetEase switches songs the last frame stays on the canvas).
-    r.append(this.stage, this.backdrop, this.loadEl, this.dragEl, this.top, this.bar, this.panel, ...this.grips);
+    r.append(this.stage, this.backdrop, this.loadEl, this.dragEl, this.top, this.bar, this.panel, ...this.grips, this.noticeEl.el);
     document.body.appendChild(r);
     r.addEventListener('mousemove', () => this.wake());
     // A button clicked with the mouse lets the focus go (a key pressed later would ring it); one pressed from the
@@ -341,11 +352,21 @@ export class Overlay {
     // Clicks on the MV are the MV's: page-wide listeners (NetEase's, other plugins') never see them.
     for (const type of SWALLOW) r.addEventListener(type, e => { e.stopPropagation(); if (type === 'contextmenu') e.preventDefault(); });
     this.stage.addEventListener('dblclick', () => handlers.onTogglePlay());
+    // A right click on the picture or the controls (not in the sheet, whose rows are its own) opens the menu there.
+    r.addEventListener('contextmenu', e => {
+      const t = e.target as HTMLElement | null;
+      if (!handlers.menu || this.asking || t?.closest?.('.bmv-sheet,.bmv-menu,.bmv-upd-slot')) return;
+      this.wake();
+      this.menu.open(e.clientX, e.clientY, handlers.menu());
+    });
+    this.menu.onClosed = () => this.wake();
     // A click on the picture puts the open panel away.
     this.stage.addEventListener('pointerdown', () => { if (this.panelOpen) this.closePanel(); });
     // The keys as set (Overlay.keys); any other press, NetEase's own shortcuts among them (Ctrl+← → …), goes through.
     window.addEventListener('keydown', e => {
       if (!this.visible || recordingKeys) return;
+      // An open menu or alert takes every key.
+      if (this.menu.key(e) || this.asking?.(e)) { e.preventDefault(); e.stopPropagation(); return; }
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
       const c = keyCombo(e), k = this.keys;
@@ -400,7 +421,8 @@ export class Overlay {
     mark.innerHTML = appIcon(72);
     const retry = el('button', 'bmv-btn bmv-load-retry', '重试');
     retry.onclick = ev => { ev.stopPropagation(); this.handlers.onRetry?.(); };
-    this.loadEl.append(mark, this.loadArt, this.loadTitle, this.loadArtist, line, step, this.loadHint, retry);
+    this.loadAction.style.display = 'none';
+    this.loadEl.append(mark, this.loadArt, this.loadTitle, this.loadArtist, line, step, this.loadHint, retry, this.loadAction);
     drawSegments(this.loadDim, [], 1);
     drawSegments(this.loadLit, [], 1);
   }
@@ -813,7 +835,7 @@ export class Overlay {
 
   /** Put the buttons, the controls and the cursor away (not while a panel is open). */
   private sleep(): void {
-    if (this.dragging || this.panelOpen) return;
+    if (this.dragging || this.panelOpen || this.menu.isOpen || this.asking) return;
     clearTimeout(this.idleTimer);
     this.awake = false;
     this.top.style.opacity = '0';
@@ -846,11 +868,16 @@ export class Overlay {
         void v.offsetHeight;
         v.remove();
       }, 1200);
+      // And the right click's menu with its submenus (in NetEase the style submenu's first showing stalled the menu).
+      window.setTimeout(() => {
+        if (this.visible && !this.menu.isOpen && this.handlers.menu) this.menu.warm(this.handlers.menu());
+      }, 1800);
     }
   }
   private warmed = false;
   hide(): void {
     this.closePanel();
+    this.menu.close(true);
     this.visible = false;
     updateWindowOn('mv', null);
     const r = this.root;
@@ -873,6 +900,10 @@ export class Overlay {
     l.classList.toggle('is-empty', !this.hasSong);
     this.loadStep.textContent = text;
     this.loadHint.textContent = opts.hint ?? '';
+    const action = opts.action;
+    this.loadAction.style.display = action ? '' : 'none';
+    if (action && this.loadAction.textContent !== action.label) this.loadAction.textContent = action.label;
+    this.loadAction.onclick = action ? ev => { ev.stopPropagation(); action.run(); } : null;
     this.loadPct.textContent = p === undefined || opts.error ? '' : `${Math.round(Math.max(0, Math.min(1, p)) * 100)}%`;
     const k = Math.max(0, Math.min(1, p ?? 0));
     if (k !== this.loadProgress) {
@@ -1022,6 +1053,30 @@ export class Overlay {
     this.lastSecond = second;
     this.showAt(Math.max(0, Math.min(1, seconds / duration)));
     this.lengthEl.textContent = clock(duration);
+  }
+
+  /** A line along the top of the page (null: away). */
+  notice(text: string | null, opts: NoticeOptions = {}): void {
+    if (text === null) this.noticeEl.hide(); else this.noticeEl.show(text, opts);
+  }
+
+  /** An alert asking first; the controls stay up while it waits. */
+  ask(o: AskOptions): void {
+    if (this.asking) return;
+    this.menu.close(true);
+    this.wake();
+    this.asking = ask(this.root, o, () => { this.asking = null; this.wake(); });
+  }
+
+  /**
+   * A dialog of its own (the export sheet), like ask(): `make` builds it on the page and returns its key handler, and
+   * calls `gone` once it has been answered.
+   */
+  dialog(make: (host: HTMLElement, gone: () => void) => (e: KeyboardEvent) => boolean): void {
+    if (this.asking) return;
+    this.menu.close(true);
+    this.wake();
+    this.asking = make(this.root, () => { this.asking = null; this.wake(); });
   }
 
   setBackdrop(url: string | null): void {

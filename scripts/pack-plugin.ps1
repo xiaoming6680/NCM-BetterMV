@@ -1,7 +1,7 @@
 ﻿# Builds the plugin and packs it as dist/ncm-better-mv.plugin (a zip BetterNCM installs: manifest.json, bettermv.js,
 # the store's preview.jpg, LICENSE, fonts/ with their licence, previews/ — the settings page's scene sketches, obs/ —
-# the OBS output's page and local server). Entry names use forward slashes, which Compress-Archive on Windows
-# PowerShell 5.1 does not.
+# the OBS output's page and local server, export/ — the video encoder of 下载 MV). Entry names use forward slashes,
+# which Compress-Archive on Windows PowerShell 5.1 does not.
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $projectRoot
@@ -10,6 +10,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw '打包失败' }
 } finally { Pop-Location }
 & (Join-Path $PSScriptRoot 'build-obs.ps1')
+& (Join-Path $PSScriptRoot 'build-encode.ps1')
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $out = Join-Path $projectRoot 'dist\ncm-better-mv.plugin'
@@ -24,7 +25,8 @@ try {
         @{ From = (Join-Path $projectRoot 'public\fonts\OFL.txt'); Name = 'fonts/OFL.txt' },
         @{ From = (Join-Path $projectRoot 'plugin\obs\index.html'); Name = 'obs/index.html' },
         @{ From = (Join-Path $projectRoot 'dist\obs\obs.js'); Name = 'obs/obs.js' },
-        @{ From = (Join-Path $projectRoot 'dist\obs\bettermv-obs.exe'); Name = 'obs/bettermv-obs.exe' }
+        @{ From = (Join-Path $projectRoot 'dist\obs\bettermv-obs.exe'); Name = 'obs/bettermv-obs.exe' },
+        @{ From = (Join-Path $projectRoot 'dist\export\bettermv-encode.exe'); Name = 'export/bettermv-encode.exe' }
     )
     foreach ($font in @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'public\fonts') -Filter '*.ttf') + @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'public\fonts') -Filter '*.woff2')) {
         $entries += @{ From = $font.FullName; Name = 'fonts/' + $font.Name }

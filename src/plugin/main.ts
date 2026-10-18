@@ -12,7 +12,16 @@ import { ProgressClock } from './clock.ts';
 import { fetchChorus, fetchLyric, fetchWiki, getAudio, loadCover, songCacheDir, SourceError } from './source.ts';
 import { alignSong, applyAlignment, cachedAlignment, checkPack, needsAlignment } from './aligner.ts';
 import { startUpdates } from './update.ts';
-import { isRecordingKeys, keyCombo, loadConfig, mvButton, Overlay, pixelRatio, settingsView, type BarSection, type Config, type QueueTrack } from './ui.ts';
+import { isRecordingKeys, keyCombo, keyLabel, loadConfig, mvButton, Overlay, pixelRatio, settingsView, type BarSection, type Config, type QueueTrack } from './ui.ts';
+import type { MenuEntry } from './menu.ts';
+import { Cancelled as ExportCancelled, exportMv, VIDEO } from './video.ts';
+import { exportNative, type VideoSpec } from './export.ts';
+import { EncoderUnavailable } from './encoder.ts';
+import { bitrateFor, loadOptions, partOf, saveOptions, saveSpeed, videoSize, wantsHardware, type ExportOptions } from './exportOptions.ts';
+import { exportSheet } from './exportSheet.ts';
+import { Pill } from './pill.ts';
+import { STYLES } from '../style/style.ts';
+import { execArg } from './exec.ts';
 import { obs, obsKey } from './obs.ts';
 import { OBS_VERSION, type ObsPlan, type ObsState } from '../obs/snapshot.ts';
 import type { SectionLabel } from '../types.ts';
@@ -102,14 +111,23 @@ function start(client: Client): void {
     const state = client.store.getState()?.playing?.playingState;
     return typeof state === 'number' ? state === 2 : clock.playing;
   };
+  // The picture stops (or jumps) on the click, not when NetEase's events catch up.
+  const playPause = () => {
+    const playing = isPlaying();
+    if (playing) clock.pause();
+    togglePlay(client.store, playing);
+  };
+  /** The playing song arranged anew, now. */
+  const reroll = () => {
+    const song = player?.song;
+    if (!song || !player) return;
+    plan(song, config, true);
+    describe(song);
+    void player.warm(nextFrame);
+  };
   const overlay = new Overlay({
-    onClose: () => close(),
-    // The picture stops (or jumps) on the click, not when NetEase's events catch up.
-    onTogglePlay: () => {
-      const playing = isPlaying();
-      if (playing) clock.pause();
-      togglePlay(client.store, playing);
-    },
+    onClose: () => leave(),
+    onTogglePlay: playPause,
     onPrev: () => skip(client.store, -1),
     onNext: () => skip(client.store, 1),
     onVolume: v => setVolume(client.store, v),
@@ -129,16 +147,8 @@ function start(client: Client): void {
     onToggleMaximize: () => toggleMaximize(client.store),
     onRetry: () => void prepareCurrent(),
     // The same settings, in a panel on the MV page (tried out while watching).
-    settings: () => settingsView(config, changed, sketch, true, player?.song ? { id: player.song.id, name: player.song.name ?? '' } : undefined, {
-      // The playing song arranged anew, now.
-      reroll: () => {
-        const song = player?.song;
-        if (!song || !player) return;
-        plan(song, config, true);
-        describe(song);
-        void player.warm(nextFrame);
-      },
-    }),
+    settings: () => settingsView(config, changed, sketch, true, player?.song ? { id: player.song.id, name: player.song.name ?? '' } : undefined, { reroll }),
+    menu: () => menu(),
   });
   overlay.showControls = config.controls;
   overlay.setKeys(config.keys);
@@ -190,6 +200,189 @@ function start(client: Client): void {
   };
   let replan = 0;
   let button: HTMLButtonElement | null = config.button ? mvButton(() => open()) : null;
+
+  // ---- The right click's menu ----
+  /** The song the MV page shows: made, and still the one playing (null while it is being made, or failed). */
+  const shownSong = (): PreparedSong | null => {
+    const s = player?.song;
+    return s && preparing?.id !== s.id && playingSong(client.store)?.id === s.id ? s : null;
+  };
+  const setConfig = <K extends 'style' | 'controls'>(key: K, value: Config[K]) => { config[key] = value; plugin.setConfig(key, value); changed(config); };
+  function menu(): MenuEntry[] {
+    const song = shownSong(), now = playingSong(client.store), like = now ? liked(client.store) : null;
+    const styles: Array<[Config['style'], string]> = [['auto', '自动'], ...Object.values(STYLES).map((s): [Config['style'], string] => [s.id, s.name])];
+    return [
+      { label: isPlaying() ? '暂停' : '播放', hint: keyLabel(config.keys.playPause), disabled: !now, run: playPause },
+      like === null ? null : { label: like ? '取消喜欢' : '喜欢', run: () => toggleLike(client.store) },
+      '-',
+      // (Not while the MV is being made into a video: the player is drawing that.)
+      { label: '换一种编排', disabled: !song || !!download, run: reroll },
+      { label: '风格', disabled: !!download, items: styles.map(([id, name]) => ({ label: name, checked: config.style === id, run: () => setConfig('style', id) })) },
+      '-',
+      { label: '保存当前画面', disabled: !song || !!download, run: () => { snapshot = true; } },
+      download ? { label: '取消下载', run: stopDownload } : { label: '下载 MV…', disabled: !song, run: openExport },
+      '-',
+      { label: '显示控制栏', checked: config.controls, run: () => setConfig('controls', !config.controls) },
+      { label: '设置…', run: () => overlay.openPanel('settings') },
+      { label: '退出 MV', hint: keyLabel(config.keys.exit), run: leave },
+    ];
+  }
+
+  // ---- Saving: the frame on screen as a picture, the MV as an MP4 (src/plugin/video.ts) ----
+  /** A download being made: its song, whether it was called off, when it began, how far along (0..1), and how it shows that. */
+  interface Download { song: PreparedSong; cancelled: boolean; began: number; part: number; render: () => void }
+  let download: Download | null = null;
+  /** The download's progress while the MV page is closed (it goes on behind). */
+  const pill = new Pill();
+  /** The next frame drawn is saved as a picture. */
+  let snapshot = false;
+  const errText = (e: unknown) => (e as Error)?.message || String(e);
+  /** Where they go: a BetterMV folder in NetEase's download folder (else in BetterNCM's), made if missing. */
+  async function saveFolder(): Promise<string> {
+    const base = String(client.storage?.downloadDir || '').replace(/[\\/]+$/, '');
+    const parent = base || (await betterncm.app.getDataPath()).replace(/[\\/]+$/, '');
+    const dir = `${parent}\\BetterMV${base ? '' : '\\MV'}`;
+    for (const d of base ? [dir] : [`${parent}\\BetterMV`, dir]) if (!await betterncm.fs.exists(d)) await betterncm.fs.mkdir(d);
+    return dir;
+  }
+  /** “Song - Artist”, as NetEase names a song, without the characters a file name can't have. */
+  const fileName = (song: PreparedSong) => {
+    const artists = (song.artists ?? []).join(',');
+    return `${song.name || song.id}${artists ? ' - ' + artists : ''}`.replace(/[\\/:*?"<>|\x00-\x1f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+  };
+  async function freePath(dir: string, name: string, ext: string): Promise<string> {
+    for (let i = 1; ; i++) {
+      const path = `${dir}\\${name}${i > 1 ? ` (${i})` : ''}.${ext}`;
+      if (!await betterncm.fs.exists(path)) return path;
+    }
+  }
+  /** Its folder opened with the file selected (the path in escaped quotes, the window shown: docs/CLIENT.md, app.exec). */
+  const reveal = (path: string) => { void Promise.resolve(betterncm.app.exec(`explorer /select,${execArg(path)}`, false, true)).catch(() => {}); };
+  const showIt = (path: string) => ({ label: '在文件夹中显示', run: () => reveal(path) });
+
+  /** The frame just drawn, with its HUD, as a PNG (in the same task as the drawing: the canvas is cleared once shown). */
+  function saveFrame(p: MvPlayer): void {
+    const gl = p.engine.renderer.domElement, song = p.song!, at = clock.time();
+    const c = document.createElement('canvas');
+    c.width = gl.width;
+    c.height = gl.height;
+    const g = c.getContext('2d')!;
+    g.drawImage(gl, 0, 0);
+    p.hud.draw(g, c.width, c.height);
+    c.toBlob(blob => void (async () => {
+      try {
+        if (!blob) throw new Error('无法读取画面');
+        const path = await freePath(await saveFolder(), `${fileName(song)} ${Math.floor(at / 60)}分${String(Math.floor(at % 60)).padStart(2, '0')}秒`, 'png');
+        if (!await betterncm.fs.writeFile(path, blob)) throw new Error('无法写入文件');
+        overlay.notice('画面已保存', { action: showIt(path), hideAfter: 8000 });
+      } catch (e) {
+        overlay.notice('保存画面失败：' + errText(e), { hideAfter: 6000 });
+      }
+    })(), 'image/png');
+  }
+
+  /** The picture drawn at a video's size (pixel ratio 1); null: the window's again. */
+  function frame(size: { width: number; height: number } | null): void {
+    if (!player) return;
+    player.engine.fixedSize = size ? { width: size.width, height: size.height } : null;
+    player.engine.setPixelRatio(size ? 1 : config.quality === 'auto' && governor ? governor.pixelRatio : pixelRatio(config.quality));
+    player.resize();
+  }
+
+  const minutes = (s: number) => { const n = Math.round(s); return n >= 60 ? `${Math.floor(n / 60)} 分 ${n % 60} 秒` : `${Math.max(1, n)} 秒`; };
+
+  /** 1分05秒, for a file's name. */
+  const nameClock = (s: number) => `${Math.floor(s / 60)}分${String(Math.round(s % 60)).padStart(2, '0')}秒`;
+
+  /** The export sheet over the MV page: what to make; its answer starts the download. */
+  function openExport(): void {
+    const song = shownSong();
+    if (!song || download) return;
+    void saveFolder().then(folder => overlay.dialog((host, gone) => exportSheet(host, {
+      name: song.name || String(song.id), artists: (song.artists ?? []).join(', '), duration: song.duration, sections: song.analysis.sections,
+      options: loadOptions(), folder, playhead: clock.time(),
+    }, o => { saveOptions(o); void startDownload(o); }, gone)), e => overlay.notice('无法创建保存位置：' + errText(e), { hideAfter: 6000 }));
+  }
+
+  /**
+   * The MV of the song on screen as an MP4, made without playing it (docs/EXPORT.md): the frames drawn at their own times
+   * and handed to the encoder program (src/plugin/export.ts); the MediaRecorder way (video.ts) when it can't be had.
+   * Progress shows on the waiting view, or on a pill while the MV page is closed: the download goes on behind. NetEase
+   * plays on; a change of song waits until it is done.
+   */
+  async function startDownload(o: ExportOptions): Promise<void> {
+    const song = shownSong(), p = player;
+    if (!song || !p || download) return;
+    const size = videoSize(o.aspect, o.size);
+    const [from, to] = partOf(o, song.duration, song.analysis.sections);
+    const spec: VideoSpec = { ...size, fps: o.fps, bitrate: bitrateFor(size.width, size.height, o.fps, o.quality), from, to };
+    const name = fileName(song) + (o.part === 'all' ? '' : ` ${nameClock(from)}-${nameClock(to)}`) + (o.aspect === 'tall' ? ' 竖屏' : o.aspect === 'square' ? ' 方形' : '');
+    const action = { label: '取消', run: stopDownload };
+    let compat = false, said = '';
+    const job: Download = download = { song, cancelled: false, began: performance.now(), part: 0, render: () => {} };
+    job.render = () => {
+      const spent = (performance.now() - job.began) / 1000, left = job.part > 0.04 && spent > 3 ? (spent * (1 - job.part)) / job.part : 0;
+      const text = (compat ? '正在下载 MV（兼容模式）' : '正在下载 MV') + (left ? `，还需 ${minutes(left)}` : '');
+      const key = text + Math.round(job.part * 100) + overlay.visible;
+      if (key === said) return;
+      said = key;
+      if (overlay.visible) { pill.hide(); overlay.status(text, { progress: job.part, action }); }
+      else pill.show(text, { progress: job.part, actions: [action], onOpen: () => void open() });
+    };
+    /** The result, on the MV page or on the pill. */
+    const tell = (text: string, hideAfter: number, sub?: string, more?: { label: string; run: () => void }) => {
+      if (overlay.visible) overlay.notice(text, { sub, action: more, hideAfter });
+      else pill.show(text, { sub, actions: more ? [more] : [], onOpen: () => void open(), hideAfter });
+    };
+    job.render();
+    let framed = false;
+    try {
+      const audio = await getAudio(client, song.id, () => job.cancelled);
+      if (job.cancelled) throw new ExportCancelled();
+      const path = await freePath(await saveFolder(), name, 'mp4');
+      frame(spec);
+      framed = true;
+      const progress = (part: number) => { job.part = part; job.render(); };
+      try {
+        const done = await exportNative({ player: p, audio, path, spec, hardware: wantsHardware(o.encoder), progress, cancelled: () => job.cancelled });
+        saveSpeed(spec.width, spec.height, spec.fps, (done.seconds * 1000) / Math.max(1, done.frames));
+        tell('MV 已保存', 12000, name, showIt(path));
+      } catch (e) {
+        if (!(e instanceof EncoderUnavailable) || job.cancelled) throw e;
+        // The encoder program isn't to be had here: the recorder's way, the whole song at 1080p (slower, and not as sharp).
+        console.warn('[BetterMV] 视频编码程序不可用，改用兼容模式：', errText(e));
+        compat = true;
+        job.part = 0;
+        job.began = performance.now();
+        frame(VIDEO);
+        job.render();
+        const blob = await exportMv({ player: p, audio, parent: overlay.stage, progress, cancelled: () => job.cancelled });
+        frame(null);
+        framed = false;
+        if (!await betterncm.fs.writeFile(path, blob)) throw new Error('无法写入文件');
+        tell('MV 已保存（兼容模式：整首 1080p）', 12000, name, showIt(path));
+      }
+    } catch (e) {
+      const off = job.cancelled || e instanceof ExportCancelled;
+      tell(off ? '已取消下载' : '下载失败：' + errText(e), off ? 3000 : 8000);
+    } finally {
+      if (framed) frame(null);
+      if (download === job) download = null;
+      // The MV again: of this song, or of the one NetEase went on to meanwhile.
+      if (overlay.visible) {
+        const now = playingSong(client.store);
+        if (now && now.id !== player?.song?.id) void prepareCurrent(); else overlay.status(null);
+      }
+    }
+  }
+
+  /** Calls the download off: it stops at its next frame, and nothing is saved. */
+  function stopDownload(): void {
+    if (download) download.cancelled = true;
+  }
+
+  /** Leaving the MV page: a download goes on behind it, on the pill. */
+  function leave(): void { close(); }
 
   // OBS output (src/plugin/obs.ts): the playing song, once prepared, goes to the local server, and where NetEase is
   // playing follows it; the OBS page draws the same MV from them.
@@ -251,13 +444,14 @@ function start(client: Client): void {
     // was due, not after now, so the cap holds on average whatever the screen's rate: at 120 on a 144 Hz screen five
     // frames in six are drawn (counting from now, every other one would be, 72 a second). After a stall (more than a
     // period late) the schedule starts again from now.
+    // (While a download is made the player draws its frames, behind the waiting view: none here.)
     const rest = obs.shown && !config.obsKeepMv;
-    if (rest !== resting && !preparing) {
+    if (rest !== resting && !preparing && !download) {
       resting = rest;
       overlay.status(rest ? '画面正在 OBS 中显示' : null, rest ? { note: true, hint: '需要两边同时显示时，在设置中打开“MV 页同时显示”。' } : {});
     }
     const cap = config.fpsCap, period = cap ? 1000 / cap : 0;
-    if (!resting && (!cap || !last || now >= due - 1)) {
+    if (!resting && !download && (!cap || !last || now >= due - 1)) {
       if (cap) due = (now - due > period ? now : due) + period;
       // (After a gap — the window hidden, the page held up — the frames before it say nothing about the next ones.)
       if (last && now - last > 250) governor?.reset();
@@ -267,8 +461,11 @@ function start(client: Client): void {
       // still being readied behind the waiting view either: a frame then waited for its plate's shaders, 0.2–1 s.
       if (player.song && preparing?.id !== player.song.id && (clock.songId === player.song.id || !clock.playId)) {
         const gov = config.quality === 'auto' && governed ? governor : null;
+        // A saved frame has the HUD (and the badge that goes with it), whatever the controls do.
+        if (snapshot) player.hud.visible = true;
         gov?.begin();
         const shot = player.frame(clock.now(), dt);
+        if (snapshot) { snapshot = false; saveFrame(player); }
         if (gov) govern(gov, player, shot, now);
         onScreen = shot;
       }
@@ -276,7 +473,7 @@ function start(client: Client): void {
     overlay.progress(clock.time(), duration(), isPlaying());
     overlay.volume(volume(client.store));
     overlay.playState(liked(client.store), playMode(client.store));
-    player.hud.visible = !(overlay.awake && overlay.showControls);
+    if (!download) player.hud.visible = !(overlay.awake && overlay.showControls);
     raf = requestAnimationFrame(loop);
   }
 
@@ -370,6 +567,8 @@ function start(client: Client): void {
   }
 
   async function prepareCurrent(): Promise<void> {
+    // (A download is drawing the player's song: the next one is prepared once it is done.)
+    if (download) return;
     const song = playingSong(client.store);
     if (!song) { overlay.song(null); overlay.mvInfo(null); overlay.status('请先在网易云音乐中播放歌曲'); resting = false; pushState(); return; }
     // (With only the OBS output on, the MV page is closed: no renderer is made here.)
@@ -472,11 +671,14 @@ function start(client: Client): void {
     last = due = 0;
     governor?.reset();
     if (!raf) raf = requestAnimationFrame(loop);
+    // (A download in hand: the page shows how far it is.)
+    if (download) { download.render(); return; }
     await prepareCurrent();
   }
 
   function close(): void {
     overlay.hide();
+    download?.render();
     // (The OBS output still wants the song being prepared, and the next one.)
     if (!obs.on) {
       if (preparing) preparing.cancelled = true;
@@ -508,7 +710,7 @@ function start(client: Client): void {
   window.addEventListener('keydown', e => {
     if (isRecordingKeys() || keyCombo(e) !== config.keys.toggle) return;
     e.preventDefault();
-    overlay.visible ? close() : void open();
+    overlay.visible ? leave() : void open();
   });
 
   // The OBS output with the settings: started, stopped, moved to another port.
@@ -535,7 +737,8 @@ function start(client: Client): void {
     // (Out of 自动, the governor starts again from the top the next time it's chosen.)
     if (c.quality !== 'auto' && governor) { governor.step = 0; governor.reset(); }
     const pr = c.quality === 'auto' && governor ? governor.pixelRatio : pixelRatio(c.quality);
-    if (player && pr !== player.engine.renderer.getPixelRatio()) { player.engine.setPixelRatio(pr); player.resize(); }
+    // (Not while a download draws at its own size.)
+    if (player && !player.engine.fixedSize && pr !== player.engine.renderer.getPixelRatio()) { player.engine.setPixelRatio(pr); player.resize(); }
     if (!c.prefetch && ahead) { ahead.job.cancelled = true; ahead = null; }
     prefetchNext();
     // Replanned a moment after the last change (a few scenes clicked off in a row load once).
@@ -554,6 +757,10 @@ function start(client: Client): void {
     // (For tools/bench: the song being readied, and the one being prepared ahead.)
     get preparing() { return preparing; }, get ahead() { return ahead?.job ?? null; },
     get governor() { return governor; }, get governed() { return governed; }, set governed(on: boolean) { governed = on; },
+    // (The download being recorded, and a way to start one without the sheet, for testing.)
+    get download() { return download; },
+    exportMv: (o: Partial<ExportOptions> = {}) => startDownload({ ...loadOptions(), ...o }),
+    get pill() { return pill; },
   };
 }
 

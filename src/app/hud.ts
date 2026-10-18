@@ -9,6 +9,8 @@ const SECTION: Record<SectionLabel, string> = {
   intro: '前奏', verse: '主歌', pre: '预副歌', chorus: '副歌', drop: '高潮', build: '铺垫', break: '间奏', bridge: '桥段', outro: '尾奏',
 };
 
+const HUD_FONT = '"Archivo","BMV Archivo Bold","Noto Sans SC","Microsoft YaHei UI",sans-serif';
+
 export class Hud {
   readonly root = document.createElement('div');
   private plate = document.createElement('div');
@@ -75,6 +77,47 @@ export class Hud {
       this.section.textContent = section;
     }
   }
+
+  /**
+   * The layer drawn into a picture of w × h px (a video's frame, a saved frame), as the page shows it over a 720-px-high
+   * window, whether or not the controls hide it now. `dt`: the frames' step, s (a video's: the layer comes and goes
+   * over 0.3 s of it, as on the page); none: as it stands.
+   */
+  draw(g: CanvasRenderingContext2D, w: number, h: number, dt?: number): void {
+    const target = this.opening ? 0 : 1, step = dt === undefined ? 1 : dt / 0.3;
+    this.alpha = target > this.alpha ? Math.min(target, this.alpha + step) : Math.max(target, this.alpha - step);
+    if (this.alpha <= 0) return;
+    const s = h / 720, poster = this.last.shot?.scene === 'poster';
+    g.save();
+    g.fillStyle = g.strokeStyle = '#fff';
+    // The corner marks.
+    g.globalAlpha = this.alpha * 0.72 * 0.55;
+    g.lineWidth = Math.max(1, Math.round(s));
+    const m = 18 * s, k = 14 * s;
+    g.beginPath();
+    for (const [x, y, dx, dy] of [[m, m, 1, 1], [w - m, m, -1, 1], [m, h - m, 1, -1], [w - m, h - m, -1, -1]]) {
+      g.moveTo(x + dx * k, y);
+      g.lineTo(x, y);
+      g.lineTo(x, y + dy * k);
+    }
+    g.stroke();
+    const text = (t: string, size: number, spacing: number, x: number, y: number, right: boolean, bottom: boolean, alpha: number) => {
+      if (!t || alpha <= 0) return;
+      g.globalAlpha = this.alpha * 0.72 * alpha;
+      g.font = `600 ${size * s}px ${HUD_FONT}`;
+      g.textBaseline = bottom ? 'bottom' : 'top';
+      const gap = spacing * size * s, chars = Array.from(t);
+      let at = right ? w - x - chars.reduce((n, c) => n + g.measureText(c).width + gap, 0) : x;
+      for (const c of chars) { g.fillText(c, at, y); at += g.measureText(c).width + gap; }
+    };
+    // (Runs of spaces show as one, as in the page.)
+    text((this.plate.textContent ?? '').replace(/ +/g, ' '), 11, 0.16, 40 * s, 22 * s, false, false, 1);
+    text(this.counter.textContent ?? '', 13, 0.12, 40 * s, h - 22 * s, false, true, poster ? 0 : 1);
+    text(this.section.textContent ?? '', 11, 0.16, 40 * s, h - 22 * s, true, true, poster ? 0 : 1);
+    text(this.sigil.textContent ?? '', 11, 0.16, 86 * s, 33 * s, true, false, 0.8);
+    g.restore();
+  }
+  private alpha = 0;
 
   dispose(): void { this.root.remove(); }
 }

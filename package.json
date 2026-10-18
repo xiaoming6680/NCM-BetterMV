@@ -10,6 +10,7 @@
     "pack": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-plugin.ps1"
   },
   "dependencies": {
+    "lamejs": "1.2.1",
     "three": "^0.186.0"
   },
   "devDependencies": {

@@ -7,6 +7,7 @@
 | [ALIGNER.md](ALIGNER.md) | 可选的歌词对齐包：流程、效果、打包与发布 |
 | [PERFORMANCE.md](PERFORMANCE.md) | 配置要求、帧耗时与优化、自动画质、准备时间；`tools/bench` |
 | [OBS.md](OBS.md) | OBS 输出：本机服务、歌曲数据格式、对时、已知限制 |
+| [EXPORT.md](EXPORT.md) | MV 页右键菜单；下载 MV：导出选项、逐帧渲染、显卡里打包 NV12、编码程序（Media Foundation）、送帧的限制、兼容模式（MediaRecorder）、实测数据 |
 | [PUBLISHING.md](PUBLISHING.md) | 版本号、构建、CI、GitHub Release、客户端验收 |
 
 代码注释里提到的 `TREATMENT.md`（风格手册）、`FILM.md`（宣传片）、`TESTING.md`（测试记录）是本地文档，不在仓库里。
@@ -23,7 +24,8 @@
 | `src/sigil/` | 每首歌的浑天仪 |
 | `src/render/` | 引擎、后期、镜头、转场、画风、配色、文字 |
 | `src/app/` | 播放器、歌曲准备、自动画质、HUD |
-| `src/plugin/` | 插件入口、网易云接口、界面与设置、更新、对齐包、OBS 输出 |
+| `src/plugin/` | 插件入口、网易云接口、界面与设置、右键菜单、下载 MV（导出面板、送帧、编码程序的客户端）、更新、对齐包、OBS 输出 |
+| `src/export/` | 编码程序 `bettermv-encode.exe` 的 C# 源码（Media Foundation 写 MP4） |
 | `src/obs/` | OBS 页面、歌曲数据格式、本机服务（C#） |
 | `src/dev/` | 浏览器开发页 |
 | `tools/` | 评测、性能测量、示意图渲染、对齐包构建、鼓点拟合 |
