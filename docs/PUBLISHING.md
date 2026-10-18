@@ -18,6 +18,10 @@ bun run plugin   # 装进 BetterNCM 的 plugins_dev，重启网易云生效
 
 `plugins` 里有 BetterMV 的发布包时，`plugins_dev` 里的开发构建不会加载（见 [CLIENT.md](CLIENT.md)“插件包的解压与更新”）。
 
+## README 的图
+
+`bun film/render.ts --images` 渲染封面、场景墙、设置页和控制栏（场景墙要等新场景都有 `public/previews/` 示意图）。`bun tools/readme-media.ts` 在开发页 `settings.html?mv&demo` 上录插件自己的界面（控制栏、右键菜单、下载 MV、设置、等待页）。`--sketches` 录安装三步和从网易云点 MV（install.gif、open.gif），用的是教程版宣传片的示意窗口 `film/readme.html`，它和宣传片的源文件还没进仓库。开头和功能介绍的 MV 片段（hero、feat-*）、风格和画风截图，由开发页渲染的片段用 ffmpeg 转成（15 帧/秒，880 或 720 宽）。界面动图存 GIF（背景静止，只存变化的像素），MV 画面存动画 WebP（每帧都在变，GIF 要大 4–7 倍）。都需要冻结的开发服务器（`BMV_SERVER`）。
+
 ## CI
 
 工作流 “Build plugin”（`.github/workflows/`）：类型检查 → 打包 → 检查包内容（上面列出的必需文件、示意图不少于 21 张）→ `bettermv.js`、`obs.js` 中不得出现“《”→ 上传 `.plugin` 和 `SHA256SUMS.txt`。

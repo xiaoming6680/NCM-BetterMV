@@ -50,7 +50,7 @@ Every song gets its own MV, made from that song's cover and that song's structur
 ## Evidence on Hand
 
 - Scene preview images: public/previews/*.webp (one per scene and look).
-- README imagery: docs/images/cover.jpg, scenes.jpg, controls.jpg, settings.jpg (rendered from film/; text baked into them needs a re-render).
+- README imagery: docs/images/ — MV clips as animated WebP (hero, feat-*), style and look stills, UI GIFs recorded by tools/readme-media.ts, and the stills from `film/render.ts --images` (the README uses scenes.jpg and settings.jpg of them). Text baked into them needs a re-render (see docs/PUBLISHING.md).
 - No testimonials, user counts or benchmarks exist; none may be invented.
 
 ## Product Principles
