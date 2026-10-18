@@ -16,7 +16,7 @@
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { rng, smooth, clamp01, lerp, freeGraph, finish } from './types.ts';
-import { LyricBlocks, Stands, voiceFor } from './lyricBlock.ts';
+import { LyricBlocks, Stands, boxedBy, voiceFor } from './lyricBlock.ts';
 import { INK_BLACK, ricePaper } from './ink.ts';
 import type { Music } from '../director/music.ts';
 import type { LyricLine, SectionLabel } from '../types.ts';
@@ -32,6 +32,8 @@ const GRID = 24;
 const CELL = S / GRID;
 /** Paint thickness → height: piles flatten out towards this. */
 const PILE = 1.6;
+/** How far the brush's glare reaches, in its halo's size (the halo is still at 0.4 of its strength there). */
+const GLARE = 0.22;
 
 const v3 = (c: THREE.Color, k = 1) => `vec3(${(c.r * k).toFixed(5)},${(c.g * k).toFixed(5)},${(c.b * k).toFixed(5)})`;
 /** A light's colour: the hue of c at full strength. */
@@ -613,7 +615,8 @@ export class CanvasScene implements MvScene {
   private t = 0;
   private u: Record<string, THREE.IUniform>;
   private skyU: Record<string, THREE.IUniform>;
-  private brush: THREE.Mesh;
+  private brush: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
+  private core: THREE.Color;
   private halo: THREE.Mesh;
   private blocks: LyricBlocks;
   /** Lines stand over the canvas ahead, in turn high left and lower right. */
@@ -641,6 +644,7 @@ export class CanvasScene implements MvScene {
     this.plan = planned.plan;
     this.stamps = stampsOf(this.plan, music, planned.lifts, seed, this.soft);
     this.duration = music.duration;
+    this.boxed = boxedBy(music);
 
     // The paint maps: colour (laid over), and thickness with when it was last painted (both the most).
     const opts = { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false };
@@ -707,8 +711,8 @@ export class CanvasScene implements MvScene {
     this.scene.add(sky);
 
     // The brush: a point of light with a soft halo.
-    const core = hue(palette.paper.clone().lerp(palette.signal, 0.2));
-    this.brush = new THREE.Mesh(new THREE.SphereGeometry(0.45, 16, 12), new THREE.MeshBasicMaterial({ color: core.clone().multiplyScalar(2.2) }));
+    this.core = hue(palette.paper.clone().lerp(palette.signal, 0.2)).multiplyScalar(2.2);
+    this.brush = new THREE.Mesh(new THREE.SphereGeometry(0.45, 16, 12), new THREE.MeshBasicMaterial({ color: this.core.clone() }));
     this.halo = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
       uniforms: { uColor: { value: hue(palette.signal.clone().lerp(palette.paper, 0.4)) }, uI: { value: 1 } },
       vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
@@ -763,6 +767,15 @@ export class CanvasScene implements MvScene {
     renderer.autoClear = auto;
     this.drawn = t;
   }
+
+  private probe = { x: 0, z: 0, dx: 0, dz: 0, up: 0, w: 0 };
+  private boxed: (t: number) => boolean;
+  /** Where the brush's light is at t and how far its glare reaches (its halo without the kicks), for the stands. */
+  private glareAt = (t: number, out: THREE.Vector3): number => {
+    const b = this.brushAt(t, this.probe);
+    out.set(b.x, b.up + 0.9, b.z);
+    return GLARE * (5 + b.w * 0.06);
+  };
 
   /** The brush at t, interpolated. */
   private brushAt(t: number, out: { x: number; z: number; dx: number; dz: number; up: number; w: number }) {
@@ -855,7 +868,6 @@ export class CanvasScene implements MvScene {
     this.halo.position.copy(tip);
     this.halo.quaternion.copy(cam.quaternion);
     this.halo.scale.setScalar(5 + kick * 3 + b.w * 0.06);
-    (this.halo.material as THREE.ShaderMaterial).uniforms.uI.value = 0.4 + kick * 0.5;
     const r = this.revealAt(t, shot);
     // (On paper there is no point of light: the wet head of the stroke shows the brush.)
     this.brush.visible = this.halo.visible = r < 0.98 && !this.ink;
@@ -869,14 +881,22 @@ export class CanvasScene implements MvScene {
     u.uGlow.value = (loud ? 0.6 : 0.2) + 0.4 * music.env('rms', t);
 
     // The words: each line one block standing over the canvas ahead, where the camera following the brush will have
-    // it in view while it is sung (lyricBlock.ts); it comes up to it as the line ends.
-    const view = { reach: 24, far: 34, fov: cam.fov, aspect: cam.aspect, em: this.soft ? 0.064 : 0.068 };
+    // it in view while it is sung (lyricBlock.ts); it comes up to it as the line ends. The camera keeps the brush in
+    // the middle of the frame, just under the blocks' lanes: a block stands clear of its light where it can (the
+    // brush white-hot behind a translation took half of it away), and where it can't, the light draws in behind it.
+    const view = { reach: 24, far: 34, fov: cam.fov, aspect: cam.aspect, em: this.soft ? 0.064 : 0.068, clear: this.ink ? undefined : this.glareAt, boxed: this.boxed };
     const pose = (time: number, pp: THREE.Vector3, qq: THREE.Quaternion) => this.pose(time, music, shot, pp, qq);
     this.blocks.update(ctx.lyrics, t, sec.energy, (st, time, root, leave, size) => {
       const s = this.stands.get(shot.start, st, leave, pose, 2.3, view, size);
       s.apply(time, root);
       return smooth((s.depth(time) - 6) / 5);
     });
+    // Behind a word the light draws in to a small spark: the halo goes, the core shrinks and half dims (dimmed alone
+    // it was a grey ball).
+    const glare = this.blocks.glare(cam, tip, GLARE * this.halo.scale.x);
+    this.brush.scale.multiplyScalar(1 - 0.5 * glare);
+    this.brush.material.color.copy(this.core).multiplyScalar(1 - 0.5 * glare);
+    (this.halo.material as THREE.ShaderMaterial).uniforms.uI.value = (0.4 + kick * 0.5) * (1 - 0.9 * glare);
 
     ctx.fx.bloom = this.ink ? 0.04 : 0.25;
     ctx.fx.vignette = this.ink ? 0.25 : 0.55;

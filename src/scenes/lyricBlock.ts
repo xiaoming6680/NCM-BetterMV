@@ -137,6 +137,9 @@ interface Block {
   rowUp: Array<{ word: number; up: number }>;
 }
 
+const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, 1]] as const;
+const tmpG = new THREE.Vector3(), tmpC = new THREE.Vector3();
+
 // ── Written in ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -418,6 +421,42 @@ export class LyricBlocks {
   }
 
   /**
+   * How far a light at `at`, its glare reaching `radius` world units, lies behind (or before) the words on screen as
+   * `camera` sees them: 1 over a word shown (or a character of the translation), falling to 0 a glare's reach off it,
+   * by how much it shows. A plate whose bright light can cross the words (the canvas's brush) dims it by this, so the
+   * line sung reads. (Word by word: by the block's box, the light dimmed in the blank beside a short row.)
+   */
+  glare(camera: THREE.PerspectiveCamera, at: THREE.Vector3, radius: number): number {
+    const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+    const p = tmpG.copy(at).applyMatrix4(camera.matrixWorldInverse);
+    if (-p.z < 0.1) return 0;
+    const px = p.x / -p.z, py = p.y / -p.z, reach = Math.max(1e-4, radius / -p.z + 0.04 * tan);
+    let out = 0;
+    const near = (m: TextMesh) => {
+      const shown = m.visible ? m.material.opacity : 0;
+      if (shown < 0.02 || out >= shown) return;
+      m.updateWorldMatrix(true, false);
+      // The word's ink box: its advance, an em high (the plane's padding is the halo).
+      const g = m.geometry.parameters, adv = m.userData.width as number, em = (g.height - g.width + adv) / 1.24 * 0.8;
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (const [sx, sy] of CORNERS) {
+        const c = tmpC.set(adv / 2 + (sx * adv) / 2, (sy * em) / 2, 0).applyMatrix4(m.matrixWorld).applyMatrix4(camera.matrixWorldInverse);
+        if (-c.z < 0.1) return;
+        x0 = Math.min(x0, c.x / -c.z); x1 = Math.max(x1, c.x / -c.z);
+        y0 = Math.min(y0, c.y / -c.z); y1 = Math.max(y1, c.y / -c.z);
+      }
+      const off = Math.hypot(Math.max(x0 - px, 0, px - x1), Math.max(y0 - py, 0, py - y1));
+      out = Math.max(out, smooth(1 - off / reach) * shown);
+    };
+    for (const b of this.blocks.values()) {
+      if (!b.root.visible) continue;
+      for (const g of b.glyphs) near(g.mesh);
+      for (const g of b.trans) near(g.mesh);
+    }
+    return out;
+  }
+
+  /**
    * The block's words crumbling into dust where they stand now: points over the lit pixels of each word shown, set
    * drifting the plate's way (`dust`), a little apart, in the paper colour with a few sparks of the signal colour.
    */
@@ -574,10 +613,25 @@ export interface StandOptions {
   lag?: number;
   /** Standing in the world but turned to face the camera as it is now (a camera that rolls: the words stay level). */
   level?: boolean;
+  /**
+   * A light the words keep clear of on screen while sung (the canvas's brush): where it is at t (into `out`), and how
+   * far its glare reaches, world units. Where the block's own lane would have the light behind the words, it stands
+   * higher or across (the light white-hot behind a translation took half of it away).
+   */
+  clear?: (t: number, out: THREE.Vector3) => number;
+  /** Whether the letterbox may be down at t (boxedBy): a lane moved off the light stays clear of its bars. */
+  boxed?: (t: number) => boolean;
 }
 
+/**
+ * The sections the director may put in letterbox (letterboxed in director.ts, by style: a ballad's intro, bridge and
+ * outro, the others' intro, break and outro), for StandOptions.boxed.
+ */
+const BOXED = new Set(['intro', 'bridge', 'break', 'outro']);
+export const boxedBy = (music: Music) => (t: number) => BOXED.has(music.section(t).label);
+
 const V = () => new THREE.Vector3();
-const tmpP = V(), tmpF = V(), tmpR = V(), tmpU = V(), tmpQ = new THREE.Quaternion(), tmpB = V();
+const tmpP = V(), tmpF = V(), tmpR = V(), tmpU = V(), tmpQ = new THREE.Quaternion(), tmpB = V(), tmpL = V();
 
 /** A smooth max(0, x): zero below −w, x above w, a parabola between (no kink, so nothing it drives jolts). */
 const softPos = (x: number, w: number) => (x <= -w ? 0 : x >= w ? x : ((x + w) * (x + w)) / (4 * w));
@@ -595,6 +649,8 @@ export class Stand {
   readonly quat = new THREE.Quaternion();
   readonly ahead = new THREE.Vector3();
   follow = false;
+  /** Following: where in the frame the block rides (StandOptions.lane, or another kept clear of the light). */
+  private lane: [number, number];
   /** Scale for a block built at `em` world units a word. */
   scale = 1;
 
@@ -603,6 +659,7 @@ export class Stand {
   private dirFrom = V();
 
   constructor(private pose: PoseFn, private from: number, to: number, private o: StandOptions, em: number, size: [number, number] = [0, 0]) {
+    this.lane = o.lane;
     pose(from, this.camFrom, tmpQ);
     this.dirFrom.set(0, 0, -1).applyQuaternion(tmpQ);
     const tan = Math.tan(THREE.MathUtils.degToRad(o.fov) / 2), vh = 2 * o.reach * tan;
@@ -611,34 +668,81 @@ export class Stand {
     const narrow = Math.min(1, Math.max(0.62, o.aspect / (16 / 9)));
     this.scale = Math.min((o.em * narrow * vh) / em, (0.86 * vh * o.aspect) / Math.max(1e-3, size[0]), (0.5 * vh) / Math.max(1e-3, size[1]));
     const hw = (size[0] * this.scale) / 2, hh = (size[1] * this.scale) / 2;
-    let best = -Infinity;
-    const bestA = V(), bestF = V(), bestQ = new THREE.Quaternion();
-    for (const k of o.follow ? [] : [1, 0.6, 0.3, 0]) {
-      const ref = from + (to - from) * k;
-      pose(ref, tmpP, tmpQ);
-      tmpF.set(0, 0, -1).applyQuaternion(tmpQ);
-      tmpR.set(1, 0, 0).applyQuaternion(tmpQ);
-      tmpU.set(0, 1, 0).applyQuaternion(tmpQ);
-      const a = V().copy(tmpP).addScaledVector(tmpF, o.reach).addScaledVector(tmpR, o.lane[0] * vh).addScaledVector(tmpU, o.lane[1] * vh);
-      const f = tmpF.clone(), q = tmpQ.clone();
-      // The worst margin over the line: the whole block inside the frame (a hair in from its edges), and not too near.
-      let worst = Infinity;
+    /**
+     * The stand as set now over the line: the worst margin of the whole block inside the frame (a hair in from its
+     * edges, `top` of the half height up and down; −1 too near), and the worst with the light's glare (`clear`)
+     * counted against it.
+     */
+    const judge = (boxed = false): { frame: number; worst: number; glare: boolean } => {
+      let worst = Infinity, frame = Infinity, glare = false;
       for (let i = 0; i <= 6; i++) {
         const tt = from + ((to - from) * i) / 6;
-        this.anchor.copy(a); this.ahead.copy(f);
         const b = this.place(tt, tmpB);
         pose(tt, tmpP, tmpQ);
+        tmpF.set(0, 0, -1).applyQuaternion(tmpQ);
+        tmpR.set(1, 0, 0).applyQuaternion(tmpQ);
+        tmpU.set(0, 1, 0).applyQuaternion(tmpQ);
         const d = b.sub(tmpP);
-        const z = d.dot(tmpF.set(0, 0, -1).applyQuaternion(tmpQ));
-        if (z < o.reach * 0.35) { worst = -1; break; }
-        const x = (Math.abs(d.dot(tmpR.set(1, 0, 0).applyQuaternion(tmpQ))) + hw) / (z * tan * o.aspect);
-        const y = (Math.abs(d.dot(tmpU.set(0, 1, 0).applyQuaternion(tmpQ))) + hh) / (z * tan);
-        worst = Math.min(worst, 1 - Math.max(x / 0.95, y / 0.9));
+        const z = d.dot(tmpF);
+        if (z < o.reach * 0.35) return { frame: -1, worst: -1, glare };
+        const bx = d.dot(tmpR), by = d.dot(tmpU);
+        const x = (Math.abs(bx) + hw) / (z * tan * o.aspect);
+        const y = (Math.abs(by) + hh) / (z * tan);
+        let m = 1 - Math.max(x / 0.95, y / (boxed && o.boxed?.(tt) ? 0.72 : 0.9));
+        frame = Math.min(frame, m);
+        if (o.clear) {
+          // In half view heights: the light's glare from the block's edge.
+          const reach = o.clear(tt, tmpL), l = tmpL.sub(tmpP), lz = l.dot(tmpF);
+          if (lz > 0.3) {
+            const gx = Math.abs(l.dot(tmpR) / lz - bx / z) - hw / z, gy = Math.abs(l.dot(tmpU) / lz - by / z) - hh / z;
+            const off = (Math.hypot(Math.max(0, gx), Math.max(0, gy)) - reach / lz) / tan;
+            if (off < 0.04) { glare = true; m -= 3 * (0.04 - off); }
+          }
+        }
+        worst = Math.min(worst, m);
       }
-      if (worst > best + 0.05) { best = worst; bestA.copy(a); bestF.copy(f); bestQ.copy(q); }
+      return { frame, worst, glare };
+    };
+    // The block's own lane first; with a light to keep clear of, the others (higher, across, lower) only when that one
+    // has it behind the words; a lane further from the middle than its own, where the letterbox may be down
+    // (`boxed`), only clear of its bars (12.8% of the height each: raised, the first row went under them). A stand
+    // the frame can't hold scores below any the light glares on: the glare alone never sends the block to ride with
+    // the camera.
+    const [lx, ly] = o.lane;
+    const lanes: Array<[number, number]> = [[lx, ly], [lx, ly + 0.08], [-lx, ly], [-lx, ly + 0.08], [lx, ly + 0.16], [-lx, ly + 0.16], [lx, ly - 0.1], [-lx, ly - 0.1]];
+    const boxed = (n: number) => Math.abs(lanes[n][1]) > Math.abs(ly) + 1e-6;
+    let best = -Infinity, frame = -Infinity, glared = false;
+    const bestA = V(), bestF = V(), bestQ = new THREE.Quaternion();
+    for (const [n, lane] of lanes.entries()) {
+      if (n && !(o.clear && glared)) break;
+      for (const k of o.follow ? [] : [1, 0.6, 0.3, 0]) {
+        pose(from + (to - from) * k, tmpP, tmpQ);
+        tmpF.set(0, 0, -1).applyQuaternion(tmpQ);
+        tmpR.set(1, 0, 0).applyQuaternion(tmpQ);
+        tmpU.set(0, 1, 0).applyQuaternion(tmpQ);
+        const a = V().copy(tmpP).addScaledVector(tmpF, o.reach).addScaledVector(tmpR, lane[0] * vh).addScaledVector(tmpU, lane[1] * vh);
+        const f = tmpF.clone(), q = tmpQ.clone();
+        this.anchor.copy(a); this.ahead.copy(f);
+        const j = judge(boxed(n)), score = j.frame < 0 ? j.frame - 10 : j.worst;
+        if (score > best + 0.05) { best = score; frame = j.frame; glared = j.glare; bestA.copy(a); bestF.copy(f); bestQ.copy(q); }
+      }
     }
     this.anchor.copy(bestA); this.ahead.copy(bestF); this.quat.copy(bestQ);
-    this.follow = !!o.follow || best < 0;
+    this.follow = !!o.follow || frame < 0;
+    // Riding with the camera, the block keeps its place in the frame: its own lane, or the one the light stays off.
+    // (The canvas's side and front cameras, which track across or back away from anything standing ahead, ride most
+    // lines with them, a little above the brush they keep in the middle — under the translation.)
+    if (this.follow && o.clear) {
+      let pick = 0;
+      best = -Infinity;
+      for (const [n, lane] of lanes.entries()) {
+        if (n && !glared) break;
+        this.lane = lane;
+        const j = judge(boxed(n)), score = j.frame < 0 ? j.frame - 10 : j.worst;
+        if (score > best + 0.05) { best = score; glared = j.glare; pick = n; }
+      }
+      this.lane = lanes[pick];
+    }
   }
 
   /** Whether `pose` is still the camera this stand was set for (the same place and way of looking at its start). */
@@ -653,8 +757,8 @@ export class Stand {
       this.pose(t - (this.o.lag ?? 0), tmpP, tmpQ);
       const vh = 2 * this.o.reach * Math.tan(THREE.MathUtils.degToRad(this.o.fov) / 2);
       return out.copy(tmpP).addScaledVector(tmpF.set(0, 0, -1).applyQuaternion(tmpQ), this.o.reach)
-        .addScaledVector(tmpR.set(1, 0, 0).applyQuaternion(tmpQ), this.o.lane[0] * vh)
-        .addScaledVector(tmpU.set(0, 1, 0).applyQuaternion(tmpQ), this.o.lane[1] * vh);
+        .addScaledVector(tmpR.set(1, 0, 0).applyQuaternion(tmpQ), this.lane[0] * vh)
+        .addScaledVector(tmpU.set(0, 1, 0).applyQuaternion(tmpQ), this.lane[1] * vh);
     }
     this.pose(t, tmpP, tmpQ);
     const dist = tmpB.copy(this.anchor).sub(tmpP).dot(this.ahead);

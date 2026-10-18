@@ -11,13 +11,16 @@ import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { clamp01, inOutCubic, lerp, punch, rng, smooth } from './types.ts';
 import { Accents } from './hits.ts';
-import { LyricBlocks, Stands, voiceFor } from './lyricBlock.ts';
+import { LyricBlocks, Stands, boxedBy, voiceFor } from './lyricBlock.ts';
 import { passMesh } from '../render/engine.ts';
 import { INK_BLACK, ricePaper } from './ink.ts';
 
 const SHAPE = 96, DETAIL = 32;
 /** The cloud slab (m). */
 const BASE = 2250, TOP = 2950;
+/** The sun (a disc of 6.5°) for the words to keep clear of: a point this far along its direction, its glare reaching
+ * this far for each unit away (8.5°: the disc and the brightest of its haze). */
+const SUN_AWAY = 10000, SUN_GLARE = Math.tan(THREE.MathUtils.degToRad(8.5));
 
 const COMMON = /* glsl */ `
   float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
@@ -317,10 +320,12 @@ export class Clouds implements MvScene {
   private scale = 0.5;
   private size = new THREE.Vector2(1920, 1080);
   private shot: Shot | null = null;
+  private boxed: (t: number) => boolean;
 
   constructor(private init: SceneInit, private look: 'pulse' | 'ballad' | 'ink' = 'pulse') {
     const { palette } = init;
     this.speed = look === 'pulse' ? 160 : 85;
+    this.boxed = boxedBy(init.music);
     const ink = look === 'ink';
     // The sun low ahead, a little to one side (the camera flies towards −z).
     const side = (rng(Math.round(init.music.duration * 1000))() < 0.5 ? -1 : 1) * 0.22;
@@ -476,9 +481,12 @@ export class Clouds implements MvScene {
     // The words: each line one block standing in the sky ahead (lyricBlock.ts). The flight is fast: a long line is
     // carried ahead until it is within `far`, then stays, and the camera comes up to it as the line ends and flies on
     // past it.
-    const view = { reach: 170, far: 240, fov: this.camera.fov, aspect: this.camera.aspect, em: 0.076 };
+    // A line keeps clear of the sun (the cover, low ahead: a translation in front of it was lost in it), as the
+    // canvas's words keep clear of its brush.
     const posed = { pos: new THREE.Vector3(), quat: new THREE.Quaternion() };
     const at = (time: number, pp: THREE.Vector3, qq: THREE.Quaternion) => { this.pose(time, shot, posed); pp.copy(posed.pos); qq.copy(posed.quat); };
+    const sun = (time: number, out: THREE.Vector3) => { this.pose(time, shot, posed); out.copy(posed.pos).addScaledVector(this.sunDir, SUN_AWAY); return SUN_AWAY * SUN_GLARE; };
+    const view = { reach: 170, far: 240, fov: this.camera.fov, aspect: this.camera.aspect, em: 0.076, clear: sun, boxed: this.boxed };
     this.blocks.update(ctx.lyrics, t, shot.section.energy, (st, time, root, leave, size) => {
       const s = this.stands.get(shot.start, st, leave, at, 13, view, size);
       s.apply(time, root);
