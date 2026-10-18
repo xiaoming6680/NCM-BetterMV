@@ -6,6 +6,7 @@
 // The pack is not part of the plugin: about 400 MB, downloaded from the project's releases when the user asks for it.
 import type { LyricLine } from '../types.ts';
 import { syllables } from '../lyrics/parse.ts';
+import { execArg } from './exec.ts';
 
 const RELEASE = 'https://github.com/xiaoming6680/NCM-BetterMV/releases/download/aligner-v1/';
 /** The pack format this plugin speaks (the pack's version.json). */
@@ -141,7 +142,7 @@ export async function removePack(): Promise<void> {
   const dir = await packDir();
   try {
     if (await betterncm.fs.exists(`${dir}\\installed.json`)) await betterncm.fs.remove(`${dir}\\installed.json`);
-    await betterncm.app.exec(`cmd /c rmdir /s /q "${dir}"`, false, false);
+    await betterncm.app.exec(`cmd /c rmdir /s /q ${execArg(dir)}`, false, false);
     for (let i = 0; i < 40 && (await betterncm.fs.exists(dir)); i++) await sleep(250);
   } catch { /* gone or not, it is no longer installed */ }
   set({ kind: 'none' });
@@ -205,7 +206,8 @@ export function alignSong(id: number, lines: LyricLine[], duration: number, audi
     await betterncm.fs.writeFileText(jobPath, JSON.stringify({
       version: 1, id, audio: pcmPath, rate: 16000, channels: 1, out, progress, lines: jobLines(lines, duration),
     }));
-    await betterncm.app.exec(`cmd /c start "" /b "${dir}\\python\\pythonw.exe" "${dir}\\align.py" "${jobPath}"`, false, false);
+    // (Started directly, without a window: BetterNCM hides it.)
+    await betterncm.app.exec(`"${dir}\\python\\pythonw.exe" ${execArg(`${dir}\\align.py`)} ${execArg(jobPath)}`, false, false);
     const t0 = Date.now();
     while (Date.now() - t0 < JOB_TIMEOUT_MS) {
       await sleep(800);

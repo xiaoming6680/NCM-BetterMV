@@ -4,6 +4,7 @@
 // BetterMV package there, and asks the project's releases for a newer one, which it can download into place (the next
 // start of NetEase runs it).
 import { strFromU8, unzipSync } from 'three/examples/jsm/libs/fflate.module.js';
+import { execArg } from './exec.ts';
 
 const REPO = 'xiaoming6680/NCM-BetterMV';
 const SLUG = 'ncm-better-mv';
@@ -253,8 +254,12 @@ export const releasePage = (version: string) => `https://github.com/${REPO}/rele
 
 /** BetterNCM's plugins folder, where a package downloaded by hand goes. */
 export const pluginsFolder = async () => `${await dataPath()}\\plugins`;
+/**
+ * BetterNCM's exec hides the window unless asked, and drops plain quotes (exec.ts): the path goes with its quotes
+ * escaped (explorer given a path with a comma unquoted opens Documents), and the window is shown.
+ */
 export async function openPluginsFolder(): Promise<void> {
-  try { await betterncm.app.exec(`explorer "${await pluginsFolder()}"`); } catch (e) { console.warn('[BetterMV] 无法打开插件文件夹', e); }
+  try { await betterncm.app.exec(`explorer ${execArg(await pluginsFolder())}`, false, true); } catch (e) { console.warn('[BetterMV] 无法打开插件文件夹', e); }
 }
 
 const nativeApp = () => (typeof betterncm_native === 'undefined' ? undefined : betterncm_native?.app);

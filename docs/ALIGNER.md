@@ -12,7 +12,7 @@
 
 ## 流程
 
-1. 插件（`src/plugin/aligner.ts`）用 `OfflineAudioContext` 把整首歌解码成 16 kHz 单声道 16 位 PCM，连同每句的时间戳、下一句的时间戳和句内的词写成任务文件，`cmd /c start "" /b pythonw.exe align.py <任务>` 启动，每 0.8 s 查一次结果文件。对齐进程是低优先级。
+1. 插件（`src/plugin/aligner.ts`）用 `OfflineAudioContext` 把整首歌解码成 16 kHz 单声道 16 位 PCM，连同每句的时间戳、下一句的时间戳和句内的词写成任务文件，用 `app.exec` 直接启动 `pythonw.exe align.py <任务>`（不经 `cmd`，路径写法见 [CLIENT.md](CLIENT.md) 的“BetterNCM 的文件接口”），每 0.8 s 查一次结果文件。对齐进程是低优先级。
 2. 对齐包（`tools/aligner/fa.py`）：
    - 模型：Meta 的 MMS-FA（`torchaudio.pipelines.MMS_FA`，wav2vec2，3 亿参数，按拉丁字母输出每帧概率），导出 ONNX，矩阵乘法量化为 int8：1.26 GB → 355 MB，精度不变。卷积也量化在 CPU 上反而慢一倍多，没用。
    - 文字转字母：汉字用 pypinyin 转无调拼音，假名、韩文按表转写，拉丁字母原样。转不出字母的词（数字等）不参与，事后按音节插到前后词之间。括号里的词（和声）不参与：强制对齐假设一个人逐字演唱，和声会把整组拖歪。

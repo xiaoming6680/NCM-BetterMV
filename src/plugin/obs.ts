@@ -3,6 +3,7 @@
 // playing track and where NetEase is playing, and reads how many OBS pages are connected and shown.
 import { OBS_PORT, songFile, type ObsState } from '../obs/snapshot.ts';
 import type { PreparedSong } from '../app/prepare.ts';
+import { execArg } from './exec.ts';
 
 export interface ObsStatus {
   /** off: output off. starting: the server is being started. on: it answers. error: it couldn't be started (why). */
@@ -134,7 +135,8 @@ class ObsOutput {
     // (A copy still held by a server that is ending stays as it was: the same program, started all the same.)
     await betterncm.fs.mkdir(dir).catch(() => false);
     await betterncm.fs.writeFile(exe, await betterncm.fs.readFile(plugin_ + '\\obs\\bettermv-obs.exe')).catch(() => false);
-    await betterncm.app.exec(`cmd /c start "" /b "${exe}" --port ${this.port} --root "${plugin_}" --key ${this.key} --version ${VERSION}`, false, false);
+    // (Started directly, without a window: BetterNCM hides it.)
+    await betterncm.app.exec(`"${exe}" --port ${this.port} --root ${execArg(plugin_)} --key ${this.key} --version ${VERSION}`, false, false);
   }
 
   /** The server's status into ours. One that won't tell us how it stands doesn't know our key (left from before): an error. */

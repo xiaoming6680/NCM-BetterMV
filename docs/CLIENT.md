@@ -74,7 +74,15 @@
 - 原生端列目录出错时抛异常，httplib 回 500 空响应，前端报 `SyntaxError: Unexpected end of JSON input`（读不存在的文件夹就是这样）。插件列缓存目录失败时改走在线获取，两边都失败才报错。
 - 路径第二个字符不是 `:` 时按数据目录的相对路径处理，`\NAS\…` 这类网络路径会被拼错。`readFileText` 读不存在的文件返回空字符串，不报错。
 - 数据目录 `/local` 和 `mount_dir` 挂出的目录不需要 API Key，但端口每次启动都变。
-- `fs.writeFile(path, blob)` 以表单上传，大文件可用；`fs.unzip(zip, dest)` 原生解压，返回是否成功；`app.exec(cmd, elevate, showWindow)` 启动后立即返回。
+- `fs.writeFile(path, blob)` 以表单上传，大文件可用（实测 107 MB 的 MP4 正常）；`fs.unzip(zip, dest)` 原生解压，返回是否成功；`app.exec(cmd, elevate, showWindow)` 启动后立即返回。
+- `app.exec` 的原生实现是 `src/utils/utils.cpp` 的 `util::exec`（已装的 `msimg32.dll` 同样导入 `CommandLineToArgvW`、`ShellExecuteExW`；前端只在 `showWindow` 为真时加 `?_showWindow`）：用 `CommandLineToArgvW` 拆开命令，第一项作程序，其余各项去掉引号后以空格拼成参数，交给 `ShellExecuteExW`；`showWindow` 不为真时窗口隐藏（`SW_HIDE`），工作目录是网易云进程的当前目录。所以：
+  - 打开文件夹要传 `showWindow = true`，否则文件夹在隐藏窗口里打开，看上去没有反应。
+  - 要让程序收到引号，就写转义的引号：`explorer "\"C:\a b,c\plugins\""`，`explorer /select,"\"C:\a b,c\歌 名.mp4\""`（打开所在文件夹并选中文件）。普通引号会被去掉：含空格的路径交给 explorer 还能打开，含逗号的打开“文档”（explorer 以逗号分隔参数）；交给 `cmd` 的路径有空格就被拆开，`cmd /c rmdir /s /q "D:\Games 2\x"` 删的是 `D:\Games` 和相对路径 `2\x`。程序本身（第一项）用普通引号：`CommandLineToArgvW` 读第一项时直到下一个引号为止，不处理转义。转义引号里的路径结尾不能是反斜杠，否则会把后面的引号转义掉。
+  - 反斜杠丢失的路径（如 `E:CloudMusicBetterMV`，在命令行里写 CDP 表达式时容易被转义掉）也打开“文档”。
+  - 带普通引号和不带引号，`CommandLineToArgvW` 拆出的各项相同，`ShellExecuteExW` 收到的调用也相同。2026-10-18 一次不带引号的 `explorer E:\…` 之后网易云主进程失去响应，原因不在写法。
+  - 以上先在网易云外用同样的调用步骤复现（P/Invoke `CommandLineToArgvW` + `ShellExecuteExW`），再在网易云 3.1.37 + BetterNCM 1.3.4 里用 CDP 实测（2026-10-18），结果一致：`explorer "C:\betterncm\plugins"` 不传 `showWindow` 时，在隐藏窗口里打开了正确的文件夹；转义引号加 `showWindow = true`，正确且可见，路径含空格、逗号、中文也一样；普通引号的路径含逗号时打开“文档”；`explorer /select,"\"…\歌 名,A.mp4\""` 选中了这个文件；`cmd /c echo ok> "\"…\out.txt\""` 写出了文件。网易云没有失去响应。
+  - 插件的写法：路径参数都经 `src/plugin/exec.ts` 的 `execArg`（转义引号，去掉结尾的反斜杠）。更新失败时的“打开插件文件夹”（`update.ts` 的 `openPluginsFolder`）是 `explorer <路径>`，传 `showWindow = true`；删除对齐包是 `cmd /c rmdir /s /q <路径>`；`pythonw.exe`（`aligner.ts`）、`bettermv-obs.exe`（`obs.ts`）和 `bettermv-encode.exe`（`encoder.ts`）不经 `cmd /c start`，直接作程序启动，窗口由 `SW_HIDE` 隐藏。数据目录含空格、逗号、中文和 `&^!()'` 时，在网易云外复现：删除只删对齐包文件夹，`pythonw` 和 OBS 服务收到的参数完整。交给 `cmd` 的路径里 `%名称%` 仍会被展开（数据目录名带 `%TEMP%` 这类写法时对齐包删不掉）。
+- `betterncm.ncm.openUrl('file:///…')` 什么也不打开。
 - 网易云读歌、对齐时文件接口会很慢：读一个 35 字节的文件实测 1.8–15 s。
 - `betterncm.ncm.openUrl` 走 `channel.call('os.navigateExternal')`，在 3.x 上可用，用系统浏览器打开。
 
