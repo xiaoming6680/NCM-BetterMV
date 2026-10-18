@@ -21,7 +21,7 @@ export interface LineState {
   /** 0..1 fade-out once the line is over (1 = gone). */
   exit: number;
   words: WordState[];
-  /** 0..1 how much of the translation to reveal (it has no word times, so it follows the line). */
+  /** 0..1 how much of the translation to reveal (it has no word times: typed out as the line begins). */
   translationProgress: number;
 }
 
@@ -66,9 +66,12 @@ export class LyricTrack {
       progress: t < word.start ? 0 : t >= word.end ? 1 : (t - word.start) / Math.max(1e-3, word.end - word.start),
     }));
     const sungEnd = line.words.length ? line.words[line.words.length - 1].end : line.end;
+    // The translation is typed out over the line's first quarter (0.4–1 s), not over the whole line: spread over the
+    // line it was whole only as the line ended, too late to read.
+    const typing = Math.min(1, Math.max(0.4, (sungEnd - line.start) * 0.25));
     return {
       line, index: i, age: t - line.start, exit, words,
-      translationProgress: Math.max(0, Math.min(1, (t - line.start) / Math.max(0.4, sungEnd - line.start))),
+      translationProgress: Math.max(0, Math.min(1, (t - line.start) / typing)),
     };
   }
 
