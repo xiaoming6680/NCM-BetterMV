@@ -121,9 +121,10 @@ export class MvPlayer {
    * cycling through the given camera setups; `forceLook` (development) puts every section but the drops in that look.
    * `lyricDelay`: seconds this song's words show later (negative: earlier), the user's per-song setting. `retake`
    * (development): rewrites the planned shots before the scenes are built (a film's own cuts, film/reel.ts).
+   * `exposure`: seconds each plate has been on screen over the plays so far (planShots), or none (a fixed arrangement).
    */
-  load(song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId> = new Set(), only?: { scene: SceneId; variants: string[] }, forceLook?: LookId | 'none', lyricDelay = 0, seed?: number, retake?: (shots: Shot[], music: Music) => Shot[]): void {
-    const steps = this.build(song, style, off, only, forceLook, lyricDelay, seed, retake);
+  load(song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId> = new Set(), only?: { scene: SceneId; variants: string[] }, forceLook?: LookId | 'none', lyricDelay = 0, seed?: number, retake?: (shots: Shot[], music: Music) => Shot[], exposure?: ReadonlyMap<string, number>): void {
+    const steps = this.build(song, style, off, only, forceLook, lyricDelay, seed, retake, exposure);
     while (!steps.next().done) { /* all at once */ }
   }
 
@@ -133,11 +134,11 @@ export class MvPlayer {
    * when `cancelled` said so (what was built is unloaded) or another load took over meanwhile (true if that one built
    * this song).
    */
-  async loadInSlices(pause: () => Promise<void>, cancelled: () => boolean, song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId>, lyricDelay: number, seed: number): Promise<boolean> {
+  async loadInSlices(pause: () => Promise<void>, cancelled: () => boolean, song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId>, lyricDelay: number, seed: number, exposure?: ReadonlyMap<string, number>): Promise<boolean> {
     // (Not in the same task as what came before: the end of prepareSong.)
     await pause();
     if (cancelled()) return false;
-    const steps = this.build(song, style, off, undefined, undefined, lyricDelay, seed);
+    const steps = this.build(song, style, off, undefined, undefined, lyricDelay, seed, undefined, exposure);
     let step = steps.next();
     const token = this.loads;
     while (!step.done) {
@@ -152,7 +153,7 @@ export class MvPlayer {
     return true;
   }
 
-  private *build(song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId>, only: { scene: SceneId; variants: string[] } | undefined, forceLook: LookId | 'none' | undefined, lyricDelay: number, seed: number | undefined, retake?: (shots: Shot[], music: Music) => Shot[]): Generator<void, void> {
+  private *build(song: PreparedSong, style: Style, off: ReadonlySet<SceneId | LookId>, only: { scene: SceneId; variants: string[] } | undefined, forceLook: LookId | 'none' | undefined, lyricDelay: number, seed: number | undefined, retake?: (shots: Shot[], music: Music) => Shot[], exposure?: ReadonlyMap<string, number>): Generator<void, void> {
     const token = ++this.loads;
     if (this.seedFor !== song.id || seed !== undefined) {
       this.seed = seed ?? (Math.random() * 4294967296) >>> 0;
@@ -175,7 +176,7 @@ export class MvPlayer {
       music, lyrics, aspect: this.engine.aspect, title: song.name, artists: song.artists, stereo: song.stereo, xyMusic: song.xyMusic, armillary: armillarySpec(song.analysis, song.id), seed: this.seed,
     };
     // Pure music (or a song whose lyrics NetEase doesn't have) gets no word plates.
-    let shots = planShots(music, style, this.seed, { graphic: song.palette.graphic, lyrics: song.lines.length > 0 }, off);
+    let shots = planShots(music, style, this.seed, { graphic: song.palette.graphic, lyrics: song.lines.length > 0 }, off, exposure);
     if (only) shots.forEach((sh, i) => { sh.scene = only.scene; sh.variant = only.variants[i % only.variants.length]; });
     else if (song.xyMusic) shots = scopeOnly(shots);
     if (retake) shots = retake(shots, music);

@@ -54,6 +54,8 @@ function cutTimes(music: Music, style: Style, section: Section, next: Section | 
 // (Drops too: they take turns opening on the push tunnel and the spectrum tube, so a song with two drops doesn't
 // climax in the same tunnel twice; the user: “高潮段不应该只有推进”.)
 const TAKE_TURNS = new Set(['verse', 'chorus', 'break', 'bridge', 'drop']);
+/** Sections that open on whichever plate of their pool has been seen least, when the plays so far are known. */
+const OPEN_ANY = new Set(['verse', 'chorus', 'break', 'bridge']);
 
 /**
  * The plates a section may use once the ones the user turned off (the settings page) are taken out. A section left
@@ -77,14 +79,28 @@ function allowed(pool: Plate[], off: ReadonlySet<string>, sections: Section[], i
   return [...list.slice(k), ...list.slice(0, k)];
 }
 
-/** `off`: plates the user turned off in the settings (the armillary's and the opening's own shots included). */
-export function planShots(music: Music, style: Style, songSeed: number, song: SongTraits, off: ReadonlySet<string> = new Set()): Shot[] {
+/**
+ * `off`: plates the user turned off in the settings (the armillary's and the opening's own shots included).
+ * `exposure`: seconds each plate has been on screen over the plays so far (the plugin's record, recent plays weighing
+ * most). Given it, the plates seen least come first among those equally due, and verses, choruses, breaks and bridges
+ * open on any plate of their pool rather than on its first two: across plays every plate of a pool comes round about
+ * as often (without it the openings and a few plates took most of the screen, and some plates were in fewer than a
+ * third of the plays). A drop still opens on the push tunnel or the spectrum tube, a build on its tunnel; the opening
+ * cards, the armillary and the closing canvas keep their places.
+ */
+export function planShots(music: Music, style: Style, songSeed: number, song: SongTraits, off: ReadonlySet<string> = new Set(), exposure?: ReadonlyMap<string, number>): Shot[] {
   const shots: Shot[] = [];
   const sections = music.a.sections;
   let prevScene = '', prevVariant = '';
   const used = new Map<string, number>(); // plate -> times used, so the rotation reaches every plate
   const seen = new Map<string, number>(); // label -> sections so far with it
   const barLen = (t: number) => (60 / Math.max(40, music.at(t).bpm)) * music.meter;
+  // A plate missing from the record (new, or never yet in a pool that was played) counts as seen as the middle one.
+  const known = exposure ? [...exposure.values()].sort((a, b) => a - b) : [];
+  const middle = known.length ? known[known.length >> 1] : 0;
+  const seenOf = (scene: string) => exposure?.get(scene) ?? middle;
+  /** Seconds of screen within which plates count as equally seen (shuffled by the seed). */
+  const JITTER = 12;
   sections.forEach((section, sectionIndex) => {
     const pool = allowed(style.pool(section, song), off, sections, sectionIndex, style, song);
     const cuts = cutTimes(music, style, section, sections[sectionIndex + 1]);
@@ -93,7 +109,13 @@ export function planShots(music: Music, style: Style, songSeed: number, song: So
     // and spectrum tube…); the others always open on their signature (the build's tunnel…).
     const nth = seen.get(section.label) ?? 0;
     seen.set(section.label, nth + 1);
-    const hero = pool[TAKE_TURNS.has(section.label) ? nth % Math.min(2, pool.length) : 0];
+    let hero = pool[TAKE_TURNS.has(section.label) ? nth % Math.min(2, pool.length) : 0];
+    if (exposure && OPEN_ANY.has(section.label) && pool.length > 1) {
+      // Not yet in this song first, then seen least; the pool's own order is a light preference (4 s a place).
+      const order = pool.map((p, k) => ({ p, w: (used.get(p.scene) ?? 0) * 1e6 + seenOf(p.scene) + k * 4 + random() * JITTER }))
+        .filter(o => o.p.scene !== prevScene).sort((a, b) => a.w - b.w);
+      if (order.length) hero = order[0].p;
+    }
     let plate = hero;
     // Plates shown in this section so far: a section goes round its whole pool before it shows one twice (the drop's
     // push tunnel, the least used across the song since only drops have it, used to come back mid-drop for another
@@ -107,7 +129,7 @@ export function planShots(music: Music, style: Style, songSeed: number, song: So
       else if (!short) {
         // The plate least used in this section, then in the song, that isn't the one just shown; ties broken by the
         // seeded shuffle.
-        const order = pool.map(p => ({ p, r: random() }))
+        const order = pool.map(p => ({ p, r: random() * (exposure ? JITTER : 1) + (exposure ? seenOf(p.scene) : 0) }))
           .filter(o => pool.length === 1 || o.p.scene !== prevScene)
           .sort((a, b) => (here.get(a.p.scene) ?? 0) - (here.get(b.p.scene) ?? 0) || (used.get(a.p.scene) ?? 0) - (used.get(b.p.scene) ?? 0) || a.r - b.r);
         plate = order.length ? order[0].p : pool[0];

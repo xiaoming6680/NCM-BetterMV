@@ -24,6 +24,7 @@ import { STYLES } from '../style/style.ts';
 import { execArg } from './exec.ts';
 import { obs, obsKey } from './obs.ts';
 import { OBS_VERSION, type ObsPlan, type ObsState } from '../obs/snapshot.ts';
+import { Exposure } from './exposure.ts';
 import type { SectionLabel } from '../types.ts';
 import type { SceneId, Shot } from '../scenes/types.ts';
 import type { LookId } from '../director/director.ts';
@@ -39,6 +40,8 @@ async function readPluginFile(rel: string): Promise<ArrayBuffer> {
 
 // Settings exist before the client is found, so the settings page is registered at load time.
 const config: Config = loadConfig();
+/** How long each plate has been on screen over the plays so far: the planner shows the ones seen least first. */
+const exposure = new Exposure();
 const listeners: Array<(c: Config) => void> = [];
 // Each scene's (and look's) sketch for the settings page (previews/<scene>.webp, previews/look-<id>.webp in the plugin
 // folder), read once.
@@ -161,27 +164,36 @@ function start(client: Client): void {
    * This play's seed: drawn anew when a song starts playing (a song plays differently each time), kept while it plays,
    * so the MV page and the OBS page draw the same MV. A fixed one per song when its arrangement is kept.
    */
-  let playSeed = { id: 0, seed: 0 };
-  const seedOf = (song: PreparedSong, c: Config, fresh = false) => {
-    if (c.arrange === 'fixed' && !fresh) return Math.imul(song.id ^ 0x9e3779b9, 2654435761) >>> 0;
-    if (fresh || playSeed.id !== song.id) playSeed = { id: song.id, seed: (Math.random() * 4294967296) >>> 0 };
-    return playSeed.seed;
+  let playSeed: { id: number; seed: number; exposure?: Record<string, number> } = { id: 0, seed: 0 };
+  /**
+   * The seed, and the plates' screen time so far as it stood when the play began (kept with the seed, so a replan and
+   * the OBS page plan the same MV). A fixed arrangement is the song's own, whatever was seen before: none.
+   */
+  const seedOf = (song: PreparedSong, c: Config, fresh = false): { seed: number; exposure?: Record<string, number> } => {
+    if (c.arrange === 'fixed' && !fresh) return { seed: Math.imul(song.id ^ 0x9e3779b9, 2654435761) >>> 0 };
+    if (fresh || playSeed.id !== song.id) {
+      if (playSeed.id !== song.id) exposure.newSong();
+      playSeed = { id: song.id, seed: (Math.random() * 4294967296) >>> 0, exposure: exposure.snapshot() };
+    }
+    return playSeed;
   };
+  const exposureMap = (p: ObsPlan) => (p.exposure ? new Map(Object.entries(p.exposure)) : undefined);
   /** How the MV is arranged: the style, the plates and looks left out, this song's lyric delay, the seed. */
-  const planFor = (song: PreparedSong, c: Config, fresh = false): ObsPlan => ({
-    style: c.style, off: [...c.off, ...c.offLooks], lyricDelay: (c.lyricDelays[song.id] ?? 0) / 1000, seed: seedOf(song, c, fresh),
-  });
+  const planFor = (song: PreparedSong, c: Config, fresh = false): ObsPlan => {
+    const { seed, exposure: seen } = seedOf(song, c, fresh);
+    return { style: c.style, off: [...c.off, ...c.offLooks], lyricDelay: (c.lyricDelays[song.id] ?? 0) / 1000, seed, exposure: seen };
+  };
   const plan = (song: PreparedSong, c: Config, fresh = false) => {
     plannedWith = planKey(c, song.id);
     const p = planFor(song, c, fresh);
-    player!.load(song, styleFor(song, p.style), new Set(p.off as Array<SceneId | LookId>), undefined, undefined, p.lyricDelay, p.seed);
+    player!.load(song, styleFor(song, p.style), new Set(p.off as Array<SceneId | LookId>), undefined, undefined, p.lyricDelay, p.seed, undefined, exposureMap(p));
     pushState();
   };
   /** plan() for the song the waiting view is readying: built a plate between pauses. False when the job was dropped. */
   const planInSlices = async (song: PreparedSong, c: Config, job: Job): Promise<boolean> => {
     plannedWith = planKey(c, song.id);
     const p = planFor(song, c);
-    if (!await player!.loadInSlices(yieldToPage, () => job.cancelled, song, styleFor(song, p.style), new Set(p.off as Array<SceneId | LookId>), p.lyricDelay, p.seed)) return false;
+    if (!await player!.loadInSlices(yieldToPage, () => job.cancelled, song, styleFor(song, p.style), new Set(p.off as Array<SceneId | LookId>), p.lyricDelay, p.seed, exposureMap(p))) return false;
     pushState();
     return true;
   };
@@ -465,6 +477,8 @@ function start(client: Client): void {
         if (snapshot) player.hud.visible = true;
         gov?.begin();
         const shot = player.frame(clock.now(), dt);
+        // (Screen time for the planner's record: only while the song plays on this page.)
+        if (shot && isPlaying()) exposure.add(shot.scene, dt);
         if (snapshot) { snapshot = false; saveFrame(player); }
         if (gov) govern(gov, player, shot, now);
         onScreen = shot;
