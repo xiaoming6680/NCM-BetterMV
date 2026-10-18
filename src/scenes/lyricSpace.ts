@@ -526,12 +526,13 @@ export class LyricOrbit {
 
   /**
    * `anchorAt(t)`: for a band, the angle round its y axis (from +z towards +x) facing the camera at time t, so each
-   * word is set where the camera looked when it was sung (and the band can fade what is turned away now). `camera`
-   * (a band): the plate's, its matrices up to date — the words fade at the frame's edges (see `edge`).
+   * word is set where the camera looked when it was sung (and the band can fade what is turned away now). `camera`:
+   * the plate's, its matrices up to date — the words fade at the frame's edges (see `edge`; a flat circle seen close,
+   * the record's low view, runs off a narrow frame too).
    */
   update(lyrics: LyricTrack, t: number, energy: number, anchorAt: (t: number) => number = () => 0, camera?: THREE.Camera): void {
     const o = this.opts, r = o.radius, flat = o.mode === 'flat', states = lyrics.visible(t);
-    const view = !flat && camera ? camera : null;
+    const view = camera ?? null;
     if (view) this.group.updateMatrixWorld(true);
     const keep = new Set(states.map(s => s.index));
     for (const [k, b] of this.lines) if (!keep.has(k)) { dispose(b.root); this.lines.delete(k); }
@@ -554,6 +555,7 @@ export class LyricOrbit {
           g.mesh.rotation.set(0, 0, th - Math.PI / 2);
           // Far round from the top (a long line), it fades rather than run upside down into the other end.
           vis = 1 - smooth((Math.abs(th - Math.PI / 2) - 2.3) / 0.6);
+          if (view && vis > 0) vis *= this.edge(g.mesh.position, b.root, view);
         } else {
           const th = turn + g.s / r, rr = r + lift;
           g.mesh.position.set(rr * Math.sin(th), 0, rr * Math.cos(th));
@@ -580,6 +582,7 @@ export class LyricOrbit {
           const th = -Math.PI / 2 + (g.s - b.transLen / 2) / tr.radius + away;
           g.mesh.position.set(tr.radius * Math.cos(th), tr.radius * Math.sin(th), 0);
           g.mesh.rotation.set(0, 0, th + Math.PI / 2);
+          if (view) g.mesh.material.opacity *= this.edge(g.mesh.position, b.root, view);
         } else {
           const th = base + (g.s - b.transLen / 2) / tr.radius;
           g.mesh.position.set(tr.radius * Math.sin(th), -o.em * 1.25, tr.radius * Math.cos(th));

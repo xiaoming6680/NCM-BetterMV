@@ -5,7 +5,7 @@
 // then snaps to its next place on the grid; a marker ticks along the rule on each beat.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
-import { clamp01, lerp, outExpo, rng, snap } from './types.ts';
+import { clamp01, lerp, narrowness, outExpo, rng, snap } from './types.ts';
 import { textMesh, hasCjk, type Face } from '../render/text.ts';
 import { VOICES, voiceFor } from './lyricBlock.ts';
 import type { LineState } from '../director/lyrics.ts';
@@ -127,6 +127,10 @@ export class Poster implements MvScene {
     const lum = (c: THREE.Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
     this.sig.copy(palette.signal);
     if (Math.abs(lum(this.sig) - lum(this.bg)) < 0.2) this.sig.lerp(palette.ink, 0.5);
+    // A narrow (portrait) page has no room beside the words for the circle: it lies under them, so it is set smaller
+    // and kept off the type's lightness (a grey cover's white circle swallowed white words).
+    const narrow = narrowness(W / H);
+    if (narrow < 1 && Math.abs(lum(this.sig) - lum(this.fg)) < 0.3) this.sig.lerp(this.bg, 0.6);
     const sig = flat(this.sig);
     const variant = shot.variant;
     if (variant === 'slab') {
@@ -138,7 +142,7 @@ export class Poster implements MvScene {
       this.block = this.rect(H * 0.12, H * 0.12, sig, -W / 2 + W * 0.38, H / 2 - M - H * 0.06, 0.1);
       this.blockSpots = [new THREE.Vector2(-W / 2 + W * 0.38, H / 2 - M - H * 0.06), new THREE.Vector2(-W / 2 + W * 0.38, -H / 2 + M + H * 0.06)];
     } else {
-      const R = H * 0.34;
+      const R = H * 0.34 * (0.55 + 0.45 * narrow);
       this.block = new THREE.Mesh(new THREE.CircleGeometry(R, 128), sig) as unknown as Mesh;
       this.page.add(this.block);
       this.blockSpots = [new THREE.Vector2(W / 2 - R * 0.55, -H * 0.08), new THREE.Vector2(W / 2 - R * 0.9, H * 0.12), new THREE.Vector2(W / 2 - R * 0.35, -H * 0.2)];

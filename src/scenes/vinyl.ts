@@ -6,7 +6,7 @@
 // The words run round the label, the word being sung at the top; the translation round the bottom.
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
-import { clamp01, fitFov, inOutCubic, lerp, punch, rng, smooth } from './types.ts';
+import { clamp01, fitFov, inOutCubic, lerp, narrowness, punch, rng, smooth } from './types.ts';
 import { Accents } from './hits.ts';
 import { LyricOrbit } from './lyricSpace.ts';
 import { voiceOpts } from './lyricBlock.ts';
@@ -210,10 +210,12 @@ export class Vinyl implements MvScene {
       const az = side * lerp(0.35, 0.05, inOutCubic(sk)) + 0.25, el = lerp(0.6, 0.7, sk), d = lerp(9.6, 8.4, inOutCubic(sk));
       cam.fov = 40;
       cam.position.set(Math.sin(az) * Math.cos(el) * d, -Math.cos(az) * Math.cos(el) * d, Math.sin(el) * d);
-      cam.lookAt(0.5, 0.1, 0);
+      // (Looking a little past the middle: on a narrow frame by as much less, or the record's near side leaves it.)
+      cam.lookAt(0.5 * narrowness(ctx.aspect), 0.1, 0);
     } else if (shot.variant === 'groove') {
-      // Low over the grooves at the rim, the label and the words ahead; the grooves sweep by underneath.
-      const a = -1.2 + side * 0.25 + sk * 0.25 * side;
+      // Low over the grooves at the rim, the label and the words ahead; the grooves sweep by underneath. (On a narrow
+      // frame from nearer straight behind the translation, round the near side of the label: it ran off one edge.)
+      const a = -Math.PI / 2 + (-1.2 + side * 0.25 + sk * 0.25 * side + Math.PI / 2) * narrowness(ctx.aspect);
       const rr = lerp(R * 1.02, R * 0.88, inOutCubic(sk));
       cam.fov = 52;
       cam.position.set(Math.cos(a) * rr, Math.sin(a) * rr, lerp(1.2, 0.95, sk));
@@ -235,6 +237,7 @@ export class Vinyl implements MvScene {
 
     ctx.fx.bloom = soft ? 0.35 : 0.4 + kick * 0.15;
     ctx.fx.vignette = 0.6;
-    this.orbit.update(ctx.lyrics, t, shot.section.energy);
+    // (The camera: up close over the grooves the ring of words runs off a narrow frame, and fades at its edges.)
+    this.orbit.update(ctx.lyrics, t, shot.section.energy, undefined, cam);
   }
 }

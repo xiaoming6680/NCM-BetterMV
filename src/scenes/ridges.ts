@@ -145,7 +145,8 @@ export class Ridges implements MvScene {
     this.rig.place = (root, st) => {
       const up = outExpo(clamp01((st.age + 0.5) / 1.1)), x = look === 'ballad' ? (st.index % 2 ? 1 : -1) * 2.2 * narrowness(this.camera.aspect) ** 2 : 0;
       // Low over the front ridge only that ridge is in front of the words, so they rise from right behind it, smaller.
-      if (this.low) { root.position.set(x * 0.3, 0.95 - (1 - up) * 0.7, -0.4); root.scale.setScalar(0.42); }
+      // (Low, the card is near: on a narrow frame it is set smaller still, or it reaches both edges.)
+      if (this.low) { root.position.set(x * 0.3, 0.95 - (1 - up) * 0.7, -0.4); root.scale.setScalar(0.42 * (0.5 + 0.5 * narrowness(this.camera.aspect))); }
       else root.position.set(x, 0.75 - (1 - up) * 1.6, -DEPTH * 0.5);
     };
     this.scene.add(this.rig.group);
@@ -340,7 +341,7 @@ export class Ridges implements MvScene {
     const side = random() < 0.5 ? -1 : 1;
     this.low = shot.variant === 'low';
     if (shot.variant === 'low') {
-      cam.position.set(side * lerp(0.6, -0.6, inOutCubic(k)), 0.55, 2.2);
+      cam.position.set(side * lerp(0.6, -0.6, inOutCubic(k)) * narrowness(ctx.aspect), 0.55, 2.2);
       cam.lookAt(0, 0.35, -DEPTH * 0.6);
     } else if (shot.variant === 'drift') {
       // (Across a narrow frame by as much of its width: the line in the middle stays in it.)
