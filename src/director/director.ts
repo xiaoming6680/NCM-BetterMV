@@ -677,7 +677,7 @@ export class Director {
 
   /**
    * Post-effect moments laid over the scenes' own settings, by section and beat. Pulse: drops trail light behind
-   * the line plates, flash a negative on strong snares in their second half and mirror some unsung shots; the last
+   * the line plates and flash a negative on strong snares in their second half; the last
    * bar of a build pulses gently on the eighths; a drop resolves out of big pixels on its first beat; breaks turn duotone
    * (the cover's ink → signal), bridges half so; choruses trail a little after each bar's hit. Ballad: long soft
    * trails in choruses, a light duotone in bridges; no negatives, strobes or mirrors.
@@ -698,12 +698,10 @@ export class Director {
     switch (sec.label) {
       case 'drop': {
         if (sparse && random() < 0.7) fx.echo = Math.max(fx.echo, 0.78);
-        // A mirror would turn the words backwards: only while no line is on screen.
-        const mirrorShot = shot.scene !== 'drive' && shot.scene !== 'tunnel' && random() < 0.3;
-        if (mirrorShot && this.lyrics.visible(t).length === 0) fx.mirror = random() < 0.5 ? 3 : 1;
+        // (No mirror any more: folding any plate into a two- or four-way symmetry meant nothing and spoiled the picture.)
         // Resolve out of big pixels on the drop's first beat — not after the armillary's push, which lands the drop
-        // with a clean cut on its kick, and not while a line is being sung over it (like the mirror: the pixels turned
-        // the words into blocks; decided once for the beat, so it never switches off halfway).
+        // with a clean cut on its kick, and not while a line is being sung over it (the pixels turned the words into
+        // blocks; decided once for the beat, so it never switches off halfway).
         const pushedIn = this.shots.some(s => s.scene === 'crystal' && s.variant === 'orbit' && Math.abs(s.end - sec.start) < 0.05);
         const sungOver = this.lyrics.visible(sec.start + beat * 0.5).some(s => s.exit < 0.5);
         if (intoSec < beat && !pushedIn && !sungOver) fx.pixel = Math.max(fx.pixel, 48 * Math.pow(1 - intoSec / beat, 2));
