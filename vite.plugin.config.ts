@@ -2,7 +2,9 @@ import { defineConfig } from 'vite';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const version = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, 'plugin/manifest.json'), 'utf8')).version;
+// A development build (scripts/install-plugin.ps1, into plugins_dev) is marked `dev-<version>` wherever the version
+// shows; the release package (scripts/pack-plugin.ps1) keeps the manifest's.
+const version = (process.env.BMV_DEV_BUILD ? 'dev-' : '') + JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, 'plugin/manifest.json'), 'utf8')).version;
 
 // The BetterNCM plugin: one classic script (IIFE) for NetEase's Chromium 91, three.js bundled in.
 export default defineConfig({

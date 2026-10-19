@@ -45,7 +45,8 @@ export function watchUpdate(fn: (s: UpdateState) => void): () => void {
 
 /** Compares two versions (0.10.0 after 0.9.3); a leading v and anything after the numbers are ignored. */
 export function compareVersions(a: string, b: string): number {
-  const parts = (v: string) => (v.replace(/^v/i, '').match(/^\d+(?:\.\d+)*/)?.[0] ?? '0').split('.').map(Number);
+  // (A development build's `dev-` prefix aside: it is that version, not an older one.)
+  const parts = (v: string) => (v.replace(/^(?:dev-)?v?/i, '').match(/^\d+(?:\.\d+)*/)?.[0] ?? '0').split('.').map(Number);
   const x = parts(a), y = parts(b);
   for (let i = 0; i < Math.max(x.length, y.length); i++) {
     const d = (x[i] ?? 0) - (y[i] ?? 0);

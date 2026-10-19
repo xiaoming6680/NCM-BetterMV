@@ -16,6 +16,8 @@ bun run plugin   # 装进 BetterNCM 的 plugins_dev，重启网易云生效
 
 包内容：`manifest.json`、`bettermv.js`、`preview.jpg`、`LICENSE`、`fonts/`（含 `OFL.txt`）、`previews/*.webp`（场景与画风示意图）、`obs/`（`index.html`、`obs.js`、`bettermv-obs.exe`）。
 
+`bun run plugin` 装的开发构建版本号带 `dev-` 前缀（如 `dev-0.11.0`）：装进去的 `manifest.json`、设置页和面板都这样显示；比较更新时忽略前缀，开发版不会被提示更新到同号的发布版。`bun run pack` 打的发布包不带前缀。
+
 `plugins` 里有 BetterMV 的发布包时，`plugins_dev` 里的开发构建不会加载（见 [CLIENT.md](CLIENT.md)“插件包的解压与更新”）。
 
 ## README 的图
