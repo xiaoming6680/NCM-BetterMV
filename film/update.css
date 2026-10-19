@@ -1,0 +1,27 @@
+/* The 0.10 update film (film/update.ts): 720 × 1280 CSS pixels, shot at 1.5 → 1080 × 1920. On top of film.css. */
+#frame { width: 720px; height: 1280px; }
+
+/* The opening line, over the picture out of focus. */
+.hook { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
+.hook .w1, .hook .w2 { position: absolute; left: 0; right: 0; text-align: center; white-space: nowrap; color: #fff; letter-spacing: -.01em;
+  font-family: PF, sans-serif; font-weight: 900; line-height: 1; }
+.hook .w1 { top: 520px; font-size: 46px; color: rgba(255,255,255,.86); }
+.hook .w2 { top: 590px; font-size: 60px; }
+.hook .g { background: linear-gradient(90deg, #ff6a5e, #ec4141 55%, #c22a4a); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; padding-right: .04em; }
+
+/* The words over the parts: a small line in the song's colour, a heading, a plain line; high on the left, clear of
+   where a phone's app puts its own buttons and captions, and under the plugin's section title (top left, a tenth of
+   the way down). A shade from the top keeps them readable on a bright plate. */
+.ushade { position: absolute; inset: 0; z-index: 5; pointer-events: none;
+  background: linear-gradient(180deg, rgba(0,0,0,.62) 0, rgba(0,0,0,.46) 22%, rgba(0,0,0,0) 40%); }
+.ucap { position: absolute; left: 48px; top: 214px; z-index: 6; pointer-events: none; font-family: PF, sans-serif; color: #fff; transform-origin: 0 0; }
+.ucap .k { margin-bottom: 14px; font-weight: 600; font-size: 20px; letter-spacing: .08em; color: var(--accent, #fff); }
+.ucap .t { font-weight: 900; font-size: 58px; line-height: 1.1; letter-spacing: .01em; white-space: nowrap; text-shadow: 0 2px 24px rgba(0,0,0,.4); }
+.ucap.small .t { font-size: 44px; }
+.ucap .l { margin-top: 14px; font-weight: 500; font-size: 22px; line-height: 1.45; letter-spacing: .03em; white-space: nowrap; color: rgba(255,255,255,.78); }
+
+/* The name at the end, a little larger than the landscape films' (read on a phone). */
+.endname img { width: 84px; height: 84px; }
+.endname span { font-size: 68px; }
+.endline { font-size: 24px; margin-top: 46px; }
+.endrepo { font-size: 18px; margin-top: 90px; }

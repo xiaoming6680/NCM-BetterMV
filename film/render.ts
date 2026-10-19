@@ -3,6 +3,7 @@
 //
 //   bun film/render.ts                    the film (film/index.html), 1920 × 1080 60 fps → build/film/
 //   bun film/render.ts --reel             the reel (film/reel.html) → build/film/BetterMV-reel.mp4 (with any option below)
+//   bun film/render.ts --update           the 0.10 update film (film/update.html), portrait 1080 × 1920 → build/film/BetterMV-update.mp4
 //   bun film/render.ts --stills 1,3.5     PNG stills at those seconds (build/film/still-*.png)
 //   bun film/render.ts --audio            only the soundtrack (build/film/soundtrack.wav)
 //   bun film/render.ts --images           the plugin's preview (plugin/preview.jpg) and the README's pictures (docs/images/)
@@ -30,10 +31,13 @@ fs.mkdirSync(OUT, { recursive: true });
 
 const argv = process.argv.slice(2);
 const opt = (k: string, d?: string) => { const i = argv.indexOf('--' + k); return i < 0 ? d : argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : 'true'; };
-const [CW, CH] = [1280, 720];
-const REEL = argv.includes('--reel');
+const REEL = argv.includes('--reel'), UPDATE = argv.includes('--update');
+/** The page's size in CSS pixels: the update film is portrait. */
+const [CW, CH] = UPDATE ? [720, 1280] : [1280, 720];
 /** The film's page, and the name its files are written under. */
-const PAGE = REEL ? '/film/reel.html' : '/film/', NAME = REEL ? 'BetterMV-reel' : 'BetterMV', TAG = REEL ? '-reel' : '';
+const PAGE = REEL ? '/film/reel.html' : UPDATE ? '/film/update.html' : '/film/';
+const NAME = REEL ? 'BetterMV-reel' : UPDATE ? 'BetterMV-update' : 'BetterMV';
+const TAG = REEL ? '-reel' : UPDATE ? '-update' : '';
 const SCALE = 1.5;
 const FPS = Number(opt('fps', '60'));
 
