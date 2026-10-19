@@ -637,6 +637,179 @@ export class LyricOrbit {
   }
 }
 
+// ── Spiral ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface SpiralOptions {
+  style: RigStyle;
+  em: number;
+  face?: Face;
+  /** The translation's em and face (the song's lyric voice; bold sans when not given). */
+  transEm: number;
+  transFace?: Face;
+}
+
+/**
+ * A glyph at path length `s` along its line (the line's own units: glyph advances at the reading spot), in word
+ * `word` (−1: a translation glyph) whose middle is at `mid`: a word keeps its glyphs in a row round its middle.
+ */
+interface SpiralGlyph { mesh: TextMesh; s: number; word: number; mid: number }
+/** `wordS`: each word's middle along the path; `pace`: path length a second once the line has been sung. */
+interface SpiralLine { root: THREE.Group; glyphs: SpiralGlyph[]; wordS: number[]; len: number; pace: number; trans: SpiralGlyph[]; transLen: number }
+
+/** Radians the arm turns, and how far it comes towards the camera, per unit of path. */
+const SPIRAL_TURN = 0.45, SPIRAL_DEPTH = 0.7;
+const spiralP = new THREE.Vector3();
+
+/**
+ * The line as an arm of a spiral running from deep in the frame out past the camera, read left to right over the
+ * top: the word being sung sits at the top, the words sung before it have come round to the left and on towards the
+ * camera, the words still to come wait round to the right and on back into the depth, smaller. The line moves along
+ * the arm as it is sung, so the sung word is always at the top, and once sung it flies on out past the camera. The
+ * translation is the mirrored arm under it, read left to right along the bottom, moving with the translation's
+ * progress. (A word's glyphs stay upright: text bent round a circle reads upside down along its bottom.)
+ */
+export class LyricSpiral {
+  readonly group = new THREE.Group();
+  private lines = new Map<number, SpiralLine>();
+  private color = new THREE.Color();
+  /** Radius of the arm (the plate's units at the reading spot): set from the frame (resize). */
+  radius = 2.4;
+
+  constructor(private palette: Palette, private opts: SpiralOptions) {
+    this.group.userData.lyrics = true;
+  }
+
+  private glyph(ch: string, em: number, face: Face, px: number): TextMesh {
+    const m = textMesh(ch, face, em, { center: true, px });
+    m.material.depthWrite = false;
+    m.material.depthTest = false;
+    m.renderOrder = 20;
+    return m;
+  }
+
+  private build(state: LineState): SpiralLine {
+    const o = this.opts, face = o.face ?? (o.style === 'poem' ? 'serif' : 'condensed');
+    const root = new THREE.Group();
+    const glyphs: SpiralGlyph[] = [], wordS: number[] = [];
+    let s = 0;
+    state.line.words.forEach((w, wi) => {
+      const cjk = hasCjk(w.text), from = s;
+      for (const ch of Array.from(w.text)) {
+        if (!ch.trim()) { s += o.em * 0.3; continue; }
+        const mesh = this.glyph(ch, o.em, face, 128), adv = (mesh.userData.width as number) * (cjk ? 1.04 : 1);
+        root.add(mesh);
+        glyphs.push({ mesh, s: s + adv / 2, word: wi, mid: 0 });
+        s += adv;
+      }
+      wordS[wi] = (from + s) / 2;
+      for (const g of glyphs) if (g.word === wi) g.mid = wordS[wi];
+      s += cjk ? o.em * 0.08 : o.em * 0.36;
+    });
+    const words = state.line.words, span = words.length > 1 ? words[words.length - 1].start - words[0].start : 0;
+    const pace = s / Math.max(1.2, span + 0.6);
+    const trans: SpiralGlyph[] = [];
+    let transLen = 0;
+    // The translation's words (a run of Latin letters, or a CJK character each) also keep their glyphs in a row.
+    let wordFrom = -1;
+    const closeWord = () => { if (wordFrom >= 0) { const mid = (trans[wordFrom].s + trans[trans.length - 1].s) / 2; for (let k = wordFrom; k < trans.length; k++) trans[k].mid = mid; } wordFrom = -1; };
+    for (const ch of Array.from(state.line.translation ?? '')) {
+      if (!ch.trim()) { closeWord(); transLen += o.transEm * 0.35; continue; }
+      const mesh = this.glyph(ch, o.transEm, o.transFace ?? 'bold', 96), adv = mesh.userData.width as number;
+      root.add(mesh);
+      if (hasCjk(ch)) closeWord();
+      trans.push({ mesh, s: transLen + adv / 2, word: -1, mid: transLen + adv / 2 });
+      if (!hasCjk(ch) && wordFrom < 0) wordFrom = trans.length - 1;
+      if (hasCjk(ch)) closeWord();
+      transLen += adv;
+    }
+    closeWord();
+    this.group.add(root);
+    return { root, glyphs, wordS, len: s, pace, trans, transLen };
+  }
+
+  /**
+   * How far along its path the line is read at t: the sung point, moving from each word's middle to the next's
+   * between their starts; before the first word it comes up out of the depth, after the last it goes on at the line's
+   * own pace.
+   */
+  private head(b: SpiralLine, st: LineState, t: number): number {
+    const w = st.line.words;
+    if (!w.length) return (t - st.line.start) * b.pace;
+    if (t < w[0].start) return b.wordS[0] - (w[0].start - t) * b.pace;
+    for (let k = 0; k + 1 < w.length; k++) {
+      if (t < w[k + 1].start) return b.wordS[k] + (b.wordS[k + 1] - b.wordS[k]) * clamp01((t - w[k].start) / Math.max(1e-3, w[k + 1].start - w[k].start));
+    }
+    return b.wordS[w.length - 1] + (t - w[w.length - 1].start) * b.pace;
+  }
+
+  /**
+   * Where a glyph goes: its word's middle `u` along the arm from the reading spot (u > 0: already read, towards the
+   * camera), the glyph `dx` across from it in a row, upright, the row leaning a little along the arm.
+   */
+  private place(mesh: TextMesh, u: number, dx: number, top: boolean): void {
+    const th = top ? Math.PI / 2 + u * SPIRAL_TURN : -Math.PI / 2 - u * SPIRAL_TURN;
+    const lean = Math.max(-0.35, Math.min(0.35, (top ? th - Math.PI / 2 : th + Math.PI / 2) * 0.35));
+    mesh.position.set(this.radius * Math.cos(th) + dx * Math.cos(lean), this.radius * Math.sin(th) + dx * Math.sin(lean), u * SPIRAL_DEPTH);
+    mesh.rotation.set(0, 0, lean);
+  }
+
+  /** 1 well inside the frame, falling to 0 at its edges and close to the camera (projected by `camera`). */
+  private edge(mesh: TextMesh, camera: THREE.Camera): number {
+    spiralP.copy(mesh.position).applyMatrix4(this.group.matrixWorld).project(camera);
+    if (spiralP.z > 1 || spiralP.z < -1) return 0;
+    return (1 - smooth((Math.abs(spiralP.x) - 0.8) / 0.18)) * (1 - smooth((Math.abs(spiralP.y) - 0.84) / 0.14));
+  }
+
+  update(lyrics: LyricTrack, t: number, energy: number, camera: THREE.Camera): void {
+    const o = this.opts, states = lyrics.visible(t);
+    this.group.updateMatrixWorld(true);
+    const keep = new Set(states.map(s => s.index));
+    for (const [k, b] of this.lines) if (!keep.has(k)) { dispose(b.root); this.lines.delete(k); }
+    const paper = this.palette.paper;
+    // Far back along the arm a glyph fades in out of the depth; once read it fades within about a third of a turn,
+    // before the arm runs down the left side, where the words read bottom to top (and come up close to the camera).
+    const depthFade = (u: number) => smooth((u + 9) / 3) * (1 - smooth((u - 1.6) / 2));
+    for (const st of states) {
+      const b = this.lines.get(st.index) ?? this.lines.set(st.index, this.build(st)).get(st.index)!;
+      const head = this.head(b, st, t);
+      for (const g of b.glyphs) {
+        const u = head - g.mid;
+        this.place(g.mesh, u, g.s - g.mid, true);
+        const look = paintWord(st.words[g.word], g.word, o.style, this.palette, energy, st.exit, this.color);
+        let opacity: number;
+        if (look) {
+          opacity = look.opacity;
+          g.mesh.material.color.copy(this.color);
+        } else {
+          // Still to come: waiting dim down the arm.
+          opacity = 0.38 * (1 - st.exit);
+          g.mesh.material.color.copy(paper).multiplyScalar(0.7);
+        }
+        opacity *= depthFade(u);
+        g.mesh.visible = opacity > 0.004;
+        if (g.mesh.visible) opacity *= this.edge(g.mesh, camera);
+        g.mesh.material.opacity = opacity;
+        g.mesh.visible = opacity > 0.004;
+      }
+      if (!b.trans.length) continue;
+      // The translation moves with its own progress (a little ahead of the voice: director/lyrics.ts); whole, it goes
+      // on out with the line from its last word.
+      const w = st.line.words, last = w.length ? w[w.length - 1].start : st.line.start;
+      const tHead = st.translationProgress < 1 ? st.translationProgress * b.transLen : b.transLen + Math.max(0, t - last) * b.pace;
+      for (const g of b.trans) {
+        const u = tHead - g.mid, shown = tHead >= g.s;
+        this.place(g.mesh, u, g.s - g.mid, false);
+        let opacity = (shown ? 0.92 : 0.3) * (1 - st.exit) * depthFade(u);
+        g.mesh.material.color.copy(paper).multiplyScalar(shown ? 0.88 : 0.65);
+        g.mesh.visible = opacity > 0.004;
+        if (g.mesh.visible) opacity *= this.edge(g.mesh, camera);
+        g.mesh.material.opacity = opacity;
+        g.mesh.visible = opacity > 0.004;
+      }
+    }
+  }
+}
+
 // ── Layer ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /**

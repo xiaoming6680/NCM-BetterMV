@@ -2,9 +2,9 @@
 // space, hairlines on the segment and band edges. Pulse: holds, then snaps half a segment on every strong hit (not
 // the grid's beats: in a syncopated song half of those have no drum; the fold count changes on downbeats) and pushes
 // in on kicks. Ballad: turns and drifts slowly.
-// The words come out of the middle as arcs, a line to an arc, and are carried outwards and round by the zoom and the
-// turn like the bands of the pattern (and out of the way once the next line is up); the translation goes the same way
-// round the bottom.
+// The words: each line an arm of a spiral running from deep in the middle out past the camera, the way the zoom flies
+// (LyricSpiral): read left to right over the top, the sung word at the top, the line moving along the arm as it is
+// sung; the translation the mirrored arm along the bottom.
 // The pattern is also the song's spectrogram folded up: every ring of it leaves the middle carrying the spectrum of the
 // moment it was born (the bass along one mirror line of each segment, the treble along the other) and the zoom carries
 // it outwards, so the outer rings are the last few seconds and the sound wells up out of the middle. Quiet rings are
@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, fitFov, outExpo, rng, smooth, snap as snapTo } from './types.ts';
-import { LyricGates } from './lyricSpace.ts';
+import { LyricSpiral } from './lyricSpace.ts';
 import { Accents } from './hits.ts';
 import { lastIndex } from '../director/music.ts';
 import { VOICES, voiceFor } from './lyricBlock.ts';
@@ -71,7 +71,7 @@ export class Kaleido implements MvScene {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 100);
   private material: THREE.ShaderMaterial;
-  private gates: LyricGates;
+  private words: LyricSpiral;
   private ring: SpecRing;
   /** The hits the pattern snaps on: strong ones, at least 0.45 of a beat apart. */
   private snapT: Float64Array;
@@ -101,9 +101,10 @@ export class Kaleido implements MvScene {
     quad.renderOrder = -10;
     this.scene.add(quad);
     this.camera.position.set(0, 0, 10);
-    // A line to an arc (in pieces the slow push piled eight arcs on each other), in the song's voice (lyricBlock.ts).
-    this.gates = new LyricGates(palette, { style: look === 'ballad' ? 'poem' : 'hook', face: VOICES[voiceFor(look, init.seed)].faces[0], em: 0.46, maxW: 99, arc: 1.5, trans: { em: 0.22, vertical: false, arc: 1.6 }, linger: 8, whole: true });
-    this.scene.add(this.gates.group);
+    // In the song's voice (lyricBlock.ts).
+    const voice = VOICES[voiceFor(look, init.seed)];
+    this.words = new LyricSpiral(palette, { style: look === 'ballad' ? 'poem' : 'hook', face: voice.faces[0], em: 0.42, transEm: 0.22 });
+    this.scene.add(this.words.group);
     this.resize(init.aspect);
   }
 
@@ -116,6 +117,9 @@ export class Kaleido implements MvScene {
     this.camera.updateProjectionMatrix();
     this.material.uniforms.uAspect.value = aspect;
     this.material.uniforms.uSpan.value = Math.tan(THREE.MathUtils.degToRad(fov / 2)) / Math.tan(THREE.MathUtils.degToRad(25));
+    // The arm round the middle at half the frame's shorter half-side (the camera is 10 away).
+    const half = 10 * Math.tan(THREE.MathUtils.degToRad(fov / 2));
+    this.words.radius = 0.5 * half * Math.min(1, aspect);
   }
 
   keepUp(t: number): void {
@@ -157,22 +161,7 @@ export class Kaleido implements MvScene {
     if (this.init.stereo) u.uSpec.value = soft ? 0.7 : 1;
     u.uLines.value = (soft ? 0.35 : 0.55) + kick * 0.4;
     ctx.fx.bloom = (soft ? 0.4 : 0.45) + kick * 0.3;
-    // The words ride the pattern: from where a chunk begins they grow as the bands do, and once it has been sung they
-    // turn as the segments do (in pulse a beat's snap, whatever the fold count) — while sung it stays upright over the
-    // top; they fade once they have grown past the frame.
-    const grow = (a: number, b: number) => soft ? Math.exp(0.12 * (b - a)) : Math.exp(((music.beatPos(b) - music.beatPos(a)) * 0.3) / 1.25);
-    const turn = (a: number, b: number) => soft ? -0.05 * (b - a) : -(Math.PI / 8) * (this.snaps(b) - this.snaps(a));
-    // Once the next line is up a line is carried out of its way, quickly (the ballad's push alone takes eight seconds to
-    // the edge), easing into it so the growth never jumps.
-    const out = (next: number) => { const x = t - next, w = 0.3; return x <= -w ? 0 : x >= w ? x : ((x + w) * (x + w)) / (4 * w); };
-    const ride = (from: number, sung: number, next: number, root: THREE.Object3D) => {
-      const g = grow(from, t) * Math.exp(out(next) * (soft ? 1.6 : 1));
-      root.scale.setScalar(g);
-      root.rotation.z = t > sung ? turn(sung, t) : 0;
-      return 1 - smooth((g - 2.6) / 0.9);
-    };
-    const lines = ctx.lyrics.lines;
-    this.gates.update(ctx.lyrics, t, shot.section.energy, (c, _t, root) => ride(c.start, c.end, c.next, root),
-      (st, _t, root) => ride(st.line.start, st.line.end, lines[st.index + 1]?.start ?? Infinity, root));
+    this.camera.updateMatrixWorld();
+    this.words.update(ctx.lyrics, t, shot.section.energy, this.camera);
   }
 }

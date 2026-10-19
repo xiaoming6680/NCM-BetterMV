@@ -28,6 +28,31 @@ export interface LineState {
 /** Gaps shorter than this between two lines are bridged: the earlier line waits for the next. */
 const BRIDGE_GAP = 2.5;
 
+/**
+ * The translation has no word times: it is typed out along with the sung line, a little ahead of it — this much
+ * earlier (s) and this much faster — so it is whole a little before the line is. (Typed out over the line's first
+ * second it ran far ahead of the voice; spread over the whole line it was whole only as the line ended.)
+ */
+const TRANSLATION_LEAD = 0.15, TRANSLATION_PACE = 1.2;
+/** The last word counts as sung over at most this long (s): a held note doesn't hold the translation back. */
+const LAST_WORD = 0.5;
+
+/** 0..1 how much of the line has been sung by t: by characters, each word over the time to the next word's start. */
+function sungShare(line: LyricLine, t: number): number {
+  const w = line.words;
+  if (!w.length) return Math.max(0, Math.min(1, (t - line.start) / Math.max(0.4, line.end - line.start)));
+  const size = (k: number) => Math.max(1, w[k].text.trim().length);
+  let total = 0;
+  for (let k = 0; k < w.length; k++) total += size(k);
+  let done = 0;
+  for (let k = 0; k < w.length; k++) {
+    if (t < w[k].start) break;
+    const until = k + 1 < w.length ? w[k + 1].start : w[k].start + Math.min(LAST_WORD, Math.max(0.05, w[k].end - w[k].start));
+    done += size(k) * Math.min(1, (t - w[k].start) / Math.max(1e-3, until - w[k].start));
+  }
+  return done / total;
+}
+
 export class LyricTrack {
   private starts: Float64Array;
   constructor(readonly lines: LyricLine[], readonly lead = 0.5, readonly tail = 0.8, readonly exitTime = 0.3) {
@@ -37,8 +62,10 @@ export class LyricTrack {
   /** When line i starts to leave. */
   leaveAt(i: number): number {
     const line = this.lines[i], next = this.lines[i + 1];
-    // Start leaving just before the next line's first word, so the two only meet while this one moves away.
-    if (next && next.start - line.end < BRIDGE_GAP) return Math.max(line.end, next.start) - 0.12;
+    // Before the next line's first word, so this one has mostly moved off and faded by the time that word lights up
+    // where it stood. (Leaving 0.12 s before, it was still three quarters there, and a centred card's first word
+    // landed on top of it.)
+    if (next && next.start - line.end < BRIDGE_GAP) return Math.max(line.end, next.start) - this.exitTime - 0.02;
     return line.end + this.tail;
   }
 
@@ -65,13 +92,9 @@ export class LyricTrack {
       word, index, age: t - word.start,
       progress: t < word.start ? 0 : t >= word.end ? 1 : (t - word.start) / Math.max(1e-3, word.end - word.start),
     }));
-    const sungEnd = line.words.length ? line.words[line.words.length - 1].end : line.end;
-    // The translation is typed out over the line's first quarter (0.4–1 s), not over the whole line: spread over the
-    // line it was whole only as the line ended, too late to read.
-    const typing = Math.min(1, Math.max(0.4, (sungEnd - line.start) * 0.25));
     return {
       line, index: i, age: t - line.start, exit, words,
-      translationProgress: Math.max(0, Math.min(1, (t - line.start) / typing)),
+      translationProgress: Math.max(0, Math.min(1, TRANSLATION_PACE * sungShare(line, t + TRANSLATION_LEAD))),
     };
   }
 
