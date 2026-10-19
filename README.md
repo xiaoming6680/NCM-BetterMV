@@ -37,7 +37,7 @@ BetterMV 是网易云音乐 PC 版的插件（基于 [BetterNCM](https://github.
 
 ### 先读懂整首歌
 
-识别速度、拍号，以及前奏、主歌、副歌、drop 等段落。镜头按段落切换，动作落在鼓点上，进度条也按段落分格。安装[对齐包](#对齐包逐字歌词与节拍)后，节拍改由本机的音频模型识别：切分节奏的歌、鼓打贝斯、音游曲和渐快的歌，也能踩准。
+识别速度、拍号，以及前奏、主歌、副歌、drop 等段落。镜头按段落切换，动作落在鼓点上，进度条也按段落分格。安装[对齐包](#对齐包逐字歌词与节拍)后，节拍和鼓点改由本机的音频模型识别：切分节奏的歌、鼓打贝斯、音游曲和渐快的歌，也能踩准。
 
 <p align="center"><img src="docs/images/ui-loading.gif" alt="首次打开一首歌：读取、解码、识别节拍、分析段落，然后开始播放" width="880"></p>
 
@@ -49,7 +49,7 @@ BetterMV 是网易云音乐 PC 版的插件（基于 [BetterNCM](https://github.
 
 ### 颜色只取自封面，每次播放都不同
 
-整支 MV 的配色都取自这首歌的封面，黑白封面生成黑白 MV。共 39 个场景、4 种风格、4 种画风，同一首歌每次播放重新编排。风格默认按曲风和音频自动选择，也可以手动指定。
+整支 MV 的配色都取自这首歌的封面，黑白封面生成黑白 MV。共 33 个场景、4 种风格、4 种画风，同一首歌每次播放重新编排。风格默认按曲风和音频自动选择，也可以手动指定。
 
 | 律动 | 抒情 |
 |:---:|:---:|
@@ -64,9 +64,9 @@ BetterMV 是网易云音乐 PC 版的插件（基于 [BetterNCM](https://github.
 | <img src="docs/images/look-riso.jpg" alt="孔版印刷" width="210"> | <img src="docs/images/look-hibit.jpg" alt="像素" width="210"> | <img src="docs/images/look-ascii.jpg" alt="字符" width="210"> | <img src="docs/images/look-vhs.jpg" alt="录像带" width="210"> |
 
 <details>
-<summary>全部 39 个场景</summary>
+<summary>全部 33 个场景</summary>
 
-<p align="center"><img src="docs/images/scenes.jpg" alt="39 个场景" width="880"></p>
+<p align="center"><img src="docs/images/scenes.jpg" alt="33 个场景" width="880"></p>
 
 </details>
 
@@ -153,6 +153,7 @@ BetterMV 是网易云音乐 PC 版的插件（基于 [BetterNCM](https://github.
 
 - **逐字歌词**：网易云多数歌只有逐句歌词，插件只能按音节估算每个字的时间。装了对齐包后，第一次播放这样的歌时按歌声对齐每个字，结果按歌保存。
 - **节拍**：每首歌第一次分析时，用音频模型识别节拍，再由插件整理。镜头和动作更多落在实际的鼓点上；切分节奏、鼓打贝斯、音游曲和渐快的歌提升明显。
+- **鼓点**：同时用一个鼓点模型识别底鼓、军鼓和镲，场景跟着鼓点的动作更少错位。模型约 2 MB，第一次用到时自动下载；已经分析过的歌只补识别鼓点，几秒内完成。
 
 旧版对齐包（只有逐字歌词）需要更新：设置中会显示“需要更新”，点击后只下载新增的部分（约 130 MB）。不装对齐包时，插件照常工作，逐字时间按音节估算，节拍由插件自己识别。
 
@@ -162,7 +163,7 @@ BetterMV 是网易云音乐 PC 版的插件（基于 [BetterNCM](https://github.
 1. 在[对齐包发布页](https://github.com/xiaoming6680/NCM-BetterMV/releases/tag/aligner-v2)下载 `aligner-runtime.zip`、`mms_fa.onnx.001`～`mms_fa.onnx.004`、`beat_this.onnx.001` 和 `beat_mel.npy`，共 7 个文件，约 490 MB。从旧版更新时，已有的 `mms_fa.onnx`（或它的四个分卷）不用重新下载。
 2. 打开 BetterNCM 的数据目录（插件文件夹的上一级，默认 `C:\betterncm`），进入 `BetterMV\aligner`，没有就新建这两层文件夹。
 3. 把 `aligner-runtime.zip` 解压到 `aligner` 中，覆盖已有文件。解压后 `align.py` 和 `python` 文件夹应直接位于 `aligner` 下，不要多出一层 `aligner-runtime` 文件夹。
-4. 在 `aligner` 中新建 `models` 文件夹（已有就直接用），放入下载的 `.onnx.00x` 文件和 `beat_mel.npy`。
+4. 在 `aligner` 中新建 `models` 文件夹（已有就直接用），放入下载的 `.onnx.00x` 文件和 `beat_mel.npy`。鼓点模型 `adtof_frame_rnn.onnx`（约 2 MB，同一发布页）也可以一并放入；不放时插件第一次用到会自动下载。
 5. 在 `aligner` 中新建文本文件 `installed.json`（已有就改写），内容为 `{"version":2}`。注意扩展名是 `.json`，不是 `.txt`。
 6. 重启网易云。设置“开始使用”中的“对齐包”显示“已安装”即完成。
 
@@ -172,7 +173,7 @@ BetterMV 是网易云音乐 PC 版的插件（基于 [BetterNCM](https://github.
 C:\betterncm\BetterMV\aligner\
 ├─ align.py、fa.py、beats.py、version.json、LICENSES.txt、installed.json
 ├─ python\
-└─ models\mms_fa.onnx.001～.004、beat_this.onnx.001、beat_mel.npy
+└─ models\mms_fa.onnx.001～.004、beat_this.onnx.001、beat_mel.npy、adtof_frame_rnn.onnx
 ```
 
 模型分卷在首次使用时于本机拼合为一个文件。
@@ -197,7 +198,7 @@ C:\betterncm\BetterMV\aligner\
 | 风格不合适 | “风格”改为律动、抒情、字或墨 |
 | 不喜欢某个场景或画风 | 在“场景”“画风”中关闭，点击“应用” |
 | 切歌时不想等待 | 开启“提前分析下一首” |
-| 逐字歌词更准、节拍更准 | 在“歌词与对齐”中下载对齐包（约 490 MB） |
+| 逐字歌词更准、节拍和鼓点更准 | 在“歌词与对齐”中下载对齐包（约 490 MB） |
 | 不显示播放栏上方的 MV 按钮 | 关闭“MV 按钮”，改用快捷键打开 |
 
 <p align="center"><img src="docs/images/settings.jpg" alt="BetterNCM 插件管理中的设置页" width="760"></p>
@@ -268,6 +269,6 @@ bun run pack     # 打包为 dist/ncm-better-mv.plugin
 
 ## 开源协议
 
-GPL-3.0-or-later。内置字体 Archivo、Bodoni Moda、Cormorant Garamond、得意黑（Smiley Sans）、霞鹜文楷 Lite 均使用 SIL Open Font License 1.1（`public/fonts/OFL.txt`），打包进插件的 three.js 使用 MIT 协议。可选对齐包中的 MMS-FA 模型来自 Meta，使用 CC BY-NC 4.0（不可商用）；节拍模型 Beat This! 来自 JKU Linz 计算感知研究所，使用 MIT 协议；其余组件见包内的 `LICENSES.txt`。
+GPL-3.0-or-later。内置字体 Archivo、Bodoni Moda、Cormorant Garamond、得意黑（Smiley Sans）、霞鹜文楷 Lite 均使用 SIL Open Font License 1.1（`public/fonts/OFL.txt`），打包进插件的 three.js 使用 MIT 协议。可选对齐包中的 MMS-FA 模型来自 Meta，使用 CC BY-NC 4.0（不可商用）；节拍模型 Beat This! 来自 JKU Linz 计算感知研究所，使用 MIT 协议；鼓点模型来自 ADTOF（M. Zehren、M. Alunno、P. Bientinesi），使用 CC BY-NC-SA 4.0（不可商用），署名和说明随模型放在 `models` 文件夹中；其余组件见包内的 `LICENSES.txt`。
 
 作者 [XIAOMING6680](https://github.com/xiaoming6680)。
