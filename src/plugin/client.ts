@@ -160,12 +160,13 @@ export function listTrack(item: any): { name: string; artists: string[]; duratio
 
 /**
  * The song NetEase will play after this one, when the play list tells: the next entry in list order (back to the first
- * when the list repeats). Null for one-song repeat, shuffle, FM and AI modes, at the end of the list, and for an entry
- * that isn't an online song with a cover.
+ * when the list repeats). 心动模式 and 私人 FM play their own lists in order too (the songs they pick are put into
+ * the list ahead of time). Null for one-song repeat (the song after is this one), shuffle (the order isn't in the
+ * list), at the end of the list, and for an entry that isn't an online song with a cover.
  */
 export function nextSong(store: Store): PlayingSong | null {
   const mode = playMode(store);
-  if (mode !== 'playOrder' && mode !== 'playCycle') return null;
+  if (mode !== 'playOrder' && mode !== 'playCycle' && mode !== 'playAi' && mode !== 'playFm') return null;
   const list = playList(store), at = playingIndex(store, list);
   if (at < 0) return null;
   const i = at + 1 < list.length ? at + 1 : mode === 'playCycle' ? 0 : -1;
