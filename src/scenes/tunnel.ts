@@ -2,8 +2,9 @@
 // ~110 glowing frames recede into ink fog, each turned a little more than the one before (a twist). Between two
 // frames the wall is a faint zigzag mesh, lit by a shock ring that runs down the tunnel on every kick; comets
 // run round the frames as spiral light bands; insets and rays flicker on the off-beats. Near paper-white, mid
-// accent, far signal. When the section rises into a louder one the tunnel whips over its last beat (twist and
-// roll) and its far end opens onto the cover, which rushes at the camera — the next shot is the cover itself.
+// accent, far signal. When the section rises into a louder one the tunnel whips over its last beat (twist, roll and
+// a lunge forward) and the lens flies on down it into the next plate (the director's push-through; it used to open
+// onto the cover rushing at the camera).
 // Pulse: triangles, fast, kick surges. Ballad: circles, slow and soft, no shock rings.
 // The words are in the tunnel: pulse, a sign for every few words that the camera flies through (LyricGates); ballad,
 // each line a hanging scroll to one side of the path that the camera glides past (the rig's world mode).
@@ -52,7 +53,6 @@ export class Tunnel implements MvScene {
   readonly camera = new THREE.PerspectiveCamera(FOV, 16 / 9, 0.05, 400);
   private lines = new LineBatch(14000);
   private bg: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
-  private exit: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   private rig: LyricRig;
   private gates: LyricGates;
   private kicks: Float64Array;
@@ -95,11 +95,6 @@ export class Tunnel implements MvScene {
     this.bg.frustumCulled = false;
     this.bg.renderOrder = -10;
     this.scene.add(this.bg, this.lines.mesh);
-
-    this.exit = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: init.cover, toneMapped: true, depthTest: false, depthWrite: false }));
-    this.exit.renderOrder = 4;
-    this.exit.visible = false;
-    this.scene.add(this.exit);
 
     this.rig = new LyricRig(palette, 'poem');
     this.rig.faces = voiceFaces('ballad', init.seed);
@@ -190,10 +185,6 @@ export class Tunnel implements MvScene {
     this.bg.material.uniforms.uVP.value.set(vp.x, vp.y);
     this.bg.material.uniforms.uHaze.value = 0.7 + energy * 0.6 + build;
 
-    // The far end opens over the last beat of a rising section.
-    const eo = clamp01((whip - 0.3) / 0.7);
-    const dEnd = eo > 0 ? 0.5 * Math.pow(80, 1 - eo) : Infinity;
-
     const L = this.lines;
     L.clear();
     const n = this.sides;
@@ -218,7 +209,7 @@ export class Tunnel implements MvScene {
     for (let j = 0; j <= NF; j++) {
       const i = i0 + j, d = i * S - sCam;
       const fog = fogAt(d);
-      const ok = fog >= 0.008 && d <= dEnd;
+      const ok = fog >= 0.008;
       const b = this.basis(i * S);
       const th = K * (d / S) + phi + Math.PI / 2;
       for (let k = 0; k < n; k++) {
@@ -237,7 +228,6 @@ export class Tunnel implements MvScene {
       let I = major ? 1.7 : 0.3 + 0.28 * hash(i, 1.7);
       if (this.soft) I *= 0.6;
       I *= (1 + (major ? 1.6 : 3.2) * kick * nearK + 2.2 * sh) * bright;
-      if (eo > 0) I *= 1 + 3 * eo * Math.exp(-(dEnd - d) / 1.2);
       const c = I * fog;
       const w = Math.max(0.7, Math.min(2.0, 4.2 / d)) * (major ? 1.2 : 0.9) * (this.soft ? 0.8 : 1);
       for (let k = 0; k < n; k++) {
@@ -288,16 +278,6 @@ export class Tunnel implements MvScene {
       prevOk = true;
     }
     L.commit(this.resolution, this.pixelRatio);
-
-    // The opening at the end: the cover, sized to the frame it replaces, rushing at the camera.
-    this.exit.visible = eo > 0;
-    if (eo > 0) {
-      const b = this.basis(sCam + dEnd);
-      this.exit.position.copy(b.c);
-      this.exit.quaternion.copy(cam.quaternion);
-      this.exit.scale.setScalar(R * 1.25);
-      this.exit.material.color.setScalar(0.4 + 0.6 * eo);
-    }
 
     ctx.fx.bloom = (this.soft ? 0.4 : 0.55) + energy * 0.2 + kick * 0.3;
     ctx.fx.ca = kick * 0.4 + whip * 0.6;

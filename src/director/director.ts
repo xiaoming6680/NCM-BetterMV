@@ -21,20 +21,21 @@ import { Accents } from '../scenes/hits.ts';
 import { findPushes, findStops, plateTime, stopAt, type Push, type Stop } from './moments.ts';
 
 /**
- * Cut times inside a section, on downbeats or their bar's hit, and `rush`: where the speeding-up cuts at the end of a
- * build begin (Infinity: none). Only a build (or whatever runs into a drop) rising into a louder section speeds up, and
- * only over its last two bars: a shot each, the last bar halved. (Every section before a louder one used to: its last
- * four bars a shot each and its last two cut on every beat — half the shots of a verse were under a second.)
+ * Cut times inside a section, on downbeats or their bar's hit: a shot every `baseBars` (2 bars in loud sections),
+ * and `rush`: where the cuts on every beat begin (Infinity: none). A section rising into a louder one speeds up: its
+ * last four bars a shot each, its last two cut on every beat (those only change the camera, see planShots). (0.10.1
+ * held a plate about 8 to 12 seconds and sped up only out of builds; the user, wanting the director aggressive again:
+ * “忽略我之前说的避免频繁切换场景”.)
  */
-function cutTimes(music: Music, style: Style, section: Section, next: Section | undefined): { cuts: number[]; rush: number } {
+export function cutTimes(music: Music, style: Style, section: Section, next: Section | undefined): { cuts: number[]; rush: number } {
   const beats = Array.from(music.beats).filter(b => b > section.start + 0.05 && b < section.end - 0.05);
   const downs = Array.from(music.downbeats).filter(d => d > section.start + 0.05 && d < section.end - 0.05);
   const cuts = [section.start];
-  const bar = (60 / Math.max(40, music.at(section.start + 0.01).bpm)) * music.meter;
+  const bar = music.barDuration(section.start + 0.01);
   const per = style.baseBars(section, bar);
   const hero = style.heroBars?.(section, bar) ?? per;
-  const builds = section.label === 'build' || section.label === 'pre' || next?.label === 'drop';
-  const rising = style.accelerate && !!next && builds && next.energy > section.energy + 0.08 && section.label !== 'intro';
+  const rising = style.accelerate && !!next && next.energy > section.energy + 0.08 && section.label !== 'intro';
+  const accelFrom = rising ? Math.max(0, downs.length + 1 - 4) : Infinity;
   const rush = rising && downs.length >= 2 ? downs[downs.length - 2] : Infinity;
   // A cut on a downbeat goes to that bar's hit (the strongest from 0.4 beat before to half a beat after), so it lands
   // on a drum: in a syncopated song the grid's downbeat often has none.
@@ -43,23 +44,13 @@ function cutTimes(music: Music, style: Style, section: Section, next: Section | 
     const beat = 60 / Math.max(40, music.at(d).bpm), i = lastIndex(barHits, d + 0.5 * beat);
     return i >= 0 && barHits[i] >= d - 0.4 * beat && barHits[i] > section.start + 0.12 && barHits[i] < section.end - 0.12 ? barHits[i] : d;
   };
-  const regular: number[] = [];
   for (let i = 0; i < downs.length; i++) {
     const n = i + 1;
     // (Not the speeding-up cuts: moved to a hit, one would leave a sliver of a shot.)
-    if (downs[i] >= rush - 1e-3) cuts.push(downs[i]);
-    else if (n >= hero && n % per === 0) regular.push(onHit(downs[i]));
+    if (n >= accelFrom) cuts.push(downs[i]);
+    else if (n >= hero && n % per === 0) cuts.push(onHit(downs[i]));
   }
-  // A section that isn't a whole number of shots long would end on a stub of a bar or two: the shot before runs on.
-  const tail = Math.min(rush, section.end);
-  while (regular.length && tail - regular[regular.length - 1] < 0.5 * per * bar - 0.1) regular.pop();
-  cuts.push(...regular);
-  if (Number.isFinite(rush)) {
-    // The last bar cut again halfway.
-    const last = downs[downs.length - 1], half = Math.floor(music.meter / 2);
-    const mid = beats.filter(b => b > last + 0.05)[half - 1];
-    if (half >= 1 && mid !== undefined && mid < section.end - 0.15) cuts.push(mid);
-  }
+  if (Number.isFinite(rush)) for (const b of beats) if (b > rush + 0.05 && !cuts.some(c => Math.abs(c - b) < 0.05)) cuts.push(b);
   cuts.sort((a, b) => a - b);
   cuts.push(section.end);
   return { cuts, rush };
@@ -94,6 +85,51 @@ function allowed(pool: Plate[], off: ReadonlySet<string>, sections: Section[], i
 }
 
 /**
+ * The song's cast: the few plates it is told in. A section draws only on the plates of its pool in the cast (besides
+ * its fixed ones: a build's tunnel, a drop's push tunnel and spectrum tube), so a chorus comes back as the first one
+ * looked and the song keeps to a handful of worlds rather than going round every pool (the user: “现在的场景太多了”;
+ * songs showed 22 different plates on average, 17 to 29). Picked to cover the song: each pick the plate that can fill
+ * most of the sections still short of two plates (by their length), with a seeded shuffle; given the plays' record,
+ * the plates seen least weigh more, so across songs every plate still comes round. Every section is then given at
+ * least two (or all its pool has).
+ */
+const CAST = 5;
+/** Plates a section keeps whatever the cast: a pool of one (the build's tunnel), a drop's two openings. */
+const fixedIn = (pool: Plate[], section: Section, k: number) => pool.length === 1 || (section.label === 'drop' && k < 2);
+
+function castOf(pools: Plate[][], sections: Section[], random: () => number, duration: number, seenOf?: (scene: SceneId) => number): Set<SceneId> {
+  const cast = new Set<SceneId>();
+  const open = pools.map((pool, i) => pool.filter((_, k) => !fixedIn(pool, sections[i], k)).map(p => p.scene));
+  const all = [...new Set(open.flat())];
+  if (!all.length) return cast;
+  // Seen least → up to twice the weight (the record's spread, not its scale), and a shuffle so that songs differ.
+  const seen = seenOf ? all.map(seenOf) : [];
+  const lo = Math.min(...seen), hi = Math.max(...seen);
+  const pref = new Map(all.map((scene, k) => [scene, (seenOf && hi > lo ? 2 - (seen[k] - lo) / (hi - lo) : 1) * (0.3 + 1.4 * random())]));
+  const have = (i: number) => open[i].filter(scene => cast.has(scene)).length;
+  const need = (i: number) => Math.min(2, open[i].length);
+  const size = CAST + (duration > 240 ? 1 : 0);
+  while (cast.size < size) {
+    let best: SceneId | null = null, top = 0;
+    for (const scene of all) {
+      if (cast.has(scene)) continue;
+      let gain = 0;
+      open.forEach((list, i) => { if (list.includes(scene)) gain += (sections[i].end - sections[i].start) * (have(i) < need(i) ? 1 : 0.1); });
+      // (Coverage counts, but softly: plates in most pools — the particles were in five — would otherwise be in
+      // almost every song.)
+      const score = Math.pow(gain, 0.35) * pref.get(scene)!;
+      if (score > top) { top = score; best = scene; }
+    }
+    if (!best) break;
+    cast.add(best);
+  }
+  open.forEach((list, i) => {
+    for (const scene of [...list].sort((a, b) => pref.get(b)! - pref.get(a)!)) if (have(i) < need(i)) cast.add(scene);
+  });
+  return cast;
+}
+
+/**
  * `off`: plates the user turned off in the settings (the armillary's and the opening's own shots included).
  * `exposure`: seconds each plate has been on screen over the plays so far (the plugin's record, recent plays weighing
  * most). Given it, the plates seen least come first among those equally due, and verses, choruses, breaks and bridges
@@ -108,7 +144,7 @@ export function planShots(music: Music, style: Style, songSeed: number, song: So
   let prevScene = '', prevVariant = '';
   const used = new Map<string, number>(); // plate -> times used, so the rotation reaches every plate
   const seen = new Map<string, number>(); // label -> sections so far with it
-  const barLen = (t: number) => (60 / Math.max(40, music.at(t).bpm)) * music.meter;
+  const barLen = (t: number) => music.barDuration(t);
   /** Shots that only change the camera, cut short at the end of a build (joinRuns). */
   const rushed = new Set<Shot>();
   // A plate missing from the record (new, or never yet in a pool that was played) counts as seen as the middle one.
@@ -117,8 +153,10 @@ export function planShots(music: Music, style: Style, songSeed: number, song: So
   const seenOf = (scene: string) => exposure?.get(scene) ?? middle;
   /** Seconds of screen within which plates count as equally seen (shuffled by the seed). */
   const JITTER = 12;
+  const pools = sections.map((section, i) => allowed(style.pool(section, song), off, sections, i, style, song));
+  const cast = castOf(pools, sections, rng((songSeed ^ 0xca57ca57) >>> 0), music.a.duration, exposure ? seenOf : undefined);
   sections.forEach((section, sectionIndex) => {
-    const pool = allowed(style.pool(section, song), off, sections, sectionIndex, style, song);
+    const pool = pools[sectionIndex].filter((p, k, all) => fixedIn(all, section, k) || cast.has(p.scene));
     const { cuts, rush } = cutTimes(music, style, section, sections[sectionIndex + 1]);
     const random = rng((songSeed ^ (sectionIndex * 2654435761)) >>> 0);
     // Verses, choruses, breaks, bridges and drops take turns opening on their first two plates (the drop's push tunnel
@@ -233,6 +271,23 @@ function placeOpening(shots: Shot[], music: Music, songSeed: number): Shot[] {
 const SLIVER = 1.2;
 /** Shots that keep their own timing (never lengthened to take in a sliver). */
 const TIMED: ReadonlySet<SceneId> = new Set<SceneId>(['cards', 'crystal', 'canvas']);
+
+/**
+ * When the closing fade runs: it ends where the sound does (the last moment within 40 dB of the song's loud level: a
+ * file often ends in seconds of silence) and takes the 3 seconds before it, or a tenth of a short song.
+ */
+function endFade(music: Music): [number, number] {
+  const { rms, fps } = music.a.env, n = rms.length;
+  let to = music.duration;
+  if (n) {
+    const sorted = Float32Array.from(rms).sort(), loud = sorted[Math.floor(0.95 * (n - 1))];
+    let k = n - 1;
+    while (k > 0 && rms[k] < loud * 0.01) k--;
+    to = Math.min(music.duration, (k + 1) / fps);
+  }
+  const len = Math.min(3, Math.max(0.5, 0.1 * to));
+  return [to - len, to];
+}
 
 /** Puts a shot of its own over [from, to), trimming the shots it overlaps. (Also the films' cuts, film/reel.ts.) */
 export function carve(shots: Shot[], music: Music, scene: SceneId, from: number, to: number, sectionIndex: number, variant: string, songSeed: number): void {
@@ -369,7 +424,7 @@ export function planLooks(sections: Section[], style: Style, songSeed: number, o
  * (LyricLayer; the words can't be drawn apart), and the soft ones that fill the frame with haze (clouds, bokeh), which
  * characters turn into a wall of the same glyph.
  */
-const NO_CHARACTERS: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'halftone', 'ink', 'clouds', 'bokeh']);
+const NO_CHARACTERS: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'ink', 'clouds', 'bokeh']);
 
 /**
  * Where the picture goes to letterbox (2.39:1 bars in the cover's ink, under the overlay): the opening and the end of
@@ -399,11 +454,11 @@ const { zoom, spin, whip } = TransitionKind;
 const MOTION: Record<SceneId, TransitionKind[]> = {
   tunnel: [zoom], drive: [zoom], relief: [zoom], bokeh: [zoom], particles: [zoom, spin],
   kaleido: [spin], rings: [spin], flip: [whip, spin],
-  poster: [whip], typewall: [whip], halftone: [whip, zoom], ridges: [whip, zoom], diorama: [whip, zoom], ink: [TransitionKind.ink],
-  crystal: [zoom, spin], cards: [zoom], debug: [whip, zoom], scope: [zoom, whip], subdivide: [spin, zoom],
+  poster: [whip], ridges: [whip, zoom], diorama: [whip, zoom], ink: [TransitionKind.ink],
+  crystal: [zoom, spin], cards: [zoom], scope: [zoom, whip],
   vinyl: [spin, zoom], clouds: [zoom], city: [zoom], aurora: [zoom], canvas: [zoom], pillars: [spin, zoom],
   ripple: [spin, zoom], channel: [zoom], orb: [spin, zoom],
-  menger: [zoom], sierpinski: [zoom], cantor: [zoom], papercut: [spin, zoom], rain: [TransitionKind.matte, zoom], lanterns: [zoom], neon: [zoom, whip], kinetic: [whip], blackhole: [spin, zoom], cubes: [zoom, spin], dots: [whip, zoom],
+  menger: [zoom], sierpinski: [zoom], papercut: [spin, zoom], rain: [TransitionKind.matte, zoom], lanterns: [zoom], neon: [zoom, whip], kinetic: [whip], blackhole: [spin, zoom], cubes: [zoom, spin], dots: [whip, zoom],
 };
 const SOFT: TransitionKind[] = [zoom, TransitionKind.matte, TransitionKind.iris, spin];
 
@@ -445,9 +500,10 @@ export class Director {
     this.sigil = sigil && cover ? new Armillary(sigil, palette, cover) : null;
     this.overlay = new MgOverlay(palette, style, music, this.sigil);
     this.overlay.quiet = pure;
-    this.snares = Float64Array.from(music.a.hits.snare.filter(h => h[1] > 0.6), h => h[0]);
     this.stutters = findStutters(lyrics.lines);
     this.boxes = pure ? [] : letterboxed(music, style);
+    this.snares = Float64Array.from(music.a.hits.snare.filter(h => h[1] > 0.6), h => h[0]);
+    this.endFade = endFade(music);
     this.stops = pure ? [] : findStops(music);
     this.pushes = pure ? [] : findPushes(music, this.stops);
     this.pushTimes = Float64Array.from(this.pushes, p => p.at);
@@ -461,9 +517,11 @@ export class Director {
   /** The cameras pushed in last frame: their zoom is put back before the next. */
   private zoomed = new Set<THREE.PerspectiveCamera>();
 
-  private snares: Float64Array;
   /** Stretches of the song in letterbox (letterboxed). */
   private boxes: Array<[number, number]>;
+  private snares: Float64Array;
+  /** The picture fades to ink over [from, to): the song's last few seconds of sound (endFade). */
+  private endFade: [number, number];
   private stutters: Array<[number, number, number]>;
   /** The stutter whose first moment the engine holds for its flashbacks (−1: none). */
   private remembered = -1;
@@ -476,7 +534,8 @@ export class Director {
    * One transition per cut, decided up front so a frame is a pure function of t. Cuts flow: the ones inside a
    * section carry the outgoing plate's own motion on through the cut (a flight pushes on through, a turning plate
    * spins on, a flat page whips across), starting half their length before the beat so they move fastest on it.
-   * Pulse: into a louder section a shape grows from the middle (a drop keeps its blackout and punch); other section
+   * Pulse: into a louder section a shape grows from the middle (a drop keeps its blackout and punch), except out of
+   * the armillary's and the tunnel's run-ins, which push on through into the next plate; other section
    * changes pass through the cover's shapes or carry on moving; the speeding-up cuts before a big section stay hard.
    * Ballad: the same moves, slower and shorter, and sections flow into each other instead of dipping to ink.
    * A cut that stays on the same plate (only the camera changes) whips the camera instead.
@@ -488,12 +547,12 @@ export class Director {
     const tr = this.style.transitions;
     this.shots.forEach((shot, i) => {
       const random = rng((shot.seed ^ 0x5bd1e995) >>> 0);
-      const beat = 60 / Math.max(40, this.music.at(shot.start + 0.01).bpm);
+      const beat = this.music.visual.beatDuration(shot.start + 0.01);
       const cut: Cut = { kind: 0, pre: 0, post: 0, center: [0.5, 0.5], angle: 0, amount: ballad ? 0.45 : 1, whip: [0, 0] };
       const prev = this.shots[i - 1];
       out.push(cut);
       if (!prev) return;
-      const hurried = prev.end - prev.start < beat * this.music.meter * 0.9;
+      const hurried = prev.end - prev.start < this.music.barDuration(prev.start) * 0.9;
       if (prev.scene === shot.scene) {
         // (The speeding-up cuts of a build stay hard: a whip on every beat would blur them into mush.)
         if (!hurried) {
@@ -520,6 +579,13 @@ export class Director {
         if (changes) run(tr.between ?? (random() < 0.5 ? TransitionKind.matte : zoom), 2);
         else run(pick(tr.within ?? SOFT), 1.5);
       } else if (changes) {
+        // Out of the armillary's push down its rings, the lens flies on through into the drop's plate (half a beat
+        // either side of the drop's first beat): the push goes on into the drop instead of stopping at a cut. So out
+        // of the tunnel's whip into a louder section (tunnel.ts: it used to open onto the cover rushing at the camera;
+        // the user wanted the push to carry on into the next plate).
+        const armPush = shot.section.label === 'drop' && prev.scene === 'crystal' && prev.variant === 'orbit';
+        const tunnelPush = prev.scene === 'tunnel' && shot.section.energy > prev.section.energy + 0.08;
+        if (armPush || tunnelPush) { run(zoom, 1); last = zoom; return; }
         if (shot.section.label === 'drop') return;
         if (louder) run(random() < 0.5 ? TransitionKind.iris : TransitionKind.triangle, 0.5);
         else if (tr.between) run(tr.between, 1);
@@ -575,8 +641,9 @@ export class Director {
     const since = t - shot.start;
     const beat = 60 / Math.max(40, this.music.at(t).bpm);
     const next = this.music.a.sections[shot.sectionIndex + 1];
-    // (The armillary's bullet time takes the blackout's place.)
-    const beforeDrop = tr.dropPunch && next && next.label === 'drop' && next.start - t < beat * 0.5 && shot.scene !== 'crystal';
+    // (A push on through into the drop — the armillary's bullet time, the tunnel's whip — takes the blackout's place.)
+    const pushOn = !!following && following.section !== shot.section && this.cuts[i + 1].kind === zoom;
+    const beforeDrop = tr.dropPunch && next && next.label === 'drop' && next.start - t < beat * 0.5 && shot.scene !== 'crystal' && !pushOn;
     const cut = this.cuts[i];
 
     if (this.pure) {
@@ -637,10 +704,13 @@ export class Director {
       fx.fade = Math.max(fx.fade, outOf, into);
     }
     if (beforeDrop && !this.pure) fx.fade = 1;
+    // The song's end: the whole picture, words and credits too, fades to ink as the sound ends.
+    const [fadeFrom, fadeTo] = this.endFade;
+    if (t > fadeFrom) fx.fade = Math.max(fx.fade, smooth((t - fadeFrom) / (fadeTo - fadeFrom)));
     for (const [a, b] of this.boxes) {
       if (t < a || t >= b) continue;
       // The bars slide in over a bar and out over a bar (not at the very start or end of the song).
-      const ramp = Math.min(beat * this.music.meter, (b - a) / 4);
+      const ramp = Math.min(this.music.barDuration(t), (b - a) / 4);
       const din = a <= 0.1 ? 1 : smooth((t - a) / ramp), dout = b >= this.music.a.duration - 0.1 ? 1 : smooth((b - t) / ramp);
       fx.letterbox = Math.min(din, dout);
     }
@@ -753,10 +823,11 @@ export class Director {
       case 'drop': {
         if (sparse && random() < 0.7) fx.echo = Math.max(fx.echo, 0.78);
         // (No mirror any more: folding any plate into a two- or four-way symmetry meant nothing and spoiled the picture.)
-        // Resolve out of big pixels on the drop's first beat — not after the armillary's push, which lands the drop
-        // with a clean cut on its kick, and not while a line is being sung over it (the pixels turned the words into
-        // blocks; decided once for the beat, so it never switches off halfway).
-        const pushedIn = this.shots.some(s => s.scene === 'crystal' && s.variant === 'orbit' && Math.abs(s.end - sec.start) < 0.05);
+        // Resolve out of big pixels on the drop's first beat — not after a push on through (the armillary's, the
+        // tunnel's), which lands the drop on its kick, and not while a line is being sung over it (the pixels turned
+        // the words into blocks; decided once for the beat, so it never switches off halfway).
+        const into = this.shots.findIndex(s => Math.abs(s.start - sec.start) < 0.05);
+        const pushedIn = into > 0 && this.cuts[into].kind === zoom;
         const sungOver = this.lyrics.visible(sec.start + beat * 0.5).some(s => s.exit < 0.5);
         if (intoSec < beat && !pushedIn && !sungOver) fx.pixel = Math.max(fx.pixel, 48 * Math.pow(1 - intoSec / beat, 2));
         // A quarter negative on the first strong snare of each four-bar phrase, in the second half (once, not a strobe;
@@ -770,7 +841,7 @@ export class Director {
         break;
       }
       case 'build': case 'pre': {
-        if (next && next.energy > sec.energy + 0.08 && sec.end - t < beat * m.meter && shot.scene !== 'crystal') {
+        if (next && next.energy > sec.energy + 0.08 && sec.end - t < m.barDuration(t) && shot.scene !== 'crystal') {
           const eighth = info.pos * 2 - Math.floor(info.pos * 2);
           fx.exposure *= 1 + 0.1 * Math.cos(eighth * Math.PI * 2);
           fx.scan = Math.max(fx.scan, 0.3);

@@ -7,7 +7,9 @@
 // Everything is a pure function of t: the stroke is planned for the whole song up front, and the paint maps hold
 // every stamp up to t (drawn as time goes on, redrawn from the start after a seek back).
 // Cameras: behind the brush (chase), ahead looking back at it and its trail (front), alongside (side), above (high),
-// the whole canvas (map). In the song's last shot every camera rises into the whole canvas.
+// the whole canvas (map). In the song's last shot every camera rises into the whole canvas, and what the brush left
+// bare fills in with the cover there, patch by patch, so the song ends on the whole picture (half a canvas looked
+// unfinished; under ink only the cover's darker masses fill in, its lights stay paper).
 // 墨 (ink): the same hand on rice paper (写意). The paint maps are read as ink: the cover's darks become scorched,
 // solid and pale ink (焦、浓、淡墨), its lights a faint trace, with a breath of its colour (淡彩); the stroke's edges
 // bleed into the paper's fibres, the thin parts break into flying white (飞白), fresh ink is a shade darker and
@@ -111,7 +113,7 @@ function liftsOf(music: Music): Lift[] {
   const sec = music.a.sections;
   for (let i = 1; i < sec.length; i++) {
     const prev = sec[i - 1], s = sec[i];
-    const beat = 60 / Math.max(40, music.at(s.start + 0.01).bpm), bar = beat * music.meter;
+    const bar = music.barDuration(s.start + 0.01);
     if (prev.end - prev.start < bar * 3 || s.end - s.start < bar * 2) continue;
     const slam = s.label === 'drop' || (LOUD.has(s.label) && s.energy > prev.energy + 0.12);
     const dur = slam && prev.label === 'build' ? Math.min(bar * 2, (prev.end - prev.start) * 0.5) : Math.min(bar, 2.6);
@@ -150,7 +152,7 @@ function* planning(music: Music, lines: LyricLine[], sal: Float32Array, seed: nu
   const firstLanding = Math.max(0.25, music.downbeats.length && music.downbeats[0] < 4 ? music.downbeats[0] : 0.25);
   let flight: { lift: Lift; fx: number; fz: number; tx: number; tz: number; h: number } | null = null;
   const m1 = random() * 6.28, m2 = random() * 6.28;
-  const speed = (t: number, level: number) => (soft ? 14 : 20) * THREE.MathUtils.clamp(music.at(t).bpm / 120, 0.8, 1.3) * (0.7 + 0.55 * level);
+  const speed = (t: number, level: number) => (soft ? 14 : 20) * THREE.MathUtils.clamp(music.visual.bpm(t) / 120, 0.8, 1.3) * (0.7 + 0.55 * level);
   // How wide the brush has to be for the song to cover about four fifths of the canvas: the length it will paint,
   // estimated up front (the stroke's course doesn't change it), against the widths it would use.
   let along = 0, widths = 0, steps = 0, level = 0;
@@ -306,6 +308,13 @@ float n2(vec2 x) {
   return mix(mix(hash12(i), hash12(i + vec2(1, 0)), f.x), mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), f.x), f.y);
 }`;
 
+/** The finale's fill at k (0..1): patches of bare canvas that spread and join, all of it at 1. */
+const FILL = /* glsl */ `
+float fillAt(vec2 p, float k) {
+  float n = n2(p * 0.012) * 0.55 + n2(p * 0.045 + 3.7) * 0.3 + n2(p * 0.17 + 9.1) * 0.15;
+  return smoothstep(n - 0.05, n + 0.05, k * 1.12 - 0.06);
+}`;
+
 const STAMP_VERT = /* glsl */ `
 precision highp float;
 in vec3 position;
@@ -439,11 +448,12 @@ function canvasFrag(p: Look, key: THREE.Vector3): string {
   return /* glsl */ `
 precision highp float;
 in vec3 vWorld;
-uniform sampler2D uColor, uThick;
+uniform sampler2D uColor, uThick, uCover;
 uniform vec3 uCam, uBrush;
-uniform float uT, uBrushI, uReveal, uGlow;
+uniform float uT, uBrushI, uReveal, uGlow, uFill;
 out vec4 fragColor;
 ${NOISE}
+${FILL}
 const float S = ${S.toFixed(1)}, E = ${(1 / MAP).toFixed(7)};
 const vec3 CANVAS = ${v3(canvas)}, VOID = ${v3(voidC)}, KEYC = ${v3(keyC)}, BRUSHC = ${v3(brushC)}, AMB = ${v3(amb)};
 const vec3 KEY = vec3(${key.x.toFixed(4)}, ${key.y.toFixed(4)}, ${key.z.toFixed(4)});
@@ -456,6 +466,11 @@ void main() {
   float w = clamp(fwidth(paint.a) * 0.8, 0.002, 0.5);
   float a = smoothstep(0.5 - w, 0.5 + w, paint.a);
   vec3 pc = paint.rgb / max(paint.a, 0.05);
+  // The finale: the bare canvas fills in with the cover there (a glaze, without relief).
+  if (uFill > 0.0) {
+    pc = mix(texture(uCover, vec2(uv.x, 1.0 - uv.y)).rgb, pc, a);
+    a = max(a, fillAt(vWorld.xz, uFill));
+  }
   // The paint's relief; the canvas weave where it is bare (faded out where it would shimmer).
   float hl = H(uv - vec2(E, 0.0)), hr = H(uv + vec2(E, 0.0)), hd = H(uv - vec2(0.0, E)), hu = H(uv + vec2(0.0, E));
   vec2 wv = vWorld.xz * 4.2;
@@ -538,11 +553,12 @@ function inkCanvasFrag(paper: THREE.Color, [lo, hi]: [number, number]): string {
   return /* glsl */ `
 precision highp float;
 in vec3 vWorld;
-uniform sampler2D uColor, uThick;
+uniform sampler2D uColor, uThick, uCover;
 uniform vec3 uCam;
-uniform float uT, uReveal;
+uniform float uT, uReveal, uFill;
 out vec4 fragColor;
 ${NOISE}
+${FILL}
 const float S = ${S.toFixed(1)};
 const vec3 PAPER = ${v3(paper)}, INK = ${v3(INK_BLACK)}, FOG = ${v3(fog)};
 void main() {
@@ -557,6 +573,15 @@ void main() {
   // A pale bleed just outside the stroke (洇).
   float bleed = smoothstep(0.12, 0.45, edge) * (1.0 - a) * 0.22;
   vec3 pc = paint.rgb / max(paint.a, 0.05);
+  // The finale: the cover's darker masses fill in where the brush left them bare (its masses, as the brush reads
+  // them); its lights stay paper (留白).
+  if (uFill > 0.0) {
+    vec3 cov = texture(uCover, vec2(uv.x, 1.0 - uv.y), 2.2).rgb;
+    float lc = pow(max(dot(cov, vec3(0.2126, 0.7152, 0.0722)), 0.0), 1.0 / 2.2);
+    float dc = 1.0 - clamp((lc - ${lo.toFixed(3)}) / ${(hi - lo).toFixed(3)}, 0.0, 1.0);
+    pc = mix(cov, pc, a);
+    a = max(a, fillAt(vWorld.xz, uFill) * smoothstep(0.25, 0.5, dc));
+  }
   float l = pow(max(dot(pc, vec3(0.2126, 0.7152, 0.0722)), 0.0), 1.0 / 2.2);
   // The cover's darks (against its own range) in distinct inks — pale, solid, scorched; its lights still leave a faint
   // trace where the brush went.
@@ -689,6 +714,7 @@ export class CanvasScene implements MvScene {
     this.u = {
       uColor: { value: this.targets[0].texture }, uThick: { value: this.targets[1].texture },
       uCam: { value: new THREE.Vector3() }, uBrush: { value: new THREE.Vector3() }, uT: { value: 0 }, uBrushI: { value: 1 }, uReveal: { value: 0 }, uGlow: { value: 0 },
+      uCover: { value: init.cover }, uFill: { value: 0 },
     };
     const grid = new THREE.PlaneGeometry(S, S, 1, 1);
     grid.rotateX(-Math.PI / 2);
@@ -802,7 +828,17 @@ export class CanvasScene implements MvScene {
    * brush is seen finishing first), over 5 to 12 seconds.
    */
   private revealAt(t: number, shot: Shot): number {
-    if (shot.variant === 'map' || shot.end < this.duration - 0.5) return 0;
+    return shot.variant === 'map' ? 0 : this.finaleAt(t, shot);
+  }
+
+  /** 0..1 how far the bare canvas has filled in: as the camera rises, done well before the end fade. */
+  private fillAt(t: number, shot: Shot): number {
+    return smooth((this.finaleAt(t, shot) - 0.1) / 0.55);
+  }
+
+  /** The rise's timing (the map, already over the whole canvas, fills in on the same seconds). */
+  private finaleAt(t: number, shot: Shot): number {
+    if (shot.end < this.duration - 0.5) return 0;
     let from = shot.start + Math.min(4, (shot.end - shot.start) * 0.25);
     if (this.duration - from < 6) from = this.duration - 6;
     const len = THREE.MathUtils.clamp((this.duration - from) * 0.6, 5, 12);
@@ -878,6 +914,7 @@ export class CanvasScene implements MvScene {
     u.uT.value = t;
     u.uBrushI.value = (0.45 + kick * (this.soft ? 0.3 : 0.6) + music.env('rms', t) * 0.25) * (1 - r);
     u.uReveal.value = r;
+    u.uFill.value = this.fillAt(t, shot);
     u.uGlow.value = (loud ? 0.6 : 0.2) + 0.4 * music.env('rms', t);
 
     // The words: each line one block standing over the canvas ahead, where the camera following the brush will have

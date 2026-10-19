@@ -1,7 +1,7 @@
 // Cards: the opening — the song read out as one lit object. (It was hairlines on a Swiss grid, a step a beat, five
 // readouts in five corners; the user: “不够高级”.) The whole song is wrapped into a ring of light standing on dark
 // glass: once round is the whole song, a pillar's height is how loud it is there, the choruses and drops stand in
-// the signal colour, a gap parts each section from the next, and the playhead burns where the song is now. The
+// the signal colour, a gap parts each section from the next, and the pillar where the song is now burns. The
 // song's armillary floats over the middle of it, a pool of the cover's colour on the floor, and the camera drifts round
 // and in. Beside it, set large and quiet: the title, the artists and four figures (tempo, metre, length, sections).
 // Over the intro's first one or two bars:
@@ -240,6 +240,16 @@ export class CardsScene implements MvScene {
       const x = (d - swell * Math.PI) / 0.42;
       return Math.exp(-x * x) * Math.sin(Math.PI * Math.min(1, swell * 1.15));
     };
+    // The pillar where the song is now (the playhead): lit in the signal colour, brightening on the kicks. (It used
+    // to be a line of its own standing taller than the ring, alone among the intro's low pillars: the user, “总会杵着
+    // 一个棍子”.)
+    let now = -1;
+    for (let i = 0, best = Infinity; i < PILLARS; i++) {
+      let d = Math.abs(this.angle[i] - here) % (Math.PI * 2);
+      if (d > Math.PI) d = Math.PI * 2 - d;
+      if (d < best) { best = d; now = i; }
+    }
+    const nowK = head > 0 ? (1 + 0.6 * music.pulse('kick', t, 0.18)) * smooth(s / 0.3) : 0;
     // The pillars: rising as the head passes, brightening up their length to a bright tip, reflected in the floor.
     const ageOf = (ang: number) => ((reach - ang) / (Math.PI * 2)) * sw;
     for (let i = 0; i < PILLARS; i++) {
@@ -249,8 +259,8 @@ export class CardsScene implements MvScene {
       const lift = swellAt(ang);
       const h = H * (0.04 + 0.96 * this.height[i]) * rise * (1 + 0.28 * lift) + H * 0.06 * lift;
       const x = Math.sin(ang) * R, z = Math.cos(ang) * R;
-      const w = W, c = this.loud[i] ? signal : paper;
-      const k = near(x, z) * side(x, z) * (this.loud[i] ? 1.2 : 0.65) * (0.55 + 0.45 * this.height[i]) * (1 + 0.9 * lift);
+      const w = W, c = this.loud[i] || i === now ? signal : paper;
+      const k = near(x, z) * side(x, z) * (this.loud[i] ? 1.2 : 0.65) * (0.55 + 0.45 * this.height[i]) * (1 + 0.9 * lift) * (i === now ? 1 + 1.5 * nowK : 1);
       seg(x, 0, z, x, h * 0.4, z, w, c, k * 0.3);
       seg(x, h * 0.4, z, x, h * 0.8, z, w, c, k * 0.6);
       seg(x, h * 0.8, z, x, h * 0.97, z, w, c, k * 0.9);
@@ -258,16 +268,10 @@ export class CardsScene implements MvScene {
       seg(x, 0, z, x, -h * 0.22, z, w, c, k * 0.12);
       seg(x, -h * 0.22, z, x, -h * 0.45, z, w, c, k * 0.04);
     }
-    // The head while it draws, then the playhead: where the song is now, a touch taller, brightening on the kicks.
+    // The head while it draws.
     if (head > 0 && head < 1) {
       const x = Math.sin(reach) * R, z = Math.cos(reach) * R;
       seg(x, 0, z, x, H * 1.05, z, W, signal, 1.4 * (1 - smooth((head - 0.85) / 0.15)));
-    }
-    if (head > 0) {
-      const x = Math.sin(here) * R, z = Math.cos(here) * R;
-      const kick = music.pulse('kick', t, 0.18), k = (1.3 + 0.7 * kick) * smooth(s / 0.3);
-      seg(x, 0, z, x, H * 1.15, z, W * 1.2, signal, k);
-      seg(x * 0.94, 0, z * 0.94, x * 1.08, 0, z * 1.08, W * 1.2, signal, k);
     }
 
     // The armillary swings together over the ring, landing on the bar line halfway through.

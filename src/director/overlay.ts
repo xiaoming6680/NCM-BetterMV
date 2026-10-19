@@ -34,6 +34,26 @@ const FILMED = new Set(['drive', 'city', 'aurora', 'pillars', 'canvas']);
 
 /** A drum's hits that put a shape up: their times and strengths, at least `gap` seconds apart. */
 interface Hits { t: Float64Array; s: Float64Array }
+
+/**
+ * Where each of n hits puts its shape: anywhere in a box (centre cx, cy and half-sizes w, h; x in units of the frame's
+ * half-width, y of its half-height), at least `jump` from where the one before went, so consecutive hits jump about.
+ * Made once per song from the hit's index: seeking shows the same picture.
+ */
+function scatter(n: number, seed: number, cx: number, cy: number, w: number, h: number, jump: number): Float32Array {
+  const out = new Float32Array(2 * n);
+  let px = Infinity, py = Infinity;
+  for (let i = 0; i < n; i++) {
+    const random = rng((seed ^ Math.imul(i + 1, 0x9e3779b1)) >>> 0);
+    let x = cx, y = cy;
+    for (let k = 0; k < 8; k++) {
+      x = cx + (random() * 2 - 1) * w; y = cy + (random() * 2 - 1) * h;
+      if (Math.hypot(x - px, y - py) >= jump) break;
+    }
+    out[2 * i] = x; out[2 * i + 1] = y; px = x; py = y;
+  }
+  return out;
+}
 function spaced(hits: ReadonlyArray<readonly [number, number]>, min: number, gap: number): Hits {
   const t: number[] = [], s: number[] = [];
   for (const [at, k] of hits) if (k > min && (!t.length || at - t[t.length - 1] >= gap)) { t.push(at); s.push(k); }
@@ -60,6 +80,10 @@ export class MgOverlay {
   private snareHits: Hits;
   private hats: Hits;
   private downbeats: Hits;
+  /** Per hit, where its shape goes (scatter): kicks and downbeats in the middle of the frame, snare pairs to the sides. */
+  private kickAt: Float32Array;
+  private downAt: Float32Array;
+  private snareAt: Float32Array;
   private sparse: boolean[];
   private card: Card | null = null;
   private ordinal: number[];
@@ -98,6 +122,9 @@ export class MgOverlay {
     this.snareHits = spaced(music.a.hits.snare, 0.4, 0.16);
     this.hats = spaced(music.a.hits.hat, 0.5, 0.16);
     this.downbeats = { t: Float64Array.from(music.downbeats), s: new Float64Array(music.downbeats.length).fill(0.8) };
+    this.kickAt = scatter(this.kicks.t.length, 0x6b1c, 0, 0, 0.5, 0.4, 0.45);
+    this.downAt = scatter(this.downbeats.t.length, 0x2d0b, 0, 0, 0.5, 0.4, 0.45);
+    this.snareAt = scatter(this.snareHits.t.length, 0x51ed, 0.6, 0, 0.25, 0.55, 0.35);
     this.sparse = music.a.sections.map(s => {
       let n = 0;
       for (const t of this.kicks.t) if (t >= s.start && t < s.end) n++;
@@ -183,23 +210,22 @@ export class MgOverlay {
       }
     };
     if (shapes) {
-      // Kicks: a triangle grows out of the middle, the newest in the signal colour; stronger kicks grow bigger.
+      // Kicks: a triangle grows at a place of its own in the middle of the frame (scatter: each kick jumps away from
+      // the last), the newest in the signal colour; stronger kicks grow bigger.
       let newest = true;
-      const kicks = this.sparse[shot.sectionIndex] ? this.downbeats : this.kicks;
+      const sparse = this.sparse[shot.sectionIndex], kicks = sparse ? this.downbeats : this.kicks, at = sparse ? this.downAt : this.kickAt;
       each(kicks, Math.min(0.9, Math.max(0.5, beat * 1.4)), (i, _age, x, s) => {
         const random = rng(Math.round(kicks.t[i] * 1000));
         const turn = this.soft ? 0 : (random() - 0.5) * 0.5 + (random() < 0.5 ? -1 : 1) * 0.15 * outExpo(x);
         const r = 0.16 + outExpo(x) * (this.soft ? 0.75 : 0.7 + 0.6 * s);
         const k = (1 - x) * (1 - x) * (this.soft ? 0.35 : 0.3 + 0.3 * s);
-        poly(0, 0, r, this.soft ? 64 : 3, Math.PI / 2 + turn, 1.4, newest && !this.soft ? signal : paper, k);
+        poly(at[2 * i] * this.aspect, at[2 * i + 1], r, this.soft ? 64 : 3, Math.PI / 2 + turn, 1.4, newest && !this.soft ? signal : paper, k);
         newest = false;
       });
       // Snares: a pair of triangles grows either side, pointing out, and flips over (a sixth of a turn) to point at
-      // the middle; the pairs go upper, lower, middle in turn.
+      // the middle; each pair at a place of its own (scatter), away from the pair before.
       each(this.snareHits, this.soft ? 0.7 : 0.55, (i, _age, x, s) => {
-        const random = rng(Math.round(this.snareHits.t[i] * 1000) ^ 0x51ed);
-        const y = [0.45, -0.45, 0][i % 3] + (random() - 0.5) * 0.12;
-        const dx = this.aspect * (0.52 + random() * 0.18);
+        const dx = this.snareAt[2 * i] * this.aspect, y = this.snareAt[2 * i + 1];
         const r = 0.06 + outExpo(x) * (0.14 + 0.1 * s);
         const flip = this.soft ? 0 : (Math.PI / 3) * outExpo(x * 2);
         const k = (1 - x) * (1 - x) * (this.soft ? 0.35 : 0.6);
@@ -235,17 +261,19 @@ export class MgOverlay {
     const next = m.a.sections[shot.sectionIndex + 1];
     if (busy && (sec.label === 'build' || sec.label === 'pre') && next && next.energy > sec.energy + 0.08) {
       const p = clamp01((t - sec.start) / Math.max(0.1, sec.end - sec.start));
-      const beats = Math.min(64, Math.max(1, Math.round((sec.end - sec.start) / beat)));
-      const lastBar = sec.end - t < beat * m.meter;
+      const first = Math.ceil(m.beatPos(sec.start)), last = Math.floor(m.beatPos(sec.end - 0.001));
+      const step = Math.max(1, Math.ceil((last - first + 1) / 64));
+      const lastBar = sec.end - t <= m.at(t).barEnd - t + 0.01;
       const flick = lastBar && !this.soft ? (Math.floor(info.pos * 2) % 2 === 0 ? 1 : 0.3) : 1;
       const x0 = -0.55, x1 = 0.55, y = -0.84, k = 0.55 * flick;
       seg(x0, y, x1, y, 1, paper, 0.18 * flick);
       seg(x0, y, x0 + (x1 - x0) * p, y, 2, signal, k);
-      for (let b = 0; b <= beats; b++) {
-        const x = x0 + ((x1 - x0) * b) / beats, passed = b / beats <= p, bar = b % m.meter === 0;
+      for (let b = first; b <= last; b += step) {
+        const at = m.timeOfBeat(b), fraction = clamp01((at - sec.start) / (sec.end - sec.start));
+        const x = x0 + (x1 - x0) * fraction, passed = at <= t, bar = m.a.beatInBar[b] === 0;
         seg(x, y + 0.012, x, y + (bar ? 0.045 : 0.025), 1.2, passed ? signal : paper, (passed ? 0.7 : 0.25) * flick);
       }
-      this.countdown(Math.ceil(((sec.end - t) / beat - 1e-3) / m.meter), x1 + 0.04, y, flick * vis);
+      this.countdown(Math.max(1, m.barsBetween(t, sec.end)), x1 + 0.04, y, flick * vis);
     } else this.countdown(0, 0, 0, 0);
 
     // Snare ticks at the edges in loud pulse sections (where the snares put no shapes up).
@@ -332,9 +360,9 @@ export class MgOverlay {
 
   private titleCard(t: number, shot: Shot, beat: number, vis: number, seg: (ax: number, ay: number, bx: number, by: number, w: number, c: THREE.Color, k: number) => void): void {
     const idx = shot.sectionIndex, sec = shot.section;
-    const age = t - sec.start, life = beat * this.music.meter * 1.6;
+    const age = t - sec.start, life = this.music.barDuration(sec.start + 0.01) * 1.6;
     // (The type wall and the poster set their own type up there.)
-    const show = vis > 0 && idx > 0 && age >= 0 && age < life && shot.scene !== 'typewall' && shot.scene !== 'poster' && shot.scene !== 'kinetic';
+    const show = vis > 0 && idx > 0 && age >= 0 && age < life && shot.scene !== 'poster' && shot.scene !== 'kinetic';
     if (!show) {
       if (this.card) this.card.label.visible = false;
       return;

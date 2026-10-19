@@ -41,7 +41,6 @@ export const PLATE_LENS: Partial<Record<SceneId, PlateLens>> = {
   city: { aperture: 0.45, motion: 1, focus: 260 },
   vinyl: { aperture: 0.85, motion: 1, focus: 'subject' },
   relief: { aperture: 0.5, motion: 1, focus: 40 },
-  subdivide: { aperture: 0.4, motion: 1, focus: 'subject' },
   aurora: { aperture: 0, motion: 1, focus: 'subject' },
   drive: { aperture: 0, motion: 0.2, focus: 8, depthless: 8 },
   // (Its stripes are on the frame, at the far plane: barely softened, never streaked.)

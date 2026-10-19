@@ -16,14 +16,10 @@ import { Flip } from '../scenes/flip.ts';
 import { Rings } from '../scenes/rings.ts';
 import { Poster } from '../scenes/poster.ts';
 import { Ridges } from '../scenes/ridges.ts';
-import { Halftone } from '../scenes/halftone.ts';
 import { Particles } from '../scenes/particles.ts';
-import { TypeWall } from '../scenes/typewall.ts';
 import { Ink } from '../scenes/ink.ts';
 import { ArmillaryScene } from '../scenes/armillary.ts';
 import { CardsScene } from '../scenes/cards.ts';
-import { DebugScene } from '../scenes/debug.ts';
-import { SubdivideScene } from '../scenes/subdivide.ts';
 import { ScopeScene } from '../scenes/scope.ts';
 import { Vinyl } from '../scenes/vinyl.ts';
 import { Clouds } from '../scenes/clouds.ts';
@@ -36,7 +32,6 @@ import { Channel } from '../scenes/channel.ts';
 import { Orb } from '../scenes/orb.ts';
 import { Menger } from '../scenes/menger.ts';
 import { Sierpinski } from '../scenes/sierpinski.ts';
-import { Cantor } from '../scenes/cantor.ts';
 import { PaperCut } from '../scenes/papercut.ts';
 import { RainScene } from '../scenes/rain.ts';
 import { LanternScene } from '../scenes/lanterns.ts';
@@ -186,19 +181,19 @@ export class MvPlayer {
     const make: Record<SceneId, () => MvScene> = {
       relief: () => new Relief(init), diorama: () => new Diorama(init), bokeh: () => new Bokeh(init),
       tunnel: () => new Tunnel(init, look), drive: () => new Drive(init), kaleido: () => new Kaleido(init, look), flip: () => new Flip(init, look),
-      rings: () => new Rings(init, look), poster: () => new Poster(init, look), ridges: () => new Ridges(init, paper), halftone: () => new Halftone(init, look), particles: () => new Particles(init, look),
-      typewall: () => new TypeWall(init), ink: () => new Ink(init, song.name), crystal: () => new ArmillaryScene(init), cards: () => new CardsScene(init), debug: () => new DebugScene(init), subdivide: () => new SubdivideScene(init, look), scope: () => new ScopeScene(init),
+      rings: () => new Rings(init, look), poster: () => new Poster(init, look), ridges: () => new Ridges(init, paper), particles: () => new Particles(init, look),
+      ink: () => new Ink(init, song.name), crystal: () => new ArmillaryScene(init), cards: () => new CardsScene(init), scope: () => new ScopeScene(init),
       vinyl: () => new Vinyl(init, look), clouds: () => new Clouds(init, paper), city: () => new City(init, look), aurora: () => new Aurora(init, look),
       canvas: () => new CanvasScene(init, paper, init.seed), pillars: () => new Pillars(init, look, init.seed),
       ripple: () => new Ripple(init, look), channel: () => new Channel(init, look), orb: () => new Orb(init, look),
-      menger: () => new Menger(init, look), sierpinski: () => new Sierpinski(init, look), cantor: () => new Cantor(init, look),
+      menger: () => new Menger(init, look), sierpinski: () => new Sierpinski(init, look),
       papercut: () => new PaperCut(init), rain: () => new RainScene(init), lanterns: () => new LanternScene(init), neon: () => new NeonScene(init),
       kinetic: () => new KineticType(init), blackhole: () => new BlackHole(init, look), cubes: () => new Cubes(init, look), dots: () => new DotMatrix(init, look),
     };
-    // (The plates slow to build even alone, built in steps of their own: the canvas's stroke plan, the subdivided
-    // ball's levels; 0.1–0.25 s each in NetEase's Chromium.)
+    // (The plate slow to build even alone, built in steps of its own: the canvas's stroke plan, 0.1–0.25 s in
+    // NetEase's Chromium.)
     const stepped: Partial<Record<SceneId, () => Generator<void, MvScene>>> = {
-      canvas: () => CanvasScene.building(init, paper, init.seed), subdivide: () => SubdivideScene.building(init, look),
+      canvas: () => CanvasScene.building(init, paper, init.seed),
     };
     yield;
     if (this.loads !== token) return;
@@ -247,12 +242,10 @@ export class MvPlayer {
     (this.scenes.drive as Drive | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.rings as Rings | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.ridges as Ridges | undefined)?.setViewport(canvas.width, canvas.height, pr);
-    (this.scenes.halftone as Halftone | undefined)?.setViewport(canvas.width, canvas.height);
     (this.scenes.particles as Particles | undefined)?.setViewportHeight(canvas.height);
     (this.scenes.ink as Ink | undefined)?.setViewport(canvas.width, canvas.height);
     (this.scenes.crystal as ArmillaryScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.cards as CardsScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
-    (this.scenes.debug as DebugScene | undefined)?.setViewport(canvas.width, canvas.height);
     (this.scenes.scope as ScopeScene | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.orb as Orb | undefined)?.setViewport(canvas.width, canvas.height, pr);
     (this.scenes.clouds as Clouds | undefined)?.setViewport(canvas.width, canvas.height, pr);

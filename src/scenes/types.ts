@@ -6,7 +6,7 @@ import type { Fx } from '../render/engine.ts';
 import type { Section } from '../types.ts';
 import type { ArmillarySpec } from '../sigil/armillary.ts';
 
-export type SceneId = 'relief' | 'diorama' | 'bokeh' | 'tunnel' | 'drive' | 'kaleido' | 'flip' | 'rings' | 'poster' | 'ridges' | 'halftone' | 'particles' | 'typewall' | 'ink' | 'crystal' | 'cards' | 'debug' | 'subdivide' | 'scope' | 'vinyl' | 'clouds' | 'city' | 'aurora' | 'canvas' | 'pillars' | 'ripple' | 'channel' | 'orb' | 'menger' | 'sierpinski' | 'cantor' | 'papercut' | 'rain' | 'lanterns' | 'neon' | 'kinetic' | 'blackhole' | 'cubes' | 'dots';
+export type SceneId = 'relief' | 'diorama' | 'bokeh' | 'tunnel' | 'drive' | 'kaleido' | 'flip' | 'rings' | 'poster' | 'ridges' | 'particles' | 'ink' | 'crystal' | 'cards' | 'scope' | 'vinyl' | 'clouds' | 'city' | 'aurora' | 'canvas' | 'pillars' | 'ripple' | 'channel' | 'orb' | 'menger' | 'sierpinski' | 'papercut' | 'rain' | 'lanterns' | 'neon' | 'kinetic' | 'blackhole' | 'cubes' | 'dots';
 
 /** A section redrawn in another medium (src/render/looks.ts): a riso print, Hi-bit pixels, characters on a tube. */
 export type LookId = 'riso' | 'hibit' | 'ascii' | 'vhs';

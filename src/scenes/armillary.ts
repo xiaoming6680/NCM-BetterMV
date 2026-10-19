@@ -90,23 +90,27 @@ export class ArmillaryScene implements MvScene {
   }
 
   /**
-   * The camera round the armillary before a drop, in beats before the cut: circling in and slowing to a stop as the
-   * rings line up, then still while they recede, then pushing forward down the rings — faster and faster, through
-   * the outer ring — onto the drop's kick, where the tunnel takes over. The rings line up square to `tunnel`, a
-   * little off the line of sight (so the rings stepping back read as a tunnel, not just as rings shrinking); the push
-   * runs down it and ends looking at the core. Returns the field of view.
+   * The camera round the armillary before a drop, in beats before the cut: circling in, and from two beats before
+   * also pushing forward down the rings as they line up and recede — faster and faster, through the outer ring — onto
+   * the drop's kick, where the tunnel takes over. It never stops: the circling eases in but runs on to the cut, and the
+   * push grows out of it. (It used to slow to a stop as the rings lined up and hold still for about a beat before the
+   * push: the user felt the run-in into the drop halt.) The rings line up square to `tunnel`, a little off the line of
+   * sight (so the rings stepping back read as a tunnel, not just as rings shrinking); the push runs down it and ends
+   * looking at the core. Returns the field of view.
    */
   private orbitEye(t: number, shot: Shot, music: Music, out: THREE.Vector3, look = this.lookAt, tunnel = this.tunnel): number {
     const beat = 60 / Math.max(40, music.at(shot.end - 0.01).bpm);
     const B = Math.max(1, (shot.end - shot.start) / beat), bb = Math.max(0, (shot.end - t) / beat), u = clamp01(1 - bb / B);
     const side = rng(shot.seed)() < 0.5 ? -1 : 1;
-    const ang = side * (0.25 + 1.4 * smooth((B - bb) / Math.max(1, B - 1.75)));
-    const y = lerp(0.75, 0.04, smooth((B - bb) / Math.max(1, B - 1.5)));
+    // Eases in and keeps moving: a(2 − a)·a starts still and ends at full speed.
+    const onward = (a: number) => { const x = clamp01(a); return x * x * (2 - x); };
+    const ang = side * (0.25 + 1.4 * onward(u));
+    const y = lerp(0.75, 0.04, onward(u));
     const dir = this.eyeDir.set(Math.sin(ang), y, Math.cos(ang)).normalize();
     const right = this.right.crossVectors(dir, UP).normalize();
     tunnel.copy(dir).applyAxisAngle(right, 0.26);
-    const push = clamp01((1.25 - bb) / 1.25), e = Math.pow(push, 2.2);
-    out.copy(dir).multiplyScalar(lerp(4.8, 3.6, smooth(u))).lerp(this.tmp.copy(tunnel).multiplyScalar(-1.1), e);
+    const push = clamp01((2 - bb) / 2), e = push * push;
+    out.copy(dir).multiplyScalar(lerp(4.8, 3.6, onward(u))).lerp(this.tmp.copy(tunnel).multiplyScalar(-1.1), e);
     look.copy(tunnel).multiplyScalar(-Armillary.DEPTH * 1.12 * ARM_SCALE * smooth(push));
     return 44 + 18 * push * push;
   }
@@ -127,7 +131,7 @@ export class ArmillaryScene implements MvScene {
       const m0 = Math.round(B * 0.45), gap = Math.max(1, Math.round((B * 0.3) / n));
       let merge = 0;
       for (let j = 0; j < n; j++) merge += smooth((bs - (m0 + j * gap - 0.75)) / 0.75);
-      arm.set({ turn: 0.2 * t, beat: info.pos, bar: 0, whirl: 0, open: clamp01(bs / music.meter), align: 0, recede: 0, merge, pulse: 0.5 * kick,
+      arm.set({ turn: 0.2 * t, beat: info.pos, bar: 0, whirl: 0, open: clamp01(bs / info.meter), align: 0, recede: 0, merge, pulse: 0.5 * kick,
         alpha: smooth(k / 0.08) * (1 - 0.8 * smooth((k - 0.88) / 0.12)) });
       glow = 0.6 + 0.5 * (merge / n);
     } else {

@@ -19,7 +19,6 @@ export const SCENE_GROUPS: Array<{ name: string; scenes: SceneInfo[] }> = [
     scenes: [
       { id: 'flip', name: '翻牌', note: '封面铺成翻牌板，每拍掠过一道翻转波，每列随一个频段从底部亮起' },
       { id: 'kaleido', name: '万花筒', note: '封面折叠为万花筒，持续推进，按拍旋转，花纹随频谱从中心涌出' },
-      { id: 'halftone', name: '半调', note: '封面以网点印刷呈现，网点大小随频谱变化，军鼓使色版错位' },
       { id: 'particles', name: '粒子', note: '封面分解为三万个光点，响处亮起浮出，重拍时散开又落回' },
       { id: 'relief', name: '浮雕', note: '封面转为起伏的柱阵，镜头贴近掠过，前方是即将到来的声音' },
       { id: 'diorama', name: '纸雕', note: '封面分为数层背光纸片，镜头移动时呈现纵深' },
@@ -50,7 +49,6 @@ export const SCENE_GROUPS: Array<{ name: string; scenes: SceneInfo[] }> = [
       { id: 'dots', name: '点阵', note: '一整面 LED 点阵墙：歌词以点阵字逐词点亮，底部是点阵频谱，鼓点时光带横扫过墙' },
       { id: 'cubes', name: '条纹方块', note: '音游 BGA 式的两色斜条纹上，成千方块翻滚涌来，每块随一个频段的响度胀缩，鼓点上条纹错位' },
       { id: 'blackhole', name: '黑洞', note: '光被引力弯曲的黑洞，吸积盘就是声音：每个音从视界边缘流出、铺满盘面，底鼓是一圈光波' },
-      { id: 'scope', name: '示波器', note: '实时显示歌曲的波形，示波器音乐会显现其中的图案' },
     ],
   },
   {
@@ -58,14 +56,12 @@ export const SCENE_GROUPS: Array<{ name: string; scenes: SceneInfo[] }> = [
     scenes: [
       { id: 'menger', name: '门格回廊', note: '在门格海绵中无限深入，穿过一层层方孔隧道' },
       { id: 'sierpinski', name: '三角', note: '在谢尔宾斯基四面体中无限深入，穿过一扇扇三角窗' },
-      { id: 'cantor', name: '悬城', note: '悬在空中的方块群，每块又由更小的方块组成，镜头沿缝隙无限深入' },
     ],
   },
   {
     name: '歌词排版',
     scenes: [
       { id: 'poster', name: '图版', note: '海报排版：正在演唱的句子以大字排出，辅以色块、细线与网格' },
-      { id: 'typewall', name: '字墙', note: '歌词逐行落下、堆叠成墙，正在演唱的词以强调色显示（说唱）' },
       { id: 'neon', name: '霓虹街', note: '走进夜里的窄街，每段歌词一块招牌，唱到时像霓虹灯管一样逐字点亮（说唱）' },
       { id: 'kinetic', name: '叠字', note: '音游 BGA 式的动态字：唱到的词放大、重复叠起，压在斜纹色条上，随鼓点错位滑动' },
     ],
@@ -75,15 +71,14 @@ export const SCENE_GROUPS: Array<{ name: string; scenes: SceneInfo[] }> = [
     scenes: [
       { id: 'cards', name: '片头', note: '开场展示歌曲分析：整首歌的响度绕成一圈光柱，旁列 BPM、拍号、时长与段落数' },
       { id: 'crystal', name: '浑天仪', note: '每首歌独有的浑天仪，环数与刻度由歌曲决定，结尾各环依次合拢' },
-      { id: 'subdivide', name: '细分', note: '多面体每半拍细分一级，成球后随频谱起伏' },
-      { id: 'debug', name: '调试视图', note: '封面生成的低多边形地形，每拍切换一种渲染调试视图（线框、法线、深度等）' },
     ],
   },
 ];
 
 export const SCENES: SceneInfo[] = SCENE_GROUPS.flatMap(g => g.scenes);
 
-export const SCENE_NAME = Object.fromEntries(SCENES.map(s => [s.id, s.name])) as Record<SceneId, string>;
+/** (The scope plays only oscilloscope music, the whole song: not a plate to turn on or off, but the HUD names it.) */
+export const SCENE_NAME = { ...Object.fromEntries(SCENES.map(s => [s.id, s.name])), scope: '示波器' } as Record<SceneId, string>;
 
 /**
  * The looks a section may be redrawn in (src/render/looks.ts), for the settings page; their sketches are
