@@ -180,7 +180,7 @@ export class Relief implements MvScene {
 
   /** Where the flight line is at time t (camera height is added per shot). */
   private flyer(t: number, out = new THREE.Vector3()): THREE.Vector3 {
-    const b = this.init.music.beatPos(t);
+    const b = this.init.music.visual.position(t);
     return out.set(Math.sin((b / 32) * Math.PI * 2) * 3.2 + Math.sin((b / 13) * Math.PI * 2) * 0.8, 0, -b * SPEED);
   }
 
@@ -294,7 +294,7 @@ export class Relief implements MvScene {
     this.ring.sync(Math.floor(now - BACK * COLS), Math.floor(now + AHEAD * COLS));
     u.uNow.value = now;
     u.uNowZ.value = p.z - 4;
-    u.uColsPerUnit.value = (COLS * 60) / Math.max(40, info.bpm) / SPEED;
+    u.uColsPerUnit.value = (COLS * 60) / Math.max(40, music.visual.bpm(t)) / SPEED;
 
     cam.fov = fov;
     cam.updateProjectionMatrix();

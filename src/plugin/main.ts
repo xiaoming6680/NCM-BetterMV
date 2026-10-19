@@ -514,6 +514,8 @@ function start(client: Client): void {
       getAudio(client, song.id, () => job.cancelled), fetchLyric(song.id), fetchWiki(song.id), fetchChorus(song.id), loadCover(song.cover),
     ]);
     if (job.cancelled) throw new Cancelled();
+    const packReady = await checkPack();
+    if (job.cancelled) throw new Cancelled();
     let wordsFromPack = false;
     const prepared = await prepareSong(
       { id: song.id, name: song.name, artists: song.artists, audio, lyric, wiki, chorus, cover },
@@ -528,9 +530,9 @@ function start(client: Client): void {
           wordsFromPack = !!r && applyAlignment(lines, r) > 0;
         },
         // Beats from the aligner pack (Beat This!), waited for: they decide the cuts. Ahead of time on the CPU.
-        beats: async (mono, rate, duration) => (await checkPack())
-          ? trackSongBeats(song.id, mono, rate, duration, { background: !job.urgent, cancelled: () => job.cancelled, onProgress: p => job.progress?.('beats', p) })
-          : null,
+        beats: packReady ? async (audio, duration) =>
+          trackSongBeats(song.id, audio, duration, { background: !job.urgent, cancelled: () => job.cancelled, onProgress: p => job.progress?.('beats', p) })
+          : undefined,
       },
     );
     return { song: prepared, audio, wordsFromPack };

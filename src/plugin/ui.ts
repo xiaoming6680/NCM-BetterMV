@@ -1474,7 +1474,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
     if (st.kind === 'checking') { state('正在检查…'); set?.('off', '正在检查'); }
     else if (st.kind === 'none') {
       ctl.append(button(full ? '下载对齐包（约 490 MB）' : '下载（约 490 MB）', () => void installPack()));
-      set?.('off', '未安装：逐句歌词按音节估算，节拍由插件自己识别');
+      set?.('off', '未安装：逐句歌词按音节估算，节拍和鼓点由插件自己识别');
     } else if (st.kind === 'outdated') {
       ctl.append(button(full ? '更新对齐包（约 130 MB）' : '更新（约 130 MB）', () => void installPack()));
       set?.('new', '需要更新：新版本按音频识别节拍');
@@ -1484,7 +1484,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
       set?.('off', '正在安装');
     } else if (st.kind === 'ready') {
       if (full) { state('已安装'); ctl.append(button('删除', () => void removePack())); }
-      set?.('ok', '已安装：逐句歌词按音频对齐，节拍按音频识别');
+      set?.('ok', '已安装：逐句歌词按音频对齐，节拍和鼓点按音频识别');
     } else if (st.kind === 'removing') { state('正在删除…'); set?.('off', '正在删除'); }
     else {
       state('安装失败：' + st.message, true);
@@ -1543,7 +1543,7 @@ export function settingsView(config: Config, onChange: (c: Config) => void, prev
   pack.style.margin = '0';
   packInto(pack, true);
   row(words, '对齐包', pack, undefined,
-    '按音频识别每首歌的节拍，并为只有逐句歌词的歌曲对齐每个字的演唱时间。在本机运行，每首歌首次播放时分析数秒至半分钟。');
+    '按音频识别每首歌的节拍和鼓点，并为只有逐句歌词的歌曲对齐每个字的演唱时间。在本机运行，每首歌首次播放时分析数秒至半分钟。');
 
   let updateState: UpdateState = { kind: 'idle' };
   watchUpdate(st => { updateState = st; });

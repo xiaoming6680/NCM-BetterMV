@@ -10,11 +10,12 @@ import { computeSpectra, FPS } from './spectrum.ts';
 import { computeOnsets } from './onset.ts';
 import { namedTempo, pathTempo, tempoFactor, tempogram, tempoPath } from './tempo.ts';
 import { trackBeats, regularizeBeats, lockConstantTempo, cleanBeats } from './beats.ts';
-import { beatThisTempo, downbeatEvidence, onePace, tidyBeats, usableBeatThis, type BeatThisInput } from './beatthis.ts';
+import { beatThisTempo, downbeatEvidence, onePace, steadyGrid, tidyBeats, usableBeatThis, type BeatThisInput } from './beatthis.ts';
 import { beatFeatures } from './features.ts';
 import { detectMeter } from './meter.ts';
 import { findSections, makeBars } from './sections.ts';
 import { detectHits } from './hits.ts';
+import { modelDrums, snareEvidence, mergeSnares } from './drums.ts';
 import { Slicer, attackRelease, movingAverage, normalizeQuantile, quantile, std } from './util.ts';
 
 export const ANALYSIS_VERSION = 1;
@@ -30,6 +31,11 @@ export interface AnalyzeOptions {
    * matches no relative of it is ignored.
    */
   bpmHint?: number;
+  /**
+   * The song's genres from the same wiki (SongWiki.genres, e.g. "二次元-节奏游戏音乐"): rhythm-game music is shown at
+   * its chart's tempo (namedBpm).
+   */
+  genres?: string[];
   /**
    * NetEase's own chorus mark (/api/song/chorus: the 副歌 it plays as the song's highlight), seconds: on 11 of 12 songs
    * annotated by hand it lies on the chorus or the drop, often starting a beat or a few seconds early. Used only where
@@ -112,7 +118,7 @@ export function* analyzeSteps(samples: Float32Array, sampleRate: number, opts: A
   let heard = 0;
   if (tidy && bt) {
     heard = dominantTempo(tidy);
-    const t = cleanBeats(opts.beatLevel === 'full' ? tidy : onePace(tidy, bt.downProb, bt.fps, heard), duration);
+    const t = cleanBeats(steadyGrid(opts.beatLevel === 'full' ? tidy : onePace(tidy, bt.downProb, bt.fps, heard)), duration);
     if (t.length >= 8) beats = t;
   }
   const tempoPerBeat = localTempo(beats);
@@ -126,6 +132,16 @@ export function* analyzeSteps(samples: Float32Array, sampleRate: number, opts: A
   yield* pause(0.91);
   const rmsLin = sqrtArr(spec.power);
   const hits = yield* detectHits(ons, fps, levelDb, rmsLin, beats, slicer, 0.91, 0.95);
+  // The pack's drum model, when it ran: its kicks and hats replace the acoustic ones; its snares, with a mid-band
+  // attack, join the acoustic snares it missed (docs/RHYTHM.md). Without it the acoustic hits stay as they are.
+  const drums = modelDrums(opts.beatThis?.drums, duration);
+  if (drums) {
+    hits.kick = drums.kick;
+    hits.hat = drums.hat;
+    // (A song where the model hears no drums at all keeps no snares: the acoustic ones would be guitar and voice.)
+    hits.snare = drums.kick.length + drums.snare.length + drums.hat.length
+      ? mergeSnares(snareEvidence(drums.snare, ons, fps, 2), snareEvidence(hits.snare, ons, fps, 3)) : [];
+  }
   const sections = findSections({ features: feats, beats, bars: makeBars(beats, beatInBar, duration), duration, rms: rmsLin, fps, lyrics, hits, low: spec.low, high: spec.high, chorus: opts.chorusHint });
   yield* pause(0.97);
 
@@ -147,6 +163,10 @@ export function* analyzeSteps(samples: Float32Array, sampleRate: number, opts: A
   if (tidy && opts.bpmHint && Math.abs(Math.log(opts.bpmHint / (2 * named))) <= Math.log(1.09)) named *= 2;
   // Paced on half the tempo: shown at the tempo Beat This! heard (the one these songs are cited at).
   if (tidy && heard >= 160 && Math.abs(Math.log(heard / (2 * bpm))) < Math.log(1.06) && named < 1.5 * bpm) named = 2 * bpm;
+  // Rhythm-game music (the wiki's 曲风 二次元-节奏游戏音乐) is cited at its chart's tempo, nearly always 150 BPM or more:
+  // shown under 125 on one steady tempo, it was followed at half (Retribution ~ Cycle of Redemption ~ on 112.5, its
+  // chart 225; Aegleseeker 117, chart 234). A song that changes tempo is left alone (Distorted Fate, 100 then 150).
+  if (named < 125 && opts.genres?.some(g => g.includes('节奏游戏')) && steadyShare(beats, bpm) >= 0.8) named *= 2;
   yield 1;
   return {
     version: ANALYSIS_VERSION,
@@ -154,6 +174,7 @@ export function* analyzeSteps(samples: Float32Array, sampleRate: number, opts: A
     bpm,
     namedBpm: Math.round(named * 1000) / 1000,
     meter: bars.meter,
+    drumSource: drums ? 'hybrid' : 'spectral',
     beats: beats.map(round4),
     beatInBar,
     tempo: tempoPerBeat.map(v => Math.round(v * 1000) / 1000),
@@ -242,6 +263,13 @@ export function localTempo(beats: number[]): number[] {
 }
 
 /** Tempo that covers the most time: duration-weighted mode of per-beat tempo (1 % bins), refined by averaging. */
+/** Share of the beat intervals within 5 % of the tempo `bpm`. */
+function steadyShare(beats: number[], bpm: number): number {
+  let n = 0;
+  for (let i = 1; i < beats.length; i++) if (Math.abs((beats[i] - beats[i - 1]) * bpm / 60 - 1) < 0.05) n++;
+  return beats.length > 1 ? n / (beats.length - 1) : 0;
+}
+
 export function dominantTempo(beats: number[]): number {
   const n = beats.length;
   if (n < 2) return 120;

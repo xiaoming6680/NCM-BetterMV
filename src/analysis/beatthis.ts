@@ -9,6 +9,11 @@
 //   - then one pace per song (onePace): double-time stretches back to the song's pace, fast songs on half their tempo.
 // The bars come from the plugin's own bar finder (meter.ts), with Beat This!'s downbeat probability as evidence.
 
+import type { Hit } from '../types.ts';
+
+/** Drum hits transcribed by the pack's ADTOF model (tools/aligner/drums.py), independent of the beats. */
+export interface DrumInput { kick: Hit[]; snare: Hit[]; hat: Hit[] }
+
 /** What the pack gives for a song (its `beats` job). */
 export interface BeatThisInput {
   /** Frames per second of the probabilities (50). */
@@ -19,6 +24,8 @@ export interface BeatThisInput {
   /** Its own beats and downbeats (s): probability peaks above ½. */
   beats: number[];
   downbeats: number[];
+  /** Drums from the same job, when the pack has the drum model (src/analysis/drums.ts). */
+  drums?: DrumInput;
 }
 
 const TOL = 0.15, MIN_BEATS = 8, MIN_SEC = 2;
@@ -233,3 +240,161 @@ export function onePace(beats: number[], downProb: ArrayLike<number>, fps: numbe
 
 /** Beat This!'s downbeat probability at each beat (the highest within ±40 ms), for the bar finder. */
 export const downbeatEvidence = (bt: BeatThisInput, beats: number[]) => Float32Array.from(beats, t => bestOf(bt.downProb, bt.fps, t));
+
+/** A beat within this of the fitted grid is on it (s); Beat This!'s own beats scatter ±10–20 ms round a fixed grid. */
+const GRID_TOL = 0.035;
+/** A stretch is locked from this many beats and seconds up, with this share of its beats on the grid… */
+const GRID_MIN_BEATS = 32, GRID_MIN_SEC = 16, GRID_SHARE = 0.85;
+/** …ending where this many beats in a row are off it. */
+const GRID_MISSES = 6;
+/** Two locked stretches up to this far apart (s) on one grid become one, the beats between them replaced. */
+const GRID_JOIN_SEC = 20;
+/** A grid point with no beat gets one where this share of the 16 round it have one (not in a half-time passage). */
+const GRID_FILL = 0.75;
+
+/**
+ * A stretch on one grid: its beats on the grid (grid index, time), all the beats it took in (`raw`, those off the grid
+ * too), the grid points to fill whatever (a joined gap) and the index of the last beat it took in.
+ */
+interface GridRun { t0: number; period: number; gs: number[]; ts: number[]; raw: number[]; fill: Set<number>; last: number }
+
+/** Least-squares line t = t0 + g·period through (g, t). */
+function fitLine(g: number[], t: number[]): [number, number] {
+  const m = g.length;
+  let sg = 0, st = 0, sgg = 0, sgt = 0;
+  for (let k = 0; k < m; k++) { sg += g[k]; st += t[k]; sgg += g[k] * g[k]; sgt += g[k] * t[k]; }
+  const den = m * sgg - sg * sg;
+  const period = den ? (m * sgt - sg * st) / den : 0;
+  return [(st - period * sg) / m, period];
+}
+
+/** The beats within the tolerance of the grid t0 + g·period, one per grid point, refitted on them. */
+function collect(raw: number[], t0: number, period: number): { t0: number; period: number; gs: number[]; ts: number[] } {
+  const gs: number[] = [], ts: number[] = [];
+  for (const t of raw) {
+    const g = Math.round((t - t0) / period);
+    if (Math.abs(t - (t0 + g * period)) > GRID_TOL) continue;
+    if (gs.length && g === gs[gs.length - 1]) {
+      // Two beats on one point: the nearer stays.
+      if (Math.abs(t - (t0 + g * period)) < Math.abs(ts[ts.length - 1] - (t0 + g * period))) ts[ts.length - 1] = t;
+      continue;
+    }
+    gs.push(g); ts.push(t);
+  }
+  const [a, p] = gs.length >= 2 ? fitLine(gs, ts) : [t0, period];
+  return { t0: a, period: p, gs, ts };
+}
+
+/** Every beat within the tolerance of the line (a drifting, played tempo is no fixed grid). */
+const onLine = (r: GridRun) => r.gs.every((g, k) => Math.abs(r.ts[k] - (r.t0 + g * r.period)) <= GRID_TOL);
+
+/** The longest stretch from beat i that sits on one fixed grid, or null. */
+function gridRun(b: number[], i: number): GridRun | null {
+  const n = b.length, seed = Math.min(n, i + 16);
+  if (seed - i < 16) return null;
+  const per = median(diff(b.slice(i, seed)));
+  if (!(per > 0) || diff(b.slice(i, seed)).filter(d => Math.abs(d / per - 1) < 0.1).length < 12) return null;
+  const gs: number[] = [], ts: number[] = [];
+  let t0 = b[i], period = per, misses = 0, last = i;
+  for (let j = i; j < n; j++) {
+    const g = Math.round((b[j] - t0) / period), r = b[j] - (t0 + g * period);
+    if (Math.abs(r) <= GRID_TOL && (!gs.length || g > gs[gs.length - 1])) {
+      gs.push(g); ts.push(b[j]); misses = 0; last = j;
+      if (gs.length >= 4 && gs.length % 4 === 0) [t0, period] = fitLine(gs, ts);
+    } else if (++misses >= GRID_MISSES) break;
+  }
+  if (gs.length < GRID_MIN_BEATS) return null;
+  [t0, period] = fitLine(gs, ts);
+  // Again on the final grid: beats near its start, missed while the seed grid was still rough, come in.
+  const raw = b.slice(i, last + 1), c = collect(raw, t0, period);
+  if (c.gs.length < GRID_MIN_BEATS) return null;
+  const g0 = c.gs[0], g1 = c.gs[c.gs.length - 1];
+  // Most beats of the stretch on the grid, and most grid points with a beat (not a grid at twice the tempo).
+  if ((g1 - g0) * c.period < GRID_MIN_SEC || c.gs.length < GRID_SHARE * raw.length || c.gs.length < GRID_SHARE * (g1 - g0 + 1)) return null;
+  const run = { ...c, raw, fill: new Set<number>(), last };
+  return onLine(run) ? run : null;
+}
+
+/**
+ * a and b as one stretch on one grid (the same tempo, in phase), the `loose` beats between them about one per grid
+ * point (misplaced, or a double-time burst; half as many is a half-time passage, which stays), or null.
+ */
+function joinRuns(a: GridRun, b: GridRun, loose: number[]): GridRun | null {
+  if (b.ts[0] - a.ts[a.ts.length - 1] > GRID_JOIN_SEC || Math.abs(b.period / a.period - 1) > 0.003) return null;
+  const gs = a.gs.slice(), ts = a.ts.slice(), end = gs[gs.length - 1];
+  for (const t of b.ts) {
+    const g = Math.round((t - a.t0) / a.period);
+    if (g <= gs[gs.length - 1]) return null;
+    gs.push(g); ts.push(t);
+  }
+  const start = gs[a.gs.length], gap = start - end - 1;
+  if (loose.length < GRID_FILL * gap) return null;
+  // (b's grid indices are moved onto a's: b.gs[0] is `start` there.)
+  const fill = new Set([...a.fill, ...Array.from({ length: gap }, (_, k) => end + 1 + k)]);
+  for (const g of b.fill) fill.add(g - b.gs[0] + start);
+  const raw = [...a.raw, ...loose, ...b.raw], [t0, period] = fitLine(gs, ts);
+  const run = { ...collect(raw, t0, period), raw, fill, last: b.last };
+  return onLine(run) ? run : null;
+}
+
+/**
+ * The beats of a stretch: its grid points with a beat, and the empty ones where most round them have one; where few
+ * have one, its own beats off the grid stay (a half-time passage keeps its every other beat, a free intro its beats).
+ */
+function gridBeats(r: GridRun): number[] {
+  const g0 = r.gs[0], g1 = r.gs[r.gs.length - 1], n = g1 - g0 + 1;
+  const has = new Uint8Array(n);
+  for (const g of r.gs) has[g - g0] = 1;
+  for (const g of r.fill) has[g - g0] = 1;
+  const sum = new Int32Array(n + 1);
+  for (let k = 0; k < n; k++) sum[k + 1] = sum[k] + has[k];
+  const dense = new Uint8Array(n), out: number[] = [];
+  for (let k = 0; k < n; k++) {
+    const lo = Math.max(0, k - 8), hi = Math.min(n, k + 9);
+    dense[k] = sum[hi] - sum[lo] >= GRID_FILL * (hi - lo) ? 1 : 0;
+    if (has[k] || dense[k]) out.push(Math.round((r.t0 + (g0 + k) * r.period) * 10000) / 10000);
+  }
+  for (const t of r.raw) {
+    const k = Math.max(0, Math.min(n - 1, Math.round((t - r.t0) / r.period) - g0));
+    if (!dense[k] && !has[k]) out.push(t);
+  }
+  return out.sort((p, q) => p - q);
+}
+
+/**
+ * Produced music runs on a fixed grid: every stretch of 32+ beats over 16+ s whose beats (85 % or more of them) sit
+ * within 35 ms of one constant grid, and nearly every grid point with a beat, becomes that exact grid; two such
+ * stretches on one grid up to 20 s apart become one when the beats between them are about one per grid point. This
+ * takes out the beats Beat This! put between the grid's (a double-time burst onePace only half folded), its slow
+ * drifts round a break and its 20 ms frame steps. A half-time passage on the grid keeps its every other beat, now on
+ * the grid; a played tempo drifts off any one line within a few bars and stays as it is.
+ */
+export function steadyGrid(beats: number[]): number[] {
+  // Locked stretches and the beats between them, in time order.
+  const parts: Array<GridRun | number> = [];
+  for (let i = 0; i < beats.length;) {
+    const run = gridRun(beats, i);
+    if (!run) { parts.push(beats[i++]); continue; }
+    // The stretch before, with only loose beats in between, on the same grid: one stretch.
+    let k = parts.length - 1;
+    while (k >= 0 && typeof parts[k] === 'number') k--;
+    const joined = k >= 0 ? joinRuns(parts[k] as GridRun, run, parts.slice(k + 1) as number[]) : null;
+    if (joined) parts.splice(k, parts.length - k, joined);
+    else parts.push(run);
+    i = run.last + 1;
+  }
+  const out: number[] = [];
+  // End and period of the last locked stretch: a beat left over at a seam within half a period of the grid goes.
+  let lockedEnd = -Infinity, lockedPer = 0;
+  for (const p of parts) {
+    if (typeof p === 'number') {
+      if (p > lockedEnd + 0.5 * lockedPer) out.push(p);
+      continue;
+    }
+    const own = gridBeats(p);
+    while (out.length && out[out.length - 1] > own[0] - 0.5 * p.period) out.pop();
+    out.push(...own);
+    lockedEnd = out[out.length - 1]; lockedPer = p.period;
+  }
+  return out;
+}

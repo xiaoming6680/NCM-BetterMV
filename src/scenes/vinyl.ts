@@ -183,8 +183,7 @@ export class Vinyl implements MvScene {
     const kick = (soft ? 0.5 : 1) * music.pulse('kick', t, 0.12);
     const u = this.material.uniforms;
     // Once a bar (once every two in ballads), locked to the beat; clockwise seen from above.
-    const per = music.meter * (soft ? 2 : 1);
-    let turn = (info.pos / per) * Math.PI * 2;
+    let turn = ((info.bar + info.barPhase) / (soft ? 2 : 1)) * Math.PI * 2;
     // The spin-back into a louder section: half a beat before it the platter is dragged back a quarter turn, then
     // released onto the beat.
     const beat = 60 / Math.max(40, info.bpm);

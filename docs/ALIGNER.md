@@ -4,10 +4,12 @@
 
 所以对齐做成插件之外的可选包：设置中下载（约 490 MB），由独立的本机进程（嵌入式 Python + onnxruntime，有显卡走 DirectML）计算，插件只写任务、读结果。插件体积不变，不装包时行为不变。包格式 2 起同一个进程还做节拍（Beat This!，见 [ANALYSIS.md](ANALYSIS.md)“节拍：Beat This!”）。
 
+同一个包还跑鼓点模型（ADTOF，约 2.2 MB，第一次用时另下）。来源、非商业许可、缓存和回退见 [RHYTHM.md](RHYTHM.md)。模型在时插件用 `rhythm.py` 包着 `align.py` 跑。
+
 ## 插件侧行为
 
 - 设置“歌词与对齐”：下载（显示进度）/ 已安装 / 删除；装的是旧格式（`installed.json` 的 `version` 小于插件的 `PACK_VERSION`）时显示“需要更新”，更新时 `models\` 里已有的模型（同名，或拼合后的同名文件）不再下载，从格式 1 升到 2 约 130 MB。
-- 节拍：每首歌第一次分析前跑一次节拍任务，等它的结果再分析（最多 40 s，超时或出错用插件自己的节拍）；提前分析下一首时在后台用 CPU、2 线程。结果按歌（id 和整秒时长）存在 `cache\beats-<id>-<时长>.json`，之后直接读。
+- 节拍：每首歌第一次分析前跑一次节拍任务，等它的结果再分析（最多 40 s，超时或出错用插件自己的节拍）；提前分析下一首时在后台用 CPU、2 线程。结果按歌（id 和整秒时长）存在 `cache\rhythm-3-<id>-<时长>.json`（含鼓点），之后直接读。0.10 留下的 `cache\beats-<id>-<时长>.json`（只有节拍）照样读；鼓点模型在时，任务带 `beatsFrom` 只跑鼓点（约 2 s），不重跑 Beat This!。
 - 只有逐行歌词的歌第一次播放时，MV 先按估算开播，信息栏显示“歌词对齐中”；几秒到半分钟后换成对齐结果，显示“歌词已对齐”。结果按歌和歌词缓存，下次在分析之前就套上（段落分析也用对齐后的时间）。
 - 有逐字歌词（yrc）的歌和纯音乐不走对齐包。yrc 是人工打的，比对齐包准：《Cytus II Opening - The Whole Rest》94 个词，对齐包比 yrc 中位晚 0.52 s，一成晚 1.6 s 以上。
 
@@ -23,9 +25,9 @@
 
 ## 节拍任务
 
-1. 插件把分析用的 22.05 kHz 单声道音频（`prepare.ts` 解码的同一份）写成 16 位 PCM，任务文件带 `"task": "beats"`，同样用 `app.exec` 启动 `pythonw.exe align.py <任务>`，每 0.3 s 查一次结果。
+1. 插件把 44.1 kHz 单声道音频（需要时才解码，缓存里有的歌不解码）写成 16 位 PCM（Beat This! 在进程内重采样到 22.05 kHz），任务文件带 `"task": "beats"`，同样用 `app.exec` 启动 `pythonw.exe align.py <任务>`，每 0.3 s 查一次结果。
 2. `tools/aligner/beats.py`：照 `beat_this.inference.Audio2Beats`（minimal 后处理）算——对数梅尔（1024 点 STFT、hop 441 即 50 fps、30 Hz–11 kHz 的 128 个 slaney 梅尔带、log1p(1000·x)，滤波器组随模型存成 `beat_mel.npy`），1500 帧一块、两侧各重叠 6 帧（前一块优先），logit 在 ±3 帧内最大且大于 0 处为拍或重拍，相邻帧取均值，重拍移到最近的拍。
-3. 输出：`beats`、`downbeats`（s），`beatProb`、`downProb`（每帧概率，3 位小数），`fps`（50），约 100 KB。整理和合并在插件里做（`src/analysis/beatthis.ts`），包里只有推理。
+3. 输出：`beats`、`downbeats`（s），`beatProb`、`downProb`（每帧概率，3 位小数），`fps`（50），约 100 KB；有鼓点模型时另有 `drums`。整理、合并和恒速网格在插件里做（`src/analysis/beatthis.ts`），包里只有推理。
 
 模型由 `tools/aligner/export_beats.py` 从 Beat This! 的 final0 检查点导出（ONNX opset 17，时间轴可变，83 MB；需要 torch、torchaudio 和 `beat_this`）。与 PyTorch 版对照：每帧概率差 10⁻⁵ 量级，198 首节拍一致度最低 0.9985；DirectML 与 CPU 的结果相同。
 

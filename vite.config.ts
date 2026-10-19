@@ -163,6 +163,7 @@ function align(): Plugin {
   const python = process.env.BMV_ALIGNER_PYTHON || path.join(pack, 'python/python.exe');
   const model = process.env.BMV_ALIGNER_MODEL || path.join(pack, 'models/mms_fa.onnx');
   const beatModel = process.env.BMV_BEAT_MODEL || path.join(pack, 'models/beat_this.onnx');
+  const drumModel = process.env.BMV_DRUM_MODEL || path.join(pack, 'models/adtof_frame_rnn.onnx');
   return {
     name: 'align',
     configureServer(server) {
@@ -180,8 +181,9 @@ function align(): Plugin {
           const job = JSON.parse(body.subarray(4, 4 + n).toString('utf8'));
           const pcm = path.join(dir, `${key}.pcm`), jobPath = path.join(dir, `${key}.job.json`);
           fs.writeFileSync(pcm, body.subarray(4 + n));
-          fs.writeFileSync(jobPath, JSON.stringify({ ...job, audio: pcm, out, progress: path.join(dir, `${key}.progress.json`), model, beatModel }));
-          const py = spawn(python, [path.resolve(import.meta.dirname, 'tools/aligner/align.py'), jobPath], { stdio: 'inherit' });
+          const drums = job.task === 'beats' && fs.existsSync(drumModel) ? drumModel : undefined;
+          fs.writeFileSync(jobPath, JSON.stringify({ ...job, audio: pcm, out, progress: path.join(dir, `${key}.progress.json`), model, beatModel, drumModel: drums }));
+          const py = spawn(python, [path.resolve(import.meta.dirname, `tools/aligner/${drums ? 'rhythm.py' : 'align.py'}`), jobPath], { stdio: 'inherit' });
           py.on('close', () => (fs.existsSync(out) ? reply() : (res.statusCode = 500, res.end('{"error":"align.py wrote nothing"}'))));
         });
       });

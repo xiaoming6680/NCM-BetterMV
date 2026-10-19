@@ -8,6 +8,7 @@ import { paletteFromImage, type Palette } from '../render/palette.ts';
 import type { SongWiki } from '../meta/wiki.ts';
 import type { Analysis, LyricLine } from '../types.ts';
 import type { BeatThisInput } from '../analysis/beatthis.ts';
+import { usableBeatThis } from '../analysis/beatthis.ts';
 import { xyMusic } from '../analysis/xy.ts';
 import type { Stereo } from '../scenes/types.ts';
 
@@ -41,7 +42,7 @@ export interface PreparedSong {
   stereo: Stereo;
   /** Oscilloscope music (src/analysis/xy.ts): the whole MV is the scope in XY mode. */
   xyMusic: boolean;
-  /** The beats and bars are Beat This!'s (the aligner pack's), tidied (src/analysis/beatthis.ts). */
+  /** Usable Beat This! pulse predictions supplied by the optional runtime. */
   beatThis: boolean;
   /** Milliseconds spent decoding + analysing. */
   ms: number;
@@ -62,10 +63,11 @@ export interface PrepareOptions {
   /** Corrects the parsed lyrics in place before the analysis reads them (plugin: word times from the aligner pack). */
   refineLines?: (lines: LyricLine[], duration: number) => Promise<void>;
   /**
-   * Beat This!'s beats for the song (plugin: the aligner pack), from the mono samples the analysis reads; null keeps
-   * the plugin's own beat tracking.
+   * Beats and optional drum events for the song (plugin: the aligner pack); null keeps the plugin's own beat tracking.
+   * `audio` decodes the song to mono 44.1 kHz (the drum model wants the cymbals' and snares' top end), only when called:
+   * a song done before comes from the pack's cache without it.
    */
-  beats?: (mono: Float32Array, rate: number, duration: number) => Promise<BeatThisInput | null>;
+  beats?: (audio: () => Promise<{ mono: Float32Array; rate: number }>, duration: number) => Promise<BeatThisInput | null>;
   /** With those beats: fast songs paced on half their tempo (default) or on every beat (AnalyzeOptions.beatLevel). */
   beatLevel?: 'half' | 'full';
 }
@@ -165,10 +167,14 @@ export async function prepareSong(input: SongInput, opts: PrepareOptions): Promi
   else {
     if (opts.beats) {
       opts.onProgress?.('beats', 0);
-      beatThis = await opts.beats(samples, WAVE_RATE, duration);
+      beatThis = await opts.beats(async () => {
+        const full = await decode(input.audio.slice(0), 44100);
+        check();
+        return { mono: full.mono, rate: 44100 };
+      }, duration);
       check();
     }
-    const steps = analyzeSteps(samples, WAVE_RATE, { lyrics: lines, bpmHint: input.wiki?.bpm, chorusHint: input.chorus, sliceMs: opts.sliceMs, beatThis: beatThis ?? undefined, beatLevel: opts.beatLevel });
+    const steps = analyzeSteps(samples, WAVE_RATE, { lyrics: lines, bpmHint: input.wiki?.bpm, genres: input.wiki?.genres, chorusHint: input.chorus, sliceMs: opts.sliceMs, beatThis: beatThis ?? undefined, beatLevel: opts.beatLevel });
     for (;;) {
       const r = steps.next();
       if (r.done) { analysis = r.value; break; }
@@ -209,7 +215,7 @@ export async function prepareSong(input: SongInput, opts: PrepareOptions): Promi
   }
   return {
     id: input.id, name: input.name, artists: input.artists, duration, lines, analysis, wiki: input.wiki, choice,
-    palette, cover: coverTexture(input.cover), coverPixels, coverSize, stereo, xyMusic: xy, beatThis: !!beatThis, ms: Math.round(performance.now() - t0),
+    palette, cover: coverTexture(input.cover), coverPixels, coverSize, stereo, xyMusic: xy, beatThis: !!beatThis && usableBeatThis(beatThis), ms: Math.round(performance.now() - t0),
   };
 }
 

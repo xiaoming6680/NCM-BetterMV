@@ -76,7 +76,7 @@ export function findPushes(music: Music, stops: Stop[]): Push[] {
   const cands: Push[] = [];
   for (const sec of music.a.sections) {
     if (sec.energy < 0.6 || sec.label === 'intro' || sec.label === 'outro') continue;
-    const bar = (60 / Math.max(40, music.at(sec.start + 0.01).bpm)) * music.meter;
+    const bar = music.barDuration(sec.start + 0.01);
     let best: Push | null = null, bestJump = 0;
     for (const [at, s] of music.a.hits.accent) {
       if (s < 0.6 || at < sec.start + bar * 0.95 || at > sec.end - bar * 0.5) continue;

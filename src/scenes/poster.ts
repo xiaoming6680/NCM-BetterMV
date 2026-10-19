@@ -270,7 +270,7 @@ export class Poster implements MvScene {
     if (this.block && this.blockSpots.length) {
       const spots = this.blockSpots, n = spots.length, bars = Accents.of(music).barHits(), i = lastIndex(bars, t);
       const a = spots[(i + 1 + n) % n], b = spots[(i + n) % n];
-      const e = i < 0 ? 1 : snap((t - bars[i]) / (0.12 * music.meter * 60 / Math.max(40, info.bpm)));
+      const e = i < 0 ? 1 : snap((t - bars[i]) / (0.12 * music.barDuration(bars[i])));
       const kick = (this.look === 'ballad' ? 0.5 : 1) * music.pulse('kick', t, 0.1);
       this.block.position.x = lerp(b.x, a.x, e);
       this.block.position.y = lerp(b.y, a.y, e);
@@ -278,7 +278,7 @@ export class Poster implements MvScene {
     }
     // A marker ticks along the rule, one step per beat across the bar.
     if (this.tick) {
-      const steps = this.init.music.meter;
+      const steps = info.meter;
       const step = Math.floor(info.inBar) % steps;
       this.tick.position.x = -W / 2 + M + ((W - 2 * M) * (step + outExpo(clamp01((info.inBar % 1) / 0.2)) * 0)) / steps;
     }

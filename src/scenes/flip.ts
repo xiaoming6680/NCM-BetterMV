@@ -252,7 +252,7 @@ export class Flip implements MvScene {
     u.uWidth.value = soft ? 0.7 : burst ? 0.16 : 0.22;
     u.uLift.value = soft ? 0.6 : burst ? 1 : 1.2;
     u.uBack.value = soft ? 0 : 1.2;
-    u.uBeat.value = music.beatPos(t) - music.beatPos(shot.start);
+    u.uBeat.value = music.visual.position(t) - music.visual.position(shot.start);
     const pattern = soft ? 0 : burst ? (random() < 0.6 ? 1 : 0) : (random() < 0.5 ? 0 : 2);
     u.uPattern.value = pattern;
     u.uAngle.value = (random() < 0.5 ? 0 : Math.PI) + (random() - 0.5) * 1.6;

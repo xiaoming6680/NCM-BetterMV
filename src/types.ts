@@ -32,18 +32,30 @@ export interface Envelopes {
 /** [time, strength 0..1] */
 export type Hit = [number, number];
 
+/** Local grouping of tracked pulses. Audio alone does not establish a notated denominator (e.g. 3/4 vs 6/8). */
+export interface MeterSegment {
+  start: number;
+  end: number;
+  beatsPerBar: number;
+  /** Evidence strength, 0..1; weak evidence still gets a fallback grouping. */
+  confidence: number;
+}
+
 export interface Analysis {
   version: number;
   duration: number;
-  /** Dominant tempo of the beat grid: how fast the song moves (drum & bass's grid follows its snare at 87). */
+  /** Dominant tempo of the complete tracked pulse, before any visual pacing. */
   bpm: number;
   /**
    * The tempo as it is usually cited, for showing: `bpm` or twice it (drum & bass 174; a ballad on a 65 grid is
    * cited at 130). Absent in older analyses: `bpm`.
    */
   namedBpm?: number;
-  /** Beats per bar (4 for nearly everything). */
+  /** Dominant beats per bar, retained for old saved analyses and summary displays. */
   meter: number;
+  /** Local grouping; absent in older analyses. */
+  meterPerBeat?: number[];
+  meterSegments?: MeterSegment[];
   beats: number[];
   /** Per beat: position in the bar, 0 = downbeat. */
   beatInBar: number[];
@@ -53,6 +65,7 @@ export interface Analysis {
   sections: Section[];
   env: Envelopes;
   hits: { kick: Hit[]; snare: Hit[]; hat: Hit[]; accent: Hit[] };
+  drumSource?: 'hybrid' | 'spectral';
 }
 
 export interface LyricWord {

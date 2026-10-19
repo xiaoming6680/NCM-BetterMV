@@ -1,6 +1,7 @@
 // Musical time for the renderer: beat/bar position at any song time, envelopes and decaying hit pulses.
 // Everything is a pure function of t, so seeking and frame drops never desync the picture.
 import type { Analysis, Envelopes, Hit, Section } from '../types.ts';
+import { VisualRhythm } from './rhythm.ts';
 
 /** Index of the last element ≤ t, or −1. */
 export function lastIndex(times: ArrayLike<number>, t: number): number {
@@ -24,6 +25,10 @@ export interface BeatInfo {
   barPhase: number;
   /** 60 / the length of this beat of the grid: for timing. The number to show is `Music.shownBpm`. */
   bpm: number;
+  /** Current tracked pulses per bar, not the song-wide summary. */
+  meter: number;
+  barStart: number;
+  barEnd: number;
 }
 
 type HitKind = keyof Analysis['hits'];
@@ -52,6 +57,8 @@ export class Music {
   readonly beats: Float64Array;
   readonly downbeats: Float64Array;
   readonly meter: number;
+  /** Director-owned density controls. These never change the analysis, drum events or musical positions. */
+  readonly visual: VisualRhythm;
   /** The analysis, its sections joined (joinSections): every plate, the director and the overlay see these. */
   readonly a: Analysis;
   private hitTimes = new Map<HitKind, Float64Array>();
@@ -62,6 +69,7 @@ export class Music {
     this.downbeats = Float64Array.from(a.downbeats);
     this.meter = a.meter || 4;
     for (const kind of Object.keys(a.hits) as HitKind[]) this.hitTimes.set(kind, Float64Array.from(a.hits[kind], h => h[0]));
+    this.visual = new VisualRhythm(this);
   }
 
   get duration(): number { return this.a.duration; }
@@ -109,16 +117,43 @@ export class Music {
     const pos = this.beatPos(t);
     const i = Math.floor(pos), phase = pos - i;
     const bi = Math.max(0, Math.min(this.a.beatInBar.length - 1, i));
-    const inBarIndex = i < 0 ? ((i % this.meter) + this.meter) % this.meter : this.a.beatInBar[bi] ?? 0;
-    const bar = Math.max(0, lastIndex(this.downbeats, t));
+    const meter = this.a.meterPerBeat?.[bi] || this.meter;
+    const firstPhase = this.a.beatInBar[0] ?? 0;
+    const inBarIndex = i < 0 ? ((i + firstPhase) % meter + meter) % meter
+      : i >= this.beats.length ? ((this.a.beatInBar[bi] ?? 0) + i - bi) % meter : this.a.beatInBar[bi] ?? 0;
+    const bar = this.downbeats.length ? lastIndex(this.downbeats, t) : Math.floor((i - inBarIndex) / meter);
     const d = this.downbeats;
-    const barStart = d.length ? d[bar] : 0;
-    const barEnd = bar + 1 < d.length ? d[bar + 1] : barStart + this.period(i) * this.meter;
+    const before = !d.length || t < d[0];
+    const barStart = before ? this.timeOfBeat(i - inBarIndex) : d[bar];
+    const barEnd = before ? (d.length ? d[0] : this.timeOfBeat(i - inBarIndex + meter))
+      : bar + 1 < d.length ? d[bar + 1] : this.timeOfBeat(this.beatPos(barStart) + meter);
+    const from = this.beatPos(barStart), to = this.beatPos(barEnd);
     return {
       pos, phase, inBar: inBarIndex + phase, bar,
-      barPhase: Math.max(0, Math.min(1, (t - barStart) / Math.max(1e-3, barEnd - barStart))),
-      bpm: 60 / this.period(i),
+      barPhase: Math.max(0, Math.min(1, (pos - from) / Math.max(1e-3, to - from))),
+      bpm: 60 / this.period(i), meter, barStart, barEnd,
     };
+  }
+
+  meterAt(t: number): number {
+    const i = Math.max(0, Math.min(this.beats.length - 1, lastIndex(this.beats, t)));
+    return this.a.meterPerBeat?.[i] || this.meter;
+  }
+
+  /** Actual time between the enclosing bar boundaries, including tempo changes inside that bar. */
+  barDuration(t: number): number {
+    const info = this.at(t);
+    return Math.max(0.001, info.barEnd - info.barStart);
+  }
+
+  /** Number of real bar boundaries still ahead; useful for a countdown across meter or tempo changes. */
+  barsBetween(from: number, to: number): number {
+    return Math.max(0, lastIndex(this.downbeats, to - 1e-6) - lastIndex(this.downbeats, from - 1e-6));
+  }
+
+  meterLabel(t: number): string {
+    const segment = this.a.meterSegments?.find(s => t >= s.start && t < s.end);
+    return segment && segment.confidence < 0.2 ? '拍号不确定' : `${this.meterAt(t)} 拍/小节`;
   }
 
   /** Per beat, the tempo to show (see shownBpm); made on first use. */

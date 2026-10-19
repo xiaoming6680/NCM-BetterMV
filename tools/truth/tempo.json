@@ -197,6 +197,7 @@
     {"id":2608399966,"song":"Wisp X - fleur","bpm":100,"confidence":"low","source":"songbpm.com (Spotify-derived)","note":"songbpm 100 only source"},
     {"id":3443430967,"song":"xi / 初音ミク - ULTIM@TE☆BE∀M!! (feat. 初音ミク)","bpm":121,"confidence":"low","source":"songbpm.com search (xi - ULTIM@TE_BEAM!! (feat. HATSUNE MIKU), 3:05)","note":"only songbpm (Spotify-derived) 121; no rhythm-game entry found (likely a PJSK ULTIMATE-contest song); may be half-time"},
     {"id":2154204708,"song":"YellowCheese / 维度坍缩 / Hilarity Leap Records / Memory Remodeling Records - Tomorrow","bpm":132,"confidence":"low","source":"osu! beatmap (single mapper)","note":"only source: osu! maps by one mapper at 132; not found on songbpm/Beatport"},
-    {"id":3356248044,"song":"АДЛИН - 5АМ","bpm":127,"confidence":"low","source":"songbpm.com/@adlin/5am","note":"songbpm (Spotify) 127 only"}
+    {"id":3356248044,"song":"АДЛИН - 5АМ","bpm":127,"confidence":"low","source":"songbpm.com/@adlin/5am","note":"songbpm (Spotify) 127 only"},
+    {"id":2139810609,"song":"Daily天利 - Retribution ~ Cycle of Redemption ~","bpm":225,"confidence":"medium","source":"zh.moegirl.org.cn/Retribution","note":"Phigros 2024 April Fools remix, chart BPM 225 (original Retribution 190); NetEase wiki 113 (half)"}
   ]
 }

@@ -140,7 +140,7 @@ const BOARD_DEPTH_FRAG = /* glsl */ `
 
 /** The camera's distance along the street at t: a step on every beat, pushed off at its start, gliding the rest. */
 function walked(music: Music, t: number): number {
-  const pos = music.beatPos(t), i = Math.floor(pos), f = pos - i;
+  const pos = music.visual.position(t), i = Math.floor(pos), f = pos - i;
   return STEP * (i + lerp(f, snap(f / 0.4), 0.45));
 }
 

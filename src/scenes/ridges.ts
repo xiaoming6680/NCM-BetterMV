@@ -271,7 +271,7 @@ export class Ridges implements MvScene {
     const u = hills.mesh.material.uniforms, info = music.at(t);
     u.uTime.value = t;
     u.uMist.value = 0.3 + 0.5 * this.level;
-    u.uBreath.value = Math.exp(-(info.inBar % music.meter) * 1.5);
+    u.uBreath.value = Math.exp(-info.inBar * 1.5);
     const eye = new THREE.Vector3(), target = new THREE.Vector3();
     this.hillPose(shot, t, eye, target);
     this.camera.position.copy(eye);

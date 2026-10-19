@@ -283,14 +283,14 @@ export class Aurora implements MvScene {
     // Brightness with the song's loudness (a quieter base in calm sections).
     u.uI.value = (loud ? 0.75 : 0.45) + (this.soft ? 0.5 : 0.75) * music.env('rms', t);
     // The folds drift with the tempo; each snare shoves them on.
-    const bpm = music.at(t).bpm, n = lastIndex(this.snares, t);
+    const n = lastIndex(this.snares, t);
     let shove = 0;
     for (let i = n; i >= 0; i--) {
       const age = t - this.snares[i];
       if (age > 2) { shove += 1.1 * (i + 1); break; }
       shove += 1.1 * surge(age, 0.12);
     }
-    u.uFlow.value = t * (bpm / 120) * (this.soft ? 0.45 : 0.7) + (this.soft ? 0.4 : 1) * shove;
+    u.uFlow.value = 0.5 * music.visual.position(t) * (this.soft ? 0.45 : 0.7) + (this.soft ? 0.4 : 1) * shove;
     // Looking up in a chorus: the curtains come overhead.
     // (Elsewhere a sheet half overhead is seen edge-on as an odd blob: only a chorus brings them all the way over.)
     u.uOver.value = shot.variant === 'up' && loud ? smooth((t - shot.start) / 2.5) : 0;

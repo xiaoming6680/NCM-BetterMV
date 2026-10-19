@@ -84,6 +84,9 @@ const gridOk = (est: number, c: Cited) => [0.25, 0.5, 1, 2, 4].some(k => near(es
 
 const { analyze } = await import('../src/analysis/index.ts');
 const { evalBeats } = await import('./eval-beats.ts');
+const { parseWiki } = await import('../src/meta/wiki.ts');
+/** The wiki's genres, from the dev server's copy of the wiki (dev/ncm-cache/), as the plugin passes them. */
+const genresOf = (id: number) => { try { return parseWiki(JSON.parse(readFileSync(join(ROOT, `dev/ncm-cache/wiki-${id}.json`), 'utf8'))).genres; } catch { return undefined; } };
 const total: Record<string, Record<string, number>> = {};
 const gridTotal: Record<string, [number, number]> = {};
 const dump: unknown[] = [];
@@ -92,7 +95,7 @@ let skipped = 0;
 for (const c of songs) {
   const s = await load(c.id);
   if (typeof s === 'string') { skipped++; console.log(`skip ${c.song}: ${s}`); continue; }
-  const a = analyze(s.x, SR, { bpmHint: useHint ? s.wiki : undefined, beatThis: useBeats ? evalBeats(String(c.id)) : undefined });
+  const a = analyze(s.x, SR, { bpmHint: useHint ? s.wiki : undefined, genres: useHint ? genresOf(c.id) : undefined, beatThis: useBeats ? evalBeats(String(c.id)) : undefined });
   const named = a.namedBpm ?? a.bpm, rel = relation(named, c), g = gridOk(a.bpm, c);
   (total[c.confidence] ??= {})[rel] = (total[c.confidence][rel] ?? 0) + 1;
   const gt = (gridTotal[c.confidence] ??= [0, 0]);
