@@ -139,8 +139,7 @@ async function show(file: string, plan: ObsPlan): Promise<void> {
 
 function load(song: PreparedSong, plan: ObsPlan): void {
   planned = planKey(plan);
-  const exposure = plan.exposure ? new Map(Object.entries(plan.exposure)) : undefined;
-  player!.load(song, styleFor(song, plan.style), new Set(plan.off as Array<SceneId | LookId>), undefined, undefined, plan.lyricDelay, plan.seed, undefined, exposure);
+  player!.load(song, styleFor(song, plan.style), new Set(plan.off as Array<SceneId | LookId>), undefined, undefined, plan.lyricDelay, plan.seed);
 }
 
 /** Song time to draw: the plugin's stamp run on by the wall clock, minus the sound's latency. Eased, not stepped. */

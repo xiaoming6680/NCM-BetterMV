@@ -35,36 +35,15 @@ type HitKind = keyof Analysis['hits'];
 /** How long a hit's pulse takes to come up (seconds). */
 const ATTACK = 0.03;
 
-/**
- * The sections the MV is directed by: neighbours with the same label and about the same loudness (within 0.1 of the
- * run so far) as one. The analysis often splits a chorus or a drop into phrases (ten drops in a row, five choruses);
- * each split opened a new plate, a new look, a title card (“高潮 03”) and the drop's own entrance — the director cut
- * at every one (the user: “切换的过于频繁了”). A louder repeat stays a section of its own: it is an entrance.
- */
-export function joinSections(sections: readonly Section[]): Section[] {
-  const out: Section[] = [];
-  for (const s of sections) {
-    const last = out[out.length - 1];
-    if (last && last.label === s.label && Math.abs(s.energy - last.energy) <= 0.1) {
-      const a = last.end - last.start, b = s.end - s.start;
-      out[out.length - 1] = { ...last, end: s.end, energy: (last.energy * a + s.energy * b) / Math.max(1e-3, a + b), vocal: last.vocal || s.vocal };
-    } else out.push({ ...s });
-  }
-  return out;
-}
-
 export class Music {
   readonly beats: Float64Array;
   readonly downbeats: Float64Array;
   readonly meter: number;
   /** Director-owned density controls. These never change the analysis, drum events or musical positions. */
   readonly visual: VisualRhythm;
-  /** The analysis, its sections joined (joinSections): every plate, the director and the overlay see these. */
-  readonly a: Analysis;
   private hitTimes = new Map<HitKind, Float64Array>();
 
-  constructor(a: Analysis) {
-    this.a = { ...a, sections: joinSections(a.sections) };
+  constructor(readonly a: Analysis) {
     this.beats = Float64Array.from(a.beats);
     this.downbeats = Float64Array.from(a.downbeats);
     this.meter = a.meter || 4;

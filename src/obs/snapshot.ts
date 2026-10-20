@@ -20,11 +20,6 @@ export interface ObsPlan {
   /** Seconds this song's words show later (negative: earlier). */
   lyricDelay: number;
   seed: number;
-  /**
-   * Seconds each plate had been on screen when this play began (the MV page's record): planned with the same, the OBS
-   * page draws the same MV. Absent: none (a fixed arrangement).
-   */
-  exposure?: Record<string, number>;
 }
 
 export interface ObsState {

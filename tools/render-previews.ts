@@ -16,13 +16,14 @@ const FF = process.env.BMV_FFMPEG ?? 'E:/ffmpeg-master-latest-win64-gpl-shared/b
 const SERVER = process.env.BMV_SERVER ?? 'http://localhost:5191';
 const SONG = Number(process.env.BMV_PREVIEW_SONG ?? 403710535);
 
-/**
- * Each plate: the style it is drawn in, its camera, the section to show it in and how far into it (picked with --try).
- * (Not the scope: it only plays oscilloscope music, and is not on the settings page.)
- */
-const PLAN: Record<Exclude<SceneId, 'scope'>, { style: string; variants: string; in: SectionLabel; at: number }> = {
+/** Each plate: the style it is drawn in, its camera, the section to show it in and how far into it (picked with --try). */
+const PLAN: Record<SceneId, { style: string; variants: string; in: SectionLabel; at: number }> = {
   drive: { style: 'pulse', variants: 'push', in: 'drop', at: 0.15 },
   tunnel: { style: 'pulse', variants: 'rush', in: 'build', at: 0.15 },
+  scope: { style: 'pulse', variants: 'wave', in: 'chorus', at: 0.15 },
+  shatter: { style: 'pulse', variants: 'swarm-a', in: 'drop', at: 0.55 },
+  align: { style: 'pulse', variants: 'swing', in: 'chorus', at: 0.55 },
+  halftone: { style: 'pulse', variants: 'in', in: 'chorus', at: 0.35 },
   rings: { style: 'pulse', variants: 'tilt', in: 'verse', at: 0.75 },
   ridges: { style: 'pulse', variants: 'front', in: 'verse', at: 0.75 },
   flip: { style: 'pulse', variants: 'wave', in: 'chorus', at: 0.15 },
@@ -35,6 +36,8 @@ const PLAN: Record<Exclude<SceneId, 'scope'>, { style: string; variants: string;
   poster: { style: 'pulse', variants: 'stack', in: 'chorus', at: 0.15 },
   cards: { style: 'pulse', variants: 'stack', in: 'intro', at: 0.35 },
   crystal: { style: 'pulse', variants: 'orbit', in: 'build', at: 0.55 },
+  subdivide: { style: 'pulse', variants: 'ball', in: 'verse', at: 0.55 },
+  debug: { style: 'pulse', variants: 'orbit', in: 'chorus', at: 0.55 },
   vinyl: { style: 'pulse', variants: 'tilt', in: 'verse', at: 0.35 },
   clouds: { style: 'ballad', variants: 'over', in: 'chorus', at: 0.35 },
   city: { style: 'pulse', variants: 'canyon', in: 'chorus', at: 0.35 },
@@ -47,6 +50,7 @@ const PLAN: Record<Exclude<SceneId, 'scope'>, { style: string; variants: string;
   orb: { style: 'pulse', variants: 'orbit', in: 'chorus', at: 0.4 },
   menger: { style: 'pulse', variants: 'glide', in: 'chorus', at: 0.5 },
   sierpinski: { style: 'pulse', variants: 'glide', in: 'chorus', at: 0.5 },
+  cantor: { style: 'pulse', variants: 'glide', in: 'chorus', at: 0.5 },
   papercut: { style: 'ink', variants: 'turn', in: 'chorus', at: 0.4 },
   // (These three were picked against BMV_PREVIEW_SONG=2021173064.)
   rain: { style: 'ballad', variants: 'pane', in: 'verse', at: 0.35 },

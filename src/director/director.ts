@@ -1,6 +1,6 @@
 // Turns the analysis into shots for a style: which scene, which camera, cut on which beat, how each cut lands.
-// A plate holds about eight seconds in a chorus or drop, about twelve elsewhere, on a phrase (style.ts holdBars);
-// with `accelerate`, a build's last two bars speed up into the louder section; consecutive shots never reuse a camera.
+// With `accelerate`, cuts speed up towards a louder section (bars → single bars → every beat); consecutive
+// shots never reuse a camera.
 import * as THREE from 'three';
 import type { Music } from './music.ts';
 import type { LyricTrack } from './lyrics.ts';
@@ -23,17 +23,14 @@ import { findPushes, findStops, plateTime, stopAt, type Push, type Stop } from '
 /**
  * Cut times inside a section, on downbeats or their bar's hit: a shot every `baseBars` (2 bars in loud sections),
  * and `rush`: where the cuts on every beat begin (Infinity: none). A section rising into a louder one speeds up: its
- * last four bars a shot each, its last two cut on every beat (those only change the camera, see planShots). (0.10.1
- * held a plate about 8 to 12 seconds and sped up only out of builds; the user, wanting the director aggressive again:
- * “忽略我之前说的避免频繁切换场景”.)
+ * last four bars a shot each, its last two cut on every beat (those only change the camera, see planShots).
  */
 export function cutTimes(music: Music, style: Style, section: Section, next: Section | undefined): { cuts: number[]; rush: number } {
   const beats = Array.from(music.beats).filter(b => b > section.start + 0.05 && b < section.end - 0.05);
   const downs = Array.from(music.downbeats).filter(d => d > section.start + 0.05 && d < section.end - 0.05);
   const cuts = [section.start];
-  const bar = music.barDuration(section.start + 0.01);
-  const per = style.baseBars(section, bar);
-  const hero = style.heroBars?.(section, bar) ?? per;
+  const per = style.baseBars(section);
+  const hero = style.heroBars?.(section) ?? per;
   const rising = style.accelerate && !!next && next.energy > section.energy + 0.08 && section.label !== 'intro';
   const accelFrom = rising ? Math.max(0, downs.length + 1 - 4) : Infinity;
   const rush = rising && downs.length >= 2 ? downs[downs.length - 2] : Infinity;
@@ -59,8 +56,13 @@ export function cutTimes(music: Music, style: Style, section: Section, next: Sec
 // (Drops too: they take turns opening on the push tunnel and the spectrum tube, so a song with two drops doesn't
 // climax in the same tunnel twice; the user: “高潮段不应该只有推进”.)
 const TAKE_TURNS = new Set(['verse', 'chorus', 'break', 'bridge', 'drop']);
-/** Sections that open on whichever plate of their pool has been seen least, when the plays so far are known. */
-const OPEN_ANY = new Set(['verse', 'chorus', 'break', 'bridge']);
+
+/**
+ * Plates that hold longer than a shot: how many of the section's cuts one of their shots runs through (the cuts in
+ * between are not made). Kinetic type sets each sung line in a layout of its own and needs the time to play it out
+ * (the user: “给部分场景的播放时间加长一些，比如叠字”).
+ */
+const LINGER: Partial<Record<SceneId, number>> = { kinetic: 2 };
 
 /**
  * The plates a section may use once the ones the user turned off (the settings page) are taken out. A section left
@@ -84,61 +86,8 @@ function allowed(pool: Plate[], off: ReadonlySet<string>, sections: Section[], i
   return [...list.slice(k), ...list.slice(0, k)];
 }
 
-/**
- * The song's cast: the few plates it is told in. A section draws only on the plates of its pool in the cast (besides
- * its fixed ones: a build's tunnel, a drop's push tunnel and spectrum tube), so a chorus comes back as the first one
- * looked and the song keeps to a handful of worlds rather than going round every pool (the user: “现在的场景太多了”;
- * songs showed 22 different plates on average, 17 to 29). Picked to cover the song: each pick the plate that can fill
- * most of the sections still short of two plates (by their length), with a seeded shuffle; given the plays' record,
- * the plates seen least weigh more, so across songs every plate still comes round. Every section is then given at
- * least two (or all its pool has).
- */
-const CAST = 5;
-/** Plates a section keeps whatever the cast: a pool of one (the build's tunnel), a drop's two openings. */
-const fixedIn = (pool: Plate[], section: Section, k: number) => pool.length === 1 || (section.label === 'drop' && k < 2);
-
-function castOf(pools: Plate[][], sections: Section[], random: () => number, duration: number, seenOf?: (scene: SceneId) => number): Set<SceneId> {
-  const cast = new Set<SceneId>();
-  const open = pools.map((pool, i) => pool.filter((_, k) => !fixedIn(pool, sections[i], k)).map(p => p.scene));
-  const all = [...new Set(open.flat())];
-  if (!all.length) return cast;
-  // Seen least → up to twice the weight (the record's spread, not its scale), and a shuffle so that songs differ.
-  const seen = seenOf ? all.map(seenOf) : [];
-  const lo = Math.min(...seen), hi = Math.max(...seen);
-  const pref = new Map(all.map((scene, k) => [scene, (seenOf && hi > lo ? 2 - (seen[k] - lo) / (hi - lo) : 1) * (0.3 + 1.4 * random())]));
-  const have = (i: number) => open[i].filter(scene => cast.has(scene)).length;
-  const need = (i: number) => Math.min(2, open[i].length);
-  const size = CAST + (duration > 240 ? 1 : 0);
-  while (cast.size < size) {
-    let best: SceneId | null = null, top = 0;
-    for (const scene of all) {
-      if (cast.has(scene)) continue;
-      let gain = 0;
-      open.forEach((list, i) => { if (list.includes(scene)) gain += (sections[i].end - sections[i].start) * (have(i) < need(i) ? 1 : 0.1); });
-      // (Coverage counts, but softly: plates in most pools — the particles were in five — would otherwise be in
-      // almost every song.)
-      const score = Math.pow(gain, 0.35) * pref.get(scene)!;
-      if (score > top) { top = score; best = scene; }
-    }
-    if (!best) break;
-    cast.add(best);
-  }
-  open.forEach((list, i) => {
-    for (const scene of [...list].sort((a, b) => pref.get(b)! - pref.get(a)!)) if (have(i) < need(i)) cast.add(scene);
-  });
-  return cast;
-}
-
-/**
- * `off`: plates the user turned off in the settings (the armillary's and the opening's own shots included).
- * `exposure`: seconds each plate has been on screen over the plays so far (the plugin's record, recent plays weighing
- * most). Given it, the plates seen least come first among those equally due, and verses, choruses, breaks and bridges
- * open on any plate of their pool rather than on its first two: across plays every plate of a pool comes round about
- * as often (without it the openings and a few plates took most of the screen, and some plates were in fewer than a
- * third of the plays). A drop still opens on the push tunnel or the spectrum tube, a build on its tunnel; the opening
- * cards, the armillary and the closing canvas keep their places.
- */
-export function planShots(music: Music, style: Style, songSeed: number, song: SongTraits, off: ReadonlySet<string> = new Set(), exposure?: ReadonlyMap<string, number>): Shot[] {
+/** `off`: plates the user turned off in the settings (the armillary's and the opening's own shots included). */
+export function planShots(music: Music, style: Style, songSeed: number, song: SongTraits, off: ReadonlySet<string> = new Set()): Shot[] {
   const shots: Shot[] = [];
   const sections = music.a.sections;
   let prevScene = '', prevVariant = '';
@@ -147,44 +96,38 @@ export function planShots(music: Music, style: Style, songSeed: number, song: So
   const barLen = (t: number) => music.barDuration(t);
   /** Shots that only change the camera, cut short at the end of a build (joinRuns). */
   const rushed = new Set<Shot>();
-  // A plate missing from the record (new, or never yet in a pool that was played) counts as seen as the middle one.
-  const known = exposure ? [...exposure.values()].sort((a, b) => a - b) : [];
-  const middle = known.length ? known[known.length >> 1] : 0;
-  const seenOf = (scene: string) => exposure?.get(scene) ?? middle;
-  /** Seconds of screen within which plates count as equally seen (shuffled by the seed). */
-  const JITTER = 12;
-  const pools = sections.map((section, i) => allowed(style.pool(section, song), off, sections, i, style, song));
-  const cast = castOf(pools, sections, rng((songSeed ^ 0xca57ca57) >>> 0), music.a.duration, exposure ? seenOf : undefined);
   sections.forEach((section, sectionIndex) => {
-    const pool = pools[sectionIndex].filter((p, k, all) => fixedIn(all, section, k) || cast.has(p.scene));
+    const pool = allowed(style.pool(section, song), off, sections, sectionIndex, style, song);
     const { cuts, rush } = cutTimes(music, style, section, sections[sectionIndex + 1]);
     const random = rng((songSeed ^ (sectionIndex * 2654435761)) >>> 0);
     // Verses, choruses, breaks, bridges and drops take turns opening on their first two plates (the drop's push tunnel
     // and spectrum tube…); the others always open on their signature (the build's tunnel…).
     const nth = seen.get(section.label) ?? 0;
     seen.set(section.label, nth + 1);
-    let hero = pool[TAKE_TURNS.has(section.label) ? nth % Math.min(2, pool.length) : 0];
-    if (exposure && OPEN_ANY.has(section.label) && pool.length > 1) {
-      // Not yet in this song first, then seen least; the pool's own order is a light preference (4 s a place).
-      const order = pool.map((p, k) => ({ p, w: (used.get(p.scene) ?? 0) * 1e6 + seenOf(p.scene) + k * 4 + random() * JITTER }))
-        .filter(o => o.p.scene !== prevScene).sort((a, b) => a.w - b.w);
-      if (order.length) hero = order[0].p;
-    }
+    const hero = pool[TAKE_TURNS.has(section.label) ? nth % Math.min(2, pool.length) : 0];
     let plate = hero;
     // Plates shown in this section so far: a section goes round its whole pool before it shows one twice (the drop's
     // push tunnel, the least used across the song since only drops have it, used to come back mid-drop for another
     // four bars — 40 % of every drop).
     const here = new Map<string, number>([[hero.scene, 1]]);
+    /** Cuts the shot on screen still runs through (LINGER). */
+    let lingering = 0;
     for (let i = 0; i + 1 < cuts.length; i++) {
       if (cuts[i + 1] - cuts[i] < 0.12) continue;
       // The speeding-up cuts at the end of a build keep the plate and only change the camera (as does a shot
       // shorter than a bar).
       const short = cuts[i] >= rush - 1e-3 || cuts[i + 1] - cuts[i] < barLen(cuts[i]) * 0.9;
+      const last = shots[shots.length - 1];
+      if (i > 0 && !short && lingering > 0 && last && last.sectionIndex === sectionIndex && last.end === cuts[i]) {
+        last.end = cuts[i + 1];
+        lingering--;
+        continue;
+      }
       if (i === 0) plate = hero; // a section opens on its hero plate
       else if (!short) {
         // The plate least used in this section, then in the song, that isn't the one just shown; ties broken by the
         // seeded shuffle.
-        const order = pool.map(p => ({ p, r: random() * (exposure ? JITTER : 1) + (exposure ? seenOf(p.scene) : 0) }))
+        const order = pool.map(p => ({ p, r: random() }))
           .filter(o => pool.length === 1 || o.p.scene !== prevScene)
           .sort((a, b) => (here.get(a.p.scene) ?? 0) - (here.get(b.p.scene) ?? 0) || (used.get(a.p.scene) ?? 0) - (used.get(b.p.scene) ?? 0) || a.r - b.r);
         plate = order.length ? order[0].p : pool[0];
@@ -198,6 +141,7 @@ export function planShots(music: Music, style: Style, songSeed: number, song: So
       prevVariant = variant;
       const shot: Shot = { scene: plate.scene, start: cuts[i], end: cuts[i + 1], section, sectionIndex, variant, seed: (songSeed * 131 + shots.length * 7919) >>> 0 };
       if (short && i > 0) rushed.add(shot);
+      else lingering = (LINGER[plate.scene] ?? 1) - 1;
       shots.push(shot);
     }
   });
@@ -424,7 +368,7 @@ export function planLooks(sections: Section[], style: Style, songSeed: number, o
  * (LyricLayer; the words can't be drawn apart), and the soft ones that fill the frame with haze (clouds, bokeh), which
  * characters turn into a wall of the same glyph.
  */
-const NO_CHARACTERS: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'ink', 'clouds', 'bokeh']);
+const NO_CHARACTERS: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'halftone', 'shatter', 'ink', 'clouds', 'bokeh']);
 
 /**
  * Where the picture goes to letterbox (2.39:1 bars in the cover's ink, under the overlay): the opening and the end of
@@ -444,7 +388,7 @@ function letterboxed(music: Music, style: Style): Array<[number, number]> {
 }
 
 /** Plates that show the cover itself large (its white is the picture's white; the canvas paints it). */
-const COVER_PLATES: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'canvas']);
+const COVER_PLATES: ReadonlySet<SceneId> = new Set<SceneId>(['flip', 'shatter', 'align', 'canvas']);
 
 const { zoom, spin, whip } = TransitionKind;
 /**
@@ -453,12 +397,12 @@ const { zoom, spin, whip } = TransitionKind;
  */
 const MOTION: Record<SceneId, TransitionKind[]> = {
   tunnel: [zoom], drive: [zoom], relief: [zoom], bokeh: [zoom], particles: [zoom, spin],
-  kaleido: [spin], rings: [spin], flip: [whip, spin],
-  poster: [whip], ridges: [whip, zoom], diorama: [whip, zoom], ink: [TransitionKind.ink],
-  crystal: [zoom, spin], cards: [zoom], scope: [zoom, whip],
+  kaleido: [spin], rings: [spin], shatter: [spin, zoom], flip: [whip, spin],
+  poster: [whip], halftone: [whip, zoom], ridges: [whip, zoom], diorama: [whip, zoom], ink: [TransitionKind.ink],
+  crystal: [zoom, spin], cards: [zoom], debug: [whip, zoom], scope: [zoom, whip], subdivide: [spin, zoom], align: [whip, spin],
   vinyl: [spin, zoom], clouds: [zoom], city: [zoom], aurora: [zoom], canvas: [zoom], pillars: [spin, zoom],
   ripple: [spin, zoom], channel: [zoom], orb: [spin, zoom],
-  menger: [zoom], sierpinski: [zoom], papercut: [spin, zoom], rain: [TransitionKind.matte, zoom], lanterns: [zoom], neon: [zoom, whip], kinetic: [whip], blackhole: [spin, zoom], cubes: [zoom, spin], dots: [whip, zoom],
+  menger: [zoom], sierpinski: [zoom], cantor: [zoom], papercut: [spin, zoom], rain: [TransitionKind.matte, zoom], lanterns: [zoom], neon: [zoom, whip], kinetic: [whip], blackhole: [spin, zoom], cubes: [zoom, spin], dots: [whip, zoom],
 };
 const SOFT: TransitionKind[] = [zoom, TransitionKind.matte, TransitionKind.iris, spin];
 
@@ -717,7 +661,7 @@ export class Director {
     // A plate on paper: trails and the duotone would grey its darks, and the overlay's glowing lines would vanish.
     const bg = scene.scene.background;
     const light = bg instanceof THREE.Color && bg.r * 0.2126 + bg.g * 0.7152 + bg.b * 0.0722 > 0.45;
-    // A light cover shown whole (the tiles, the canvas) is mostly near-white: held a step down and
+    // A light cover shown whole (tiles, shards, the aligned cover, the canvas) is mostly near-white: held a step down and
     // without most of the glow it stays a picture instead of washing out (the user: “过曝+歌词看不清”).
     if (this.palette.light && COVER_PLATES.has(shot.scene) && this.style.id !== 'ink') { fx.exposure *= 0.72; fx.bloom *= 0.12; fx.flash *= 0.5; fx.vignette = Math.max(fx.vignette, 0.55); }
     if (!light && !this.pure) this.grade(t, shot, fx, beat);
