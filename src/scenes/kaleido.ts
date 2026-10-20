@@ -2,9 +2,9 @@
 // space, hairlines on the segment and band edges. Pulse: holds, then snaps half a segment on every strong hit (not
 // the grid's beats: in a syncopated song half of those have no drum; the fold count changes on downbeats) and pushes
 // in on kicks. Ballad: turns and drifts slowly.
-// The words: each line an arm of a spiral running from deep in the middle out past the camera, the way the zoom flies
-// (LyricSpiral): read left to right over the top, the sung word at the top, the line moving along the arm as it is
-// sung; the translation the mirrored arm along the bottom.
+// The words: each line round a ring about the middle (LyricRing), read left to right over the top, the translation
+// upright along the bottom; it comes up out of the middle and leaves outwards with the zoom. The pattern goes quiet
+// under them (dark glass, uBand), so they read over its brightest rings.
 // The pattern is also the song's spectrogram folded up: every ring of it leaves the middle carrying the spectrum of the
 // moment it was born (the bass along one mirror line of each segment, the treble along the other) and the zoom carries
 // it outwards, so the outer rings are the last few seconds and the sound wells up out of the middle. Quiet rings are
@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit } from './types.ts';
 import { clamp01, fitFov, outExpo, rng, smooth, snap as snapTo } from './types.ts';
-import { LyricSpiral } from './lyricSpace.ts';
+import { LyricRing } from './lyricSpace.ts';
 import { Accents } from './hits.ts';
 import { lastIndex } from '../director/music.ts';
 import { VOICES, voiceFor } from './lyricBlock.ts';
@@ -27,6 +27,10 @@ const fragmentShader = /* glsl */ `
   uniform sampler2D uCover, tSpec;
   uniform float uAspect, uSpan, uSeg, uRot, uZoom, uKick, uLines, uSpiral, uNow, uSecPerZ, uSpec;
   uniform vec3 uPaper, uInk, uGlow;
+  // Where the words are (LyricRing.bands, in units of the frame's half-height round the middle): inner and outer
+  // radius, the middle angle and half the angle of each stretch; how quiet the pattern goes there.
+  uniform vec4 uBand[4];
+  uniform float uBandK[4];
   varying vec2 vP;
   void main() {
     vec2 p = vP * vec2(uAspect, 1.0) * uSpan;
@@ -59,9 +63,19 @@ const fragmentShader = /* glsl */ `
     col /= 1.0 + 0.25 * max(col.r, max(col.g, col.b));
     col = mix(uInk * 0.5 + col * 0.06, col * (1.0 + 0.8 * rise), fill);
     col += (uPaper * 0.5 + uGlow * 0.5) * rim * (0.35 + 2.5 * rise);
+    // Under the words the pattern goes quiet: dark glass, and no hairlines (bright enough to bloom back through).
+    vec2 q = vP * vec2(uAspect, 1.0);
+    float qr = length(q), qa = atan(q.y, q.x), quiet = 0.0;
+    for (int i = 0; i < 4; i++) {
+      vec4 b = uBand[i];
+      float da = abs(mod(qa - b.z + 3.1415927, 6.2831853) - 3.1415927);
+      float across = smoothstep(b.x - 0.06, b.x + 0.01, qr) * (1.0 - smoothstep(b.y - 0.01, b.y + 0.06, qr));
+      quiet = max(quiet, across * (1.0 - smoothstep(b.w, b.w + 0.14, da)) * uBandK[i]);
+    }
+    col = mix(col, uInk * 0.45, quiet);
     float edgeA = 1.0 - smoothstep(0.0015, 0.0045, min(la, seg - la) * r);
     float edgeB = 1.0 - smoothstep(0.0, 0.025, min(band, 1.0 - band));
-    col = mix(col, uPaper, max(edgeA * mix(1.0, 0.5, uSpec), edgeB * 0.7 * (1.0 - uSpec)) * uLines);
+    col = mix(col, uPaper, max(edgeA * mix(1.0, 0.5, uSpec), edgeB * 0.7 * (1.0 - uSpec)) * uLines * (1.0 - smoothstep(0.15, 0.6, quiet)));
     col *= 0.9 + uKick * 0.2;
     col = mix(col, uInk, smoothstep(0.85, 1.7, r) * 0.65);
     gl_FragColor = vec4(col, 1.0);
@@ -71,7 +85,9 @@ export class Kaleido implements MvScene {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 100);
   private material: THREE.ShaderMaterial;
-  private words: LyricSpiral;
+  private words: LyricRing;
+  /** The frame's visible half-height at the words (the camera is 10 away): the shader's unit for uBand. */
+  private half = 1;
   private ring: SpecRing;
   /** The hits the pattern snaps on: strong ones, at least 0.45 of a beat apart. */
   private snapT: Float64Array;
@@ -94,6 +110,7 @@ export class Kaleido implements MvScene {
         uKick: { value: 0 }, uLines: { value: 0.6 }, uSpiral: { value: 0 },
         tSpec: { value: this.ring.texture }, uNow: { value: 0 }, uSecPerZ: { value: 1 }, uSpec: { value: init.stereo ? 1 : 0 },
         uPaper: { value: palette.paper.clone() }, uInk: { value: palette.ink.clone() }, uGlow: { value: glow },
+        uBand: { value: Array.from({ length: 4 }, () => new THREE.Vector4()) }, uBandK: { value: [0, 0, 0, 0] },
       },
     });
     const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.material);
@@ -103,23 +120,24 @@ export class Kaleido implements MvScene {
     this.camera.position.set(0, 0, 10);
     // In the song's voice (lyricBlock.ts).
     const voice = VOICES[voiceFor(look, init.seed)];
-    this.words = new LyricSpiral(palette, { style: look === 'ballad' ? 'poem' : 'hook', face: voice.faces[0], em: 0.42, transEm: 0.22 });
+    this.words = new LyricRing(palette, { style: look === 'ballad' ? 'poem' : 'hook', face: voice.faces[0], em: 0.5, transEm: 0.25 });
     this.scene.add(this.words.group);
     this.resize(init.aspect);
   }
 
   resize(aspect: number): void {
-    // A portrait frame sees the pattern across it as a square one would, so the arcs of words stay in; the pattern is
-    // drawn on the same scale (uSpan: how much more of it the frame's height spans), so the words still ride its bands.
+    // A portrait frame sees the pattern across it as a square one would, so the ring of words stays in; the pattern is
+    // drawn on the same scale (uSpan: how much more of it the frame's height spans), so the ring sits on its bands.
     const fov = fitFov(50, aspect);
     this.camera.aspect = aspect;
     this.camera.fov = fov;
     this.camera.updateProjectionMatrix();
     this.material.uniforms.uAspect.value = aspect;
     this.material.uniforms.uSpan.value = Math.tan(THREE.MathUtils.degToRad(fov / 2)) / Math.tan(THREE.MathUtils.degToRad(25));
-    // The arm round the middle at half the frame's shorter half-side (the camera is 10 away).
+    // The ring at 0.64 of the frame's shorter half-side (the camera is 10 away).
     const half = 10 * Math.tan(THREE.MathUtils.degToRad(fov / 2));
-    this.words.radius = 0.5 * half * Math.min(1, aspect);
+    this.half = half;
+    this.words.radius = 0.64 * half * Math.min(1, aspect);
   }
 
   keepUp(t: number): void {
@@ -163,5 +181,11 @@ export class Kaleido implements MvScene {
     ctx.fx.bloom = (soft ? 0.4 : 0.45) + kick * 0.3;
     this.camera.updateMatrixWorld();
     this.words.update(ctx.lyrics, t, shot.section.energy, this.camera);
+    const bands = this.words.bands;
+    for (let i = 0; i < 4; i++) {
+      const b = bands[i];
+      u.uBand.value[i].set(b ? b.rIn / this.half : 0, b ? b.rOut / this.half : 0, b ? b.angle : 0, b ? b.span : 0);
+      u.uBandK.value[i] = b ? b.k * (soft ? 0.75 : 0.9) : 0;
+    }
   }
 }
