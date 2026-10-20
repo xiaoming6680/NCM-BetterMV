@@ -16,13 +16,19 @@ bun run plugin   # 装进 BetterNCM 的 plugins_dev，重启网易云生效
 
 包内容：`manifest.json`、`bettermv.js`、`preview.jpg`、`LICENSE`、`fonts/`（含 `OFL.txt`）、`previews/*.webp`（场景与画风示意图）、`obs/`（`index.html`、`obs.js`、`bettermv-obs.exe`）。
 
-`bun run plugin` 装的开发构建版本号带 `dev-` 前缀（如 `dev-0.11.0`）：装进去的 `manifest.json`、设置页和面板都这样显示；比较更新时忽略前缀，开发版不会被提示更新到同号的发布版。`bun run pack` 打的发布包不带前缀。
+`bun run plugin` 装的开发构建版本号带 `dev-` 前缀（形如 `dev-1.x.x`）：装进去的 `manifest.json`、设置页和面板都这样显示；比较更新时忽略前缀，开发版不会被提示更新到同号的发布版。`bun run pack` 打的发布包不带前缀。
 
 `plugins` 里有 BetterMV 的发布包时，`plugins_dev` 里的开发构建不会加载（见 [CLIENT.md](CLIENT.md)“插件包的解压与更新”）。
 
 ## README 的图
 
-`bun film/render.ts --images` 渲染封面、场景墙、设置页和控制栏（场景墙要等新场景都有 `public/previews/` 示意图）。`bun tools/readme-media.ts` 在开发页 `settings.html?mv&demo` 上录插件自己的界面（控制栏、右键菜单、下载 MV、设置、等待页）。`--sketches` 录安装三步和从网易云点 MV（install.gif、open.gif），用的是教程版宣传片的示意窗口 `film/readme.html`，它和宣传片的源文件还没进仓库。开头和功能介绍的 MV 片段（hero、feat-*）、风格和画风截图，由开发页渲染的片段用 ffmpeg 转成（15 帧/秒，880 或 720 宽）。界面动图存 GIF（背景静止，只存变化的像素），MV 画面存动画 WebP（每帧都在变，GIF 要大 4–7 倍）。都需要冻结的开发服务器（`BMV_SERVER`）。
+都要冻结的开发服务器（`BMV_SERVER`）。拍之前设 `BMV_VERSION_LABEL=1.x.x`：开发服务器把界面上的版本号显示成它，同一主版本内的发布不用重拍。
+
+- `bun film/render.ts --images`：封面、场景墙、设置页和控制栏（场景墙要等新场景都有 `public/previews/` 示意图）。
+- `bun tools/readme-media.ts`：在开发页 `settings.html?mv&demo` 上录插件自己的界面（控制栏、右键菜单、下载 MV、设置、等待页）。`--sketches` 录安装三步和从网易云点 MV（install.gif、open.gif），用的是教程版宣传片的示意窗口 `film/readme.html`，它和宣传片的源文件还没进仓库。
+- `bun tools/readme-clips.ts`：MV 画面，即开头和功能介绍的片段（hero、feat-*）、风格和画风截图。开发页示例模式（示例封面和歌词，按 Burn 的时间，这首歌要在网易云缓存里），每段强制一个场景。
+
+界面动图存 GIF（背景静止，只存变化的像素），MV 画面存动画 WebP（每帧都在变，GIF 要大 4–7 倍）。Release 说明直接引用仓库里钉在该版本标签上的这些图。README 正文不写会随版本变的数字（如场景数）。
 
 ## CI
 

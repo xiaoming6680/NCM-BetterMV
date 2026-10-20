@@ -49,7 +49,7 @@ BetterMV 是网易云音乐 PC 版的插件（基于 [BetterNCM](https://github.
 
 ### 颜色只取自封面，每次播放都不同
 
-整支 MV 的配色都取自这首歌的封面，黑白封面生成黑白 MV。共 33 个场景、4 种风格、4 种画风，同一首歌每次播放重新编排。风格默认按曲风和音频自动选择，也可以手动指定。
+整支 MV 的配色都取自这首歌的封面，黑白封面生成黑白 MV。数十个场景、4 种风格、4 种画风，同一首歌每次播放重新编排。风格默认按曲风和音频自动选择，也可以手动指定。
 
 | 律动 | 抒情 |
 |:---:|:---:|
@@ -64,9 +64,9 @@ BetterMV 是网易云音乐 PC 版的插件（基于 [BetterNCM](https://github.
 | <img src="docs/images/look-riso.jpg" alt="孔版印刷" width="210"> | <img src="docs/images/look-hibit.jpg" alt="像素" width="210"> | <img src="docs/images/look-ascii.jpg" alt="字符" width="210"> | <img src="docs/images/look-vhs.jpg" alt="录像带" width="210"> |
 
 <details>
-<summary>全部 33 个场景</summary>
+<summary>全部场景</summary>
 
-<p align="center"><img src="docs/images/scenes.jpg" alt="33 个场景" width="880"></p>
+<p align="center"><img src="docs/images/scenes.jpg" alt="全部场景" width="880"></p>
 
 </details>
 
