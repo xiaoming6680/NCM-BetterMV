@@ -116,13 +116,25 @@ def pairs(lrc, truth):
     if out and np.median([abs(p['start'] - p['truth'][0]) for p in out]) > 0.6: return []
     return out
 
-# --- the plugin's rules for using an alignment (applyAlignment, starts only) -------------------------------------
-def apply(tokens, r):
+# --- the plugin's rules for using an alignment (src/lyrics/aligned.ts applyAlignment, starts only) ---------------
+PAUSE, BUDGET, PER_SYLLABLE = 3, 2, 0.6  # believed()
+
+def believed(r, syl, stamp):
+    out, before, sung_to, doubt = [], 0, None, False
+    for j, w in enumerate(r['words']):
+        s = w[0] if w and w[0] is not None else None
+        if s is not None and ((sung_to is not None and s - sung_to > PAUSE) or s > stamp + BUDGET + PER_SYLLABLE * before): doubt = True
+        out.append(None if doubt else s)
+        if s is not None and not doubt: sung_to = w[1] if w[1] is not None else s + 0.3
+        before += syl[j]
+    return out
+
+def apply(tokens, r, stamp):
     if r['conf'] is None or r['conf'] < MIN_CONF: return None
-    st = [w[0] if w and w[0] is not None else None for w in r['words']]
+    syl = [fa.syllables(t) for t in tokens]
+    st = believed(r, syl, stamp)
     known = [j for j, s in enumerate(st) if s is not None]
     if not known: return None
-    syl = [fa.syllables(t) for t in tokens]
     t = [None] * len(tokens)
     for j in known: t[j] = st[j]
     for j in range(known[0] - 1, -1, -1): t[j] = t[j + 1] - 0.3 * syl[j]
@@ -182,7 +194,7 @@ for sid in ids:
     song = []
     for p, r in zip(ps, res):
         base = spread(p['tokens'], p['start'], p['next'])
-        got = apply(p['tokens'], r)
+        got = apply(p['tokens'], r, p['start'])
         lines_used[0] += got is not None; lines_used[1] += 1
         for j, (e, b, tr) in enumerate(zip(got or base, base, p['truth'])):
             err['after'].append(abs(e - tr)); err['before'].append(abs(b - tr)); err['first' if j == 0 else 'rest'].append(abs(e - tr))

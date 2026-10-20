@@ -8,7 +8,8 @@
 // The pack is not part of the plugin: about 480 MB, downloaded from the project's releases when the user asks for it.
 import type { LyricLine } from '../types.ts';
 import type { BeatThisInput } from '../analysis/beatthis.ts';
-import { syllables } from '../lyrics/parse.ts';
+import type { AlignResult } from '../lyrics/aligned.ts';
+export { applyAlignment, type AlignResult, type AlignedLine } from '../lyrics/aligned.ts';
 import { execArg } from './exec.ts';
 import drumScript from '../../tools/aligner/drums.py?raw';
 import rhythmScript from '../../tools/aligner/rhythm.py?raw';
@@ -18,8 +19,6 @@ import drumNotice from '../../tools/aligner/licenses/ADTOF-NOTICE.txt?raw';
 const RELEASE = 'https://github.com/xiaoming6680/NCM-BetterMV/releases/download/aligner-v2/';
 /** The pack format this plugin speaks (the pack's version.json). */
 const PACK_VERSION = 2;
-/** Lines whose letters fit the audio worse than this (mean probability) keep the spread estimate (docs/ALIGNER.md). */
-const MIN_CONF = 0.005;
 const JOB_TIMEOUT_MS = 8 * 60 * 1000;
 /** Beats are waited for before the MV starts: past this the song goes on with the plugin's own beats. */
 const BEATS_TIMEOUT_MS = 40 * 1000;
@@ -74,8 +73,6 @@ export type PackState =
 
 interface Manifest { version: number; files: Array<{ name: string; size: number; sha256: string; kind: 'zip' | 'model' }> }
 
-export interface AlignedLine { words: Array<[number, number] | [number, null] | null>; conf: number | null }
-export interface AlignResult { version: number; id: number; lines: AlignedLine[]; device?: string; ms?: Record<string, number>; error?: string }
 
 let state: PackState = { kind: 'checking' };
 const watchers = new Set<(s: PackState) => void>();
@@ -376,52 +373,4 @@ export function trackSongBeats(id: number, audio: () => Promise<{ mono: Float32A
   const job = beatQueue.then(run, run).catch(e => { console.warn('[BetterMV] 节拍识别出错', e); return null; });
   beatQueue = job;
   return job;
-}
-
-/**
- * Word times from an alignment, written into the lines in place. Words the pack couldn't place (backing vocals in
- * brackets, numbers) are put between their placed neighbours by syllable count; lines it fitted poorly keep the
- * estimate. Returns how many lines changed.
- */
-export function applyAlignment(lines: LyricLine[], result: AlignResult): number {
-  let changed = 0;
-  lines.forEach((line, i) => {
-    const r = result.lines[i];
-    if (!r || r.conf === null || r.conf < MIN_CONF || r.words.length !== line.words.length) return;
-    const starts = r.words.map(w => (w && typeof w[0] === 'number' ? w[0] : null));
-    const known = starts.flatMap((s, j) => (s === null ? [] : [j]));
-    if (!known.length) return;
-    const syl = line.words.map(w => syllables(w.text));
-    const next = lines[i + 1]?.start ?? Infinity;
-    const t: number[] = new Array(line.words.length);
-    for (const j of known) t[j] = starts[j]!;
-    // Before the first placed word and after the last: 0.3 s a syllable; between two placed words: by syllables.
-    for (let j = known[0] - 1; j >= 0; j--) t[j] = t[j + 1] - 0.3 * syl[j];
-    for (let k = 0; k < known.length - 1; k++) {
-      const a = known[k], b = known[k + 1];
-      let total = 0;
-      for (let j = a; j < b; j++) total += syl[j];
-      let acc = 0;
-      for (let j = a + 1; j < b; j++) { acc += syl[j - 1]; t[j] = t[a] + (t[b] - t[a]) * acc / total; }
-    }
-    for (let j = known[known.length - 1] + 1; j < t.length; j++) t[j] = t[j - 1] + 0.3 * syl[j - 1];
-    for (let j = 1; j < t.length; j++) t[j] = Math.max(t[j], t[j - 1]);
-    line.words.forEach((w, j) => {
-      const sungTo = r.words[j]?.[1];
-      if (j + 1 < t.length) {
-        // A word lasts until the next unless the singer clearly stopped (then a little past where its letters end).
-        const gap = typeof sungTo === 'number' ? t[j + 1] - sungTo : 0;
-        w.start = t[j];
-        w.end = gap > 0.6 ? Math.max(t[j] + 0.12, sungTo! + 0.15) : t[j + 1];
-      } else {
-        w.start = t[j];
-        const end = Math.max(typeof sungTo === 'number' ? sungTo + 0.2 : 0, t[j] + 0.3 * syl[j]);
-        w.end = Math.max(t[j] + 0.15, Math.min(end, next - 0.05));
-      }
-    });
-    line.start = Math.min(line.start, line.words[0].start);
-    line.end = Math.max(line.end, line.words[line.words.length - 1].end);
-    changed++;
-  });
-  return changed;
 }
