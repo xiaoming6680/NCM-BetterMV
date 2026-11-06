@@ -11,7 +11,7 @@
   "ncm3-compatible": true,
   "type": "extension",
   "require_restart": true,
-  "preview": "preview.jpg",
+  "preview": "preview.webp",
   "injects": {
     "Main": [
       {

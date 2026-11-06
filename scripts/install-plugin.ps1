@@ -23,7 +23,7 @@ Copy-Item -LiteralPath (Join-Path $projectRoot 'dist\export\bettermv-encode.exe'
 $manifest = [System.IO.File]::ReadAllText((Join-Path $projectRoot 'plugin\manifest.json')) -replace '"version":\s*"([^"]+)"', '"version": "dev-$1"'
 [System.IO.File]::WriteAllText((Join-Path $target 'manifest.json'), $manifest, (New-Object System.Text.UTF8Encoding $false))
 Copy-Item -LiteralPath (Join-Path $projectRoot 'dist\plugin\bettermv.js') -Destination $target -Force
-Copy-Item -LiteralPath (Join-Path $projectRoot 'plugin\preview.jpg') -Destination $target -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'plugin\preview.webp') -Destination $target -Force
 Copy-Item -Path (Join-Path $projectRoot 'public\fonts\*.ttf') -Destination (Join-Path $target 'fonts') -Force
 Copy-Item -Path (Join-Path $projectRoot 'public\fonts\*.woff2') -Destination (Join-Path $target 'fonts') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'public\fonts\OFL.txt') -Destination (Join-Path $target 'fonts') -Force

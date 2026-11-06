@@ -1,5 +1,5 @@
 ﻿# Builds the plugin and packs it as dist/ncm-better-mv.plugin (a zip BetterNCM installs: manifest.json, bettermv.js,
-# the store's preview.jpg, LICENSE, fonts/ with their licence, previews/ — the settings page's scene sketches, obs/ —
+# the store's preview.webp, LICENSE, fonts/ with their licence, previews/ — the settings page's scene sketches, obs/ —
 # the OBS output's page and local server, export/ — the video encoder of 下载 MV). Entry names use forward slashes,
 # which Compress-Archive on Windows PowerShell 5.1 does not.
 $ErrorActionPreference = 'Stop'
@@ -20,7 +20,7 @@ try {
     $entries = @(
         @{ From = (Join-Path $projectRoot 'plugin\manifest.json'); Name = 'manifest.json' },
         @{ From = (Join-Path $projectRoot 'dist\plugin\bettermv.js'); Name = 'bettermv.js' },
-        @{ From = (Join-Path $projectRoot 'plugin\preview.jpg'); Name = 'preview.jpg' },
+        @{ From = (Join-Path $projectRoot 'plugin\preview.webp'); Name = 'preview.webp' },
         @{ From = (Join-Path $projectRoot 'LICENSE'); Name = 'LICENSE' },
         @{ From = (Join-Path $projectRoot 'public\fonts\OFL.txt'); Name = 'fonts/OFL.txt' },
         @{ From = (Join-Path $projectRoot 'plugin\obs\index.html'); Name = 'obs/index.html' },

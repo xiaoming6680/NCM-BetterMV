@@ -34,7 +34,7 @@ jobs:
           $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path dist/*.plugin).Path)
           try {
             $names = $zip.Entries.FullName
-            foreach ($need in @('manifest.json', 'bettermv.js', 'preview.jpg', 'LICENSE', 'fonts/OFL.txt', 'obs/index.html', 'obs/obs.js', 'obs/bettermv-obs.exe')) {
+            foreach ($need in @('manifest.json', 'bettermv.js', 'preview.webp', 'LICENSE', 'fonts/OFL.txt', 'obs/index.html', 'obs/obs.js', 'obs/bettermv-obs.exe')) {
               if ($names -notcontains $need) { throw "安装包缺少 $need" }
             }
             if (@($names | Where-Object { $_ -like 'previews/*.webp' }).Count -lt 21) { throw '场景示意图不全' }
@@ -49,3 +49,40 @@ jobs:
             dist/*.plugin
             dist/SHA256SUMS.txt
           if-no-files-found: error
+
+  # The BetterNCM plugin store syncs the unpacked plugin from this branch (subpath "/"), so what it ships is what this
+  # workflow built. Publishes on a version tag, or by hand from main.
+  store:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: BetterMV
+          path: ${{ runner.temp }}/package
+      - name: Publish the store branch
+        env:
+          PACKAGE: ${{ runner.temp }}/package
+        run: |
+          if git ls-remote --exit-code origin refs/heads/store > /dev/null; then
+            git fetch --depth=1 origin store
+            git checkout -B store FETCH_HEAD
+          else
+            git checkout --orphan store
+          fi
+          git rm -rfq --ignore-unmatch .
+          git clean -fdxq
+          unzip -q "$PACKAGE"/*.plugin -d .
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'store branch is already up to date'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -q -m "Build $(jq -r .version manifest.json) from $GITHUB_SHA"
+          git push origin store

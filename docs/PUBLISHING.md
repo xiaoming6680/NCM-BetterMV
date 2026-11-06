@@ -14,7 +14,7 @@ bun run pack     # dist/ncm-better-mv.plugin
 bun run plugin   # 装进 BetterNCM 的 plugins_dev，重启网易云生效
 ```
 
-包内容：`manifest.json`、`bettermv.js`、`preview.jpg`、`LICENSE`、`fonts/`（含 `OFL.txt`）、`previews/*.webp`（场景与画风示意图）、`obs/`（`index.html`、`obs.js`、`bettermv-obs.exe`）。
+包内容：`manifest.json`、`bettermv.js`、`preview.webp`（商店动态缩略图，由 `python tools/store-preview.py` 从 `docs/images/hero.webp` 生成）、`LICENSE`、`fonts/`（含 `OFL.txt`）、`previews/*.webp`（场景与画风示意图）、`obs/`（`index.html`、`obs.js`、`bettermv-obs.exe`）。
 
 `bun run plugin` 装的开发构建版本号带 `dev-` 前缀（形如 `dev-1.x.x`）：装进去的 `manifest.json`、设置页和面板都这样显示；比较更新时忽略前缀，开发版不会被提示更新到同号的发布版。`bun run pack` 打的发布包不带前缀。
 
@@ -32,7 +32,7 @@ bun run plugin   # 装进 BetterNCM 的 plugins_dev，重启网易云生效
 
 ## CI
 
-工作流 “Build plugin”（`.github/workflows/`）：类型检查 → 打包 → 检查包内容（上面列出的必需文件、示意图不少于 21 张）→ `bettermv.js`、`obs.js` 中不得出现“《”→ 上传 `.plugin` 和 `SHA256SUMS.txt`。
+工作流 “Build plugin”（`.github/workflows/`）：类型检查 → 打包 → 检查包内容（上面列出的必需文件、示意图不少于 21 张）→ `bettermv.js`、`obs.js` 中不得出现“《”→ 上传 `.plugin` 和 `SHA256SUMS.txt`。推送 `v主.次.修` 标签，或在 `main` 上手动运行时，再把这个包解压后提交到 `store` 分支。
 
 ## GitHub Release
 
@@ -40,7 +40,12 @@ bun run plugin   # 装进 BetterNCM 的 plugins_dev，重启网易云生效
 - 插件的检查更新（`src/plugin/update.ts`）只认这个格式：标签 `v主.次.修`、非预发布、附件含 `.plugin`、下载地址在本仓库的 `releases/download/` 下。改标签或附件格式前先改 `update.ts`。
 - 0.9.2 起新版本启动时会删除同 slug 的旧包。从 0.9.1 及更早版本升级要手动删除旧的 `.plugin`（同 slug 的包只有文件名排在最后的生效），Release 说明里写明。
 - 对齐包单独用 `aligner-v格式号` 标签（现在是 `aligner-v2`，加了节拍；`aligner-v1` 留给旧插件），标成预发布，免得被 GitHub 当成最新版本。包格式变了才发新标签（见 [ALIGNER.md](ALIGNER.md)）。新包要先于插件发布：插件一更新就会去新标签下载。
-- 只在 GitHub 发布，不上架 BetterNCM 插件商店。
+
+## BetterNCM 插件商店
+
+- 向 [BetterNCM/BetterNCM-Plugins](https://github.com/BetterNCM/BetterNCM-Plugins) 提交 `plugins-list/ncm-better-mv.json`，`branch` 为 `store`，`subpath` 为 `/`。
+- `store` 分支只放 Actions 构建并解压的插件包，不手动修改。官方脚本定期读取其中 `manifest.json` 的版本号并同步更新。
+- 插件内的检查更新保留，商店版和 GitHub Release 版用同一个包。
 
 ## 客户端验收
 
