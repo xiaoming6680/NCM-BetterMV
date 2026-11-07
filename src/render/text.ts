@@ -45,7 +45,13 @@ const isCjkChar = (ch: string) => /[　-ヿ㐀-鿿가-힯豈-﫿＀-￯]/.test(c
 
 export const hasCjk = (s: string) => /[぀-ヿ㐀-鿿豈-﫿가-힯]/.test(s);
 
-/** Loads the bundled Latin faces, from a URL base (dev) or a file reader (the plugin, which can't use URLs). */
+/** Faces already in the page: loading again after a failure reads only what is missing. */
+const facesAdded = new Set<string>();
+
+/**
+ * Loads the bundled Latin faces, from a URL base (dev) or a file reader (the plugin, which can't use URLs). A face that
+ * can't be read leaves the others in place; the first failure is thrown once the rest are done.
+ */
 export async function loadFonts(source: string | ((file: string) => Promise<ArrayBuffer>)): Promise<void> {
   const faces: Array<[string, string]> = [
     ['BMV Archivo Bold', 'Archivo-w1000-700.ttf'],
@@ -60,16 +66,18 @@ export async function loadFonts(source: string | ((file: string) => Promise<Arra
     ['BMV Smiley', 'SmileySans-Oblique.woff2'],
     ['BMV WenKai', 'LXGWWenKaiLite-GB.woff2'],
   ];
-  await Promise.all(faces.map(async ([family, file]) => {
+  const results = await Promise.allSettled(faces.filter(([family]) => !facesAdded.has(family)).map(async ([family, file]) => {
     const face = new FontFace(family, typeof source === 'string' ? `url(${source}${file})` : await source(file));
     await face.load();
     document.fonts.add(face);
+    facesAdded.add(family);
   }));
   // Make sure the CJK system fonts are resolved before the first texture is drawn.
   await document.fonts.load(`700 64px ${CJK_STACK}`, '澄净');
   await document.fonts.load(`600 64px ${SERIF_STACK}`, '澄净 Clarity');
   await document.fonts.load(`400 64px ${KAI_STACK}`, '澄净');
   await document.fonts.load(`400 64px ${SMILEY_STACK}`, '澄净');
+  for (const r of results) if (r.status === 'rejected') throw r.reason;
 }
 
 export interface TextTexture {

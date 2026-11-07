@@ -29,6 +29,8 @@ import type { SceneId, Shot } from '../scenes/types.ts';
 import type { LookId } from '../director/director.ts';
 
 const KEY = '__betterMv';
+/** How long opening the MV page waits for the fonts: they style the words, and arrive late if they must. */
+const FONT_WAIT_MS = 10_000;
 const SECTION: Record<SectionLabel, string> = { intro: '前奏', verse: '主歌', pre: '预副歌', chorus: '副歌', drop: '高潮', build: '铺垫', break: '间奏', bridge: '桥段', outro: '尾奏' };
 const nextFrame = () => new Promise<void>(r => requestAnimationFrame(() => r()));
 
@@ -80,7 +82,12 @@ function start(client: Client): void {
 
   let player: MvPlayer | null = null;
   window.addEventListener('resize', () => player?.resize());
+  /** The fonts being loaded, or loaded. Null after a failure: the next opening reads what is missing. */
   let fonts: Promise<void> | null = null;
+  /** The fonts outlasted a wait once: opening doesn't wait for them again. */
+  let fontsSlow = false;
+  /** Why no renderer could be made. Kept until an opening or 重试 asks again, not at every change of the store. */
+  let rendererError: SourceError | null = null;
   let preparing: Job | null = null;
   /** The next song being prepared in the background (prefetchNext). */
   let ahead: Ahead | null = null;
@@ -145,7 +152,7 @@ function start(client: Client): void {
     onResizeWindow: edge => { try { void Promise.resolve(client.bridge.call('winhelper.sizeWindow', edge)).catch(() => {}); } catch { /* no such call */ } },
     onMinimize: () => minimizeWindow(client.store),
     onToggleMaximize: () => toggleMaximize(client.store),
-    onRetry: () => void prepareCurrent(),
+    onRetry: () => void open(),
     // The same settings, in a panel on the MV page (tried out while watching).
     settings: () => settingsView(config, changed, sketch, true, player?.song ? { id: player.song.id, name: player.song.name ?? '' } : undefined, { reroll }),
     menu: () => menu(),
@@ -578,7 +585,9 @@ function start(client: Client): void {
     const song = playingSong(client.store);
     if (!song) { overlay.song(null); overlay.mvInfo(null); overlay.status('请先在网易云音乐中播放歌曲'); resting = false; pushState(); return; }
     // (With only the OBS output on, the MV page is closed: no renderer is made here.)
-    if (overlay.visible) livePlayer();
+    if (overlay.visible) {
+      try { livePlayer(); } catch (e) { failed(e); return; }
+    }
     // Already showing this song (reopened after closing): just take the loading note away. (Not while it is still
     // being built or warmed: the player has it from the start of the build.)
     if (player?.song?.id === song.id && preparing?.id !== song.id) { overlay.status(null); resting = false; void obsPublish(player.song); return; }
@@ -602,10 +611,15 @@ function start(client: Client): void {
       let prepared = ready.get(song.id);
       if (!prepared) {
         overlay.status('正在读取歌曲…', { progress: 0.03 });
-        job.progress = (stage, p) => overlay.status(
-          stage === 'decode' ? '正在解码音频…' : stage === 'beats' ? '正在识别节拍…' : '正在分析节拍与段落…',
-          { progress: stage === 'decode' ? 0.08 : stage === 'beats' ? 0.1 + 0.1 * p : 0.2 + 0.68 * p },
-        );
+        // (A dropped job's beat tracking keeps reporting, and a job for the OBS page may outlive a failure to make the
+        // MV page's renderer: the message on the page stays.)
+        job.progress = (stage, p) => {
+          if (rendererError || job.cancelled) return;
+          overlay.status(
+            stage === 'decode' ? '正在解码音频…' : stage === 'beats' ? '正在识别节拍…' : '正在分析节拍与段落…',
+            { progress: stage === 'decode' ? 0.08 : stage === 'beats' ? 0.1 + 0.1 * p : 0.2 + 0.68 * p },
+          );
+        };
         const g = (taken && await taken.done) || await gather(song, job);
         if (job.cancelled) return;
         keep(g);
@@ -632,7 +646,7 @@ function start(client: Client): void {
       prefetchNext();
     } catch (e) {
       // (The song comes off the player: 重试 used to find it “already showing” and uncover a dead canvas — black.)
-      if (!(e instanceof Cancelled)) { player?.unload(); failed(e); }
+      if (!(e instanceof Cancelled)) { player?.unload(); if (!rendererError) failed(e); }
     } finally {
       if (preparing === job) preparing = null;
     }
@@ -655,7 +669,16 @@ function start(client: Client): void {
       player = null;
     }
     if (!player) {
-      const p = player = new MvPlayer(overlay.stage, pixelRatio(config.quality));
+      if (rendererError) throw rendererError;
+      let p: MvPlayer;
+      try {
+        p = player = new MvPlayer(overlay.stage, pixelRatio(config.quality));
+      } catch (e) {
+        console.warn('[BetterMV] 渲染器', e);
+        // (Whatever it had added before failing goes with it: 重试 starts from an empty stage.)
+        overlay.stage.replaceChildren();
+        throw (rendererError = new SourceError('显卡无法创建 WebGL 画面', '请更新显卡驱动，打开网易云“设置 → 常规 → 开启GPU加速”，然后重启网易云。'));
+      }
       governor = new Governor(p.engine.renderer.getContext() as WebGL2RenderingContext, ladder(pixelRatio('high')));
       p.resize();
       // Lost while playing: the song comes off it, and the waiting view offers to make the picture again.
@@ -669,14 +692,37 @@ function start(client: Client): void {
     return player;
   }
 
+  /**
+   * The fonts, waited for at most FONT_WAIT_MS. Never rejects: the words fall back on the system's fonts rather than
+   * the MV not opening. Fonts that arrive after the wait are in the page for the words drawn from then on.
+   */
+  function fontsForOpening(): Promise<void> {
+    const loading = fonts ??= loadFonts(file => readPluginFile('fonts/' + file)).catch(e => {
+      console.warn('[BetterMV] 字体', e);
+      fonts = null;
+    });
+    return new Promise(done => {
+      const timer = window.setTimeout(() => { fontsSlow = true; done(); }, fontsSlow ? 0 : FONT_WAIT_MS);
+      void loading.then(() => { clearTimeout(timer); done(); });
+    });
+  }
+
+  /** Opens the MV page, or starts it over for 重试 (what failed may be anything from here on). */
   async function open(): Promise<void> {
     overlay.maximized = isMaximized(client.store);
     syncQueue();
     overlay.show();
     overlay.status('正在准备…', { progress: 0 });
-    fonts ??= loadFonts(file => readPluginFile('fonts/' + file));
-    await fonts;
-    livePlayer().resize();
+    await fontsForOpening();
+    // (Left while the fonts were read.)
+    if (!overlay.visible) return;
+    rendererError = null;
+    try {
+      livePlayer().resize();
+    } catch (e) {
+      failed(e);
+      return;
+    }
     last = due = 0;
     governor?.reset();
     if (!raf) raf = requestAnimationFrame(loop);
@@ -707,6 +753,7 @@ function start(client: Client): void {
     pushState();
     if (!overlay.visible && !obs.on) return;
     const moved = syncQueue();
+    if (overlay.visible && rendererError) return;
     const s = playingSong(client.store);
     // (With the MV page closed, the song the OBS page has is what counts.)
     const has = overlay.visible ? player?.song?.id : obsSong?.song.id;
