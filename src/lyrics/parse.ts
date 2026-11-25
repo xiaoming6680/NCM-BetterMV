@@ -71,10 +71,19 @@ function joinPunctuation<T>(items: T[], text: (x: T) => string, withText: (x: T,
   return out;
 }
 
-/** Words of a line: Latin runs split on spaces, each CJK character on its own; punctuation joins a neighbour. */
+/**
+ * Where a run with no space in it is still two words: after a comma, colon, ! or ? (or their full-width forms, or an
+ * ellipsis) that a letter follows ("Thursday,October" is "Thursday," and "October"; issue #5), and after full stops
+ * with two letters on each side ("end.Start", "wait...what"; not "U.S.A." or "a.m."). Digits on either side keep a
+ * number whole ("1,000", "10:30", "3.14").
+ */
+const JOINED = /([,;:!?，。！？；：、…]+)(?=\p{L})|(?<=\p{L}{2})(\.+)(?=\p{L}{2})/gu;
+export const splitJoined = (run: string) => run.replace(JOINED, '$1$2\u0000').split('\u0000').filter(Boolean);
+
+/** Words of a line: Latin runs split on spaces (and joined words apart), each CJK character on its own; punctuation joins a neighbour. */
 export function tokenize(text: string): string[] {
   const re = /[㐀-鿿豈-﫿぀-ヿ가-힯]|[^\s㐀-鿿豈-﫿぀-ヿ가-힯]+/g;
-  return joinPunctuation(Array.from(text.matchAll(re), m => m[0]), t => t, (_, s) => s);
+  return joinPunctuation(Array.from(text.matchAll(re), m => m[0]).flatMap(splitJoined), t => t, (_, s) => s);
 }
 
 /** Scripts written without spaces between words: each character is a word of its own. */
@@ -118,6 +127,19 @@ export function spreadWords(text: string, start: number, end: number): LyricWord
   return words;
 }
 
+/** A timed word that is joined words (splitJoined): the parts share its time by syllables. */
+function splitTimed(w: LyricWord): LyricWord[] {
+  const parts = splitJoined(w.text);
+  if (parts.length < 2) return [w];
+  const weights = parts.map(syllables), total = weights.reduce((a, b) => a + b, 0);
+  let t = w.start;
+  return parts.map((text, i) => {
+    const start = t;
+    t = i === parts.length - 1 ? w.end : t + ((w.end - w.start) * weights[i]) / total;
+    return { text, start, end: t };
+  });
+}
+
 /** The translation at each of its stamps; '' where a line is left untranslated (NetEase writes nothing or "//"). */
 function translations(doc: NeteaseLyric): Map<number, string> {
   const map = new Map<number, string>();
@@ -135,16 +157,19 @@ function fromYrc(doc: NeteaseLyric): LyricLine[] {
       .filter(p => p.text);
     // NetEase splits some words into timed syllables with nothing between them ("Pastell" "é, ", "N" "-" "now "):
     // pieces not parted by a space are one word — except in scripts written without spaces, a character a word.
-    const words: LyricWord[] = [];
+    // A piece that ends a word with a mark ("is," then "blue") starts no join; joined words within a piece are split.
+    const glued: LyricWord[] = [];
     let open = false;
     for (const p of pieces) {
-      const body = p.text.trim(), last = words[words.length - 1];
-      if (body && open && last && !/^\s/.test(p.text) && !SPACELESS.test(last.text.slice(-1)) && !SPACELESS.test(body[0])) {
+      const body = p.text.trim(), last = glued[glued.length - 1];
+      if (body && open && last && !/^\s/.test(p.text) && !SPACELESS.test(last.text.slice(-1)) && !SPACELESS.test(body[0])
+        && splitJoined(last.text + body).length < splitJoined(last.text).length + splitJoined(body).length) {
         last.text += body;
         last.end = p.end;
-      } else if (body) words.push({ text: body, start: p.start, end: p.end });
+      } else if (body) glued.push({ text: body, start: p.start, end: p.end });
       open = !!body && !/\s$/.test(p.text);
     }
+    const words = glued.flatMap(splitTimed);
     const spaceless = SPACELESS.test(m[3]);
     const { text, backing } = unwrap(tidy(spaceless ? words.map(w => w.text).join('') : pieces.map(p => p.text).join('')));
     if (!text || isCredit(text)) continue;

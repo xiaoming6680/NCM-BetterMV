@@ -7,6 +7,7 @@
     "dev": "vite",
     "eval": "bun tools/eval-analysis.ts",
     "test:rhythm": "node --experimental-transform-types --test tools/rhythm.test.ts",
+    "test:lyrics": "node --experimental-transform-types --test tools/lyrics.test.ts",
     "plugin": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-plugin.ps1",
     "pack": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-plugin.ps1"
   },

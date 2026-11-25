@@ -4,6 +4,7 @@
 |---|---|
 | [CLIENT.md](CLIENT.md) | 网易云 3.x 和 BetterNCM 给插件的接口：内部模块、播放状态与控制、窗口、音频缓存、文件接口、插件包的解压与更新 |
 | [ANALYSIS.md](ANALYSIS.md) | 歌曲分析：速度、节拍、段落、鼓点、示波器音乐、显示速度；评测工具 |
+| [LYRICS.md](LYRICS.md) | 歌词：解析与分词 |
 | [ALIGNER.md](ALIGNER.md) | 可选的对齐包（逐字歌词与节拍）：流程、效果、打包与发布 |
 | [PERFORMANCE.md](PERFORMANCE.md) | 配置要求、帧耗时与优化、自动画质、准备时间；`tools/bench` |
 | [OBS.md](OBS.md) | OBS 输出：本机服务、歌曲数据格式、对时、已知限制 |
@@ -42,6 +43,7 @@ bun run dev      # 开发页 http://localhost:5190/?id=歌曲ID（歌曲需已�
 bun run plugin   # 装进 BetterNCM 的 plugins_dev，重启网易云生效
 bun run pack     # 打包为 dist/ncm-better-mv.plugin
 bun run eval     # 分析评测
+bun run test:lyrics   # 歌词解析与上屏时序的测试
 ./node_modules/.bin/tsc.exe --noEmit   # 类型检查
 ```
 
