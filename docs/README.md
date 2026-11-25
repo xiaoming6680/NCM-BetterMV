@@ -4,7 +4,7 @@
 |---|---|
 | [CLIENT.md](CLIENT.md) | 网易云 3.x 和 BetterNCM 给插件的接口：内部模块、播放状态与控制、窗口、音频缓存、文件接口、插件包的解压与更新 |
 | [ANALYSIS.md](ANALYSIS.md) | 歌曲分析：速度、节拍、段落、鼓点、示波器音乐、显示速度；评测工具 |
-| [LYRICS.md](LYRICS.md) | 歌词：解析与分词、打字机式歌词的合并、上屏时序 |
+| [LYRICS.md](LYRICS.md) | 歌词：解析与分词、打字机式歌词的合并、上屏时序、颜色词 |
 | [ALIGNER.md](ALIGNER.md) | 可选的对齐包（逐字歌词与节拍）：流程、效果、打包与发布 |
 | [PERFORMANCE.md](PERFORMANCE.md) | 配置要求、帧耗时与优化、自动画质、准备时间；`tools/bench` |
 | [OBS.md](OBS.md) | OBS 输出：本机服务、歌曲数据格式、对时、已知限制 |
@@ -18,7 +18,7 @@
 | 目录 | 内容 |
 |---|---|
 | `src/analysis/` | 歌曲分析（主线程分片的生成器，无依赖） |
-| `src/lyrics/`、`src/meta/` | 歌词解析（分词、打字机式歌词）、音乐百科 |
+| `src/lyrics/`、`src/meta/` | 歌词解析（分词、打字机式歌词、颜色词）、音乐百科 |
 | `src/style/` | 风格选择与各风格的图版池 |
 | `src/director/` | 导演：分镜、歌词排期、后期时刻、动态图形层 |
 | `src/scenes/` | 场景（图版）与歌词载体；`catalog.ts` 是设置页的场景目录 |

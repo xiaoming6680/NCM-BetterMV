@@ -12,7 +12,7 @@ import type { Music } from '../director/music.ts';
 import type { LyricLine } from '../types.ts';
 import type { Palette } from '../render/palette.ts';
 import { tokenize } from '../lyrics/parse.ts';
-import { paintWord, scrimFragment, scrimVertex } from './lyricRig.ts';
+import { namedColor, paintWord, scrimFragment, scrimVertex } from './lyricRig.ts';
 import { clamp01, outExpo, smooth, snap } from './types.ts';
 
 type TextMesh = THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
@@ -550,9 +550,12 @@ export class LyricBlocks {
           const dur = Math.min(1.2, Math.max(0.2, held));
           const w = clamp01((ws.age + 0.06) / dur);
           const glow = ws.age < held ? 1 : Math.exp(-(ws.age - held) / 0.5);
+          // A word that names a colour is written in it, by a pen of its own colour.
+          const own = namedColor(ws.word, o.onLight), pen = own ?? signal;
           g.wipe!.value = 1 - Math.pow(1 - w, 1.4);
-          g.pen!.value.set(signal.r, signal.g, signal.b, 1.6 * (1 - w) * (o.onLight ? 0 : 1));
+          g.pen!.value.set(pen.r, pen.g, pen.b, 1.6 * (1 - w) * (o.onLight ? 0 : 1));
           if (o.onLight) this.color.setRGB(1, 1, 1);
+          else if (own) this.color.copy(own).multiplyScalar(0.94 + glow * 0.2);
           else this.color.copy(paper).multiplyScalar(0.94).lerp(signal, glow * 0.3);
           opacity = 1;
         }

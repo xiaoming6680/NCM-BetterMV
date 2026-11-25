@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import type { FrameCtx, MvScene, SceneInit, Shot } from './types.ts';
 import { clamp01, inOutCubic, lerp, narrowness, outExpo, rng, smooth, punch } from './types.ts';
 import { textMesh, hasCjk } from '../render/text.ts';
+import { namedColor } from './lyricRig.ts';
 import type { LineState } from '../director/lyrics.ts';
 import { Accents } from './hits.ts';
 import { COLS, SpecRing, Spectrogram } from './viz.ts';
@@ -463,7 +464,9 @@ export class Relief implements MvScene {
         const k = outExpo((ws.age + 0.05) / 0.18);
         g.mesh.position.set(g.x, g.y + (1 - k) * 0.4, (1 - k) * 0.6);
         const glow = ws.progress > 0 && ws.progress < 1 ? 1 : Math.exp(-Math.max(0, ws.age - (ws.word.end - ws.word.start)) / 0.3);
-        g.mesh.material.color.copy(palette.paper).multiplyScalar(0.9).lerp(palette.signal, glow).multiplyScalar(1 + glow * 0.35);
+        const own = namedColor(ws.word);
+        if (own) g.mesh.material.color.copy(own).multiplyScalar(0.9 + glow * 0.4);
+        else g.mesh.material.color.copy(palette.paper).multiplyScalar(0.9).lerp(palette.signal, glow).multiplyScalar(1 + glow * 0.35);
         g.mesh.material.opacity = k * near * rise;
       });
       const n = b.trans.length;

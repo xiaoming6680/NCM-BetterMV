@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { textMesh, textPrimer, hasCjk, VERTICAL_STEP, type Face } from '../render/text.ts';
 import { norm, type LyricTrack, type LineState, type WordState } from '../director/lyrics.ts';
+import type { LyricWord } from '../types.ts';
 import { tokenize } from '../lyrics/parse.ts';
 import type { Palette } from '../render/palette.ts';
 import { clamp01, narrowness, outBack, outExpo, rng, snap } from './types.ts';
@@ -65,10 +66,21 @@ export function neon(age: number, n: number): number {
   return 1 + 0.45 * Math.exp(-(age - 0.11) / 0.14);
 }
 
+const named = new Map<string, THREE.Color>();
+/**
+ * The colour a word names (LyricWord.color, src/lyrics/colors.ts), null for every other word — and on light frames,
+ * where the words are dark type baked into their texture with a light halo, which a tint can't turn into a colour.
+ */
+export function namedColor(word: LyricWord, onLight = false): THREE.Color | null {
+  if (!word.color || onLight) return null;
+  return named.get(word.color) ?? named.set(word.color, new THREE.Color(word.color)).get(word.color)!;
+}
+
 /**
  * How a word looks now, as every lyric carrier draws it: sets `color`, returns how far it has come in (0..1), its
  * opacity and how much it still glows from being sung; null while it is not shown. Hook words strike like a neon
- * tube and burn in the signal colour while sung; poem words fade up slowly and only warm a little.
+ * tube and burn in the signal colour while sung; poem words fade up slowly and only warm a little. A word that names
+ * a colour is set in it, burning brighter instead of toward the signal colour while sung.
  */
 export function paintWord(ws: WordState, i: number, style: RigStyle, palette: Palette, energy: number, exit: number, color: THREE.Color, onLight = false): { k: number; opacity: number; glow: number } | null {
   const lead = style === 'poem' ? 0.12 : 0.04;
@@ -77,13 +89,15 @@ export function paintWord(ws: WordState, i: number, style: RigStyle, palette: Pa
   const k = style === 'poem' ? outCubic(appear) : outExpo(appear);
   const singing = ws.progress > 0 && ws.progress < 1;
   const glow = singing ? 1 : Math.exp(-Math.max(0, ws.age - (ws.word.end - ws.word.start)) / 0.25);
-  const { paper, signal } = palette;
+  const { paper, signal } = palette, own = namedColor(ws.word, onLight);
   if (style === 'poem') {
     if (onLight) color.setRGB(1, 1, 1);
+    else if (own) color.copy(own).multiplyScalar(0.93 + glow * 0.15);
     else color.copy(paper).multiplyScalar(0.93).lerp(signal, glow * 0.28);
     return { k, opacity: k * (1 - exit), glow };
   }
-  color.copy(paper).multiplyScalar(0.92).lerp(signal, glow * (style === 'hook' ? 1 : 0.85));
+  if (own) color.copy(own).multiplyScalar(0.92 + glow * 0.25);
+  else color.copy(paper).multiplyScalar(0.92).lerp(signal, glow * (style === 'hook' ? 1 : 0.85));
   // Display type comes on like a neon tube.
   const lit = style === 'hook' ? neon(ws.age + lead, i) : 1;
   if (style === 'hook') color.multiplyScalar((1 + glow * (0.25 + energy * 0.25)) * Math.max(0.35, lit));

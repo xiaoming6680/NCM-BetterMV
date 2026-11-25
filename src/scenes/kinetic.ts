@@ -44,7 +44,8 @@ const ECHO_SIZES = [1, 0.62, 0.84, 0.7, 0.94, 0.56];
 const PX = { big: 320, mid: 256, small: 192, tick: 72, trans: 60 };
 
 type Kind = 'echo' | 'bar' | 'crop' | 'panel' | 'chip' | 'idle';
-interface Part { text: string; start: number }
+/** A word (or a CJK run) of a unit; `color`, the colour it names (LyricWord.color). */
+interface Part { text: string; start: number; color?: string }
 /** Words set together: a Latin word (with a short one before it), or two to four CJK characters. */
 export interface Unit { parts: Part[]; start: number; cjk: boolean; line: number }
 /** One layout: a line (or half a long one), or the stretch between lines. */
@@ -124,8 +125,8 @@ export function unitsOf(line: LyricLine, index: number): Unit[] {
         const n = Array.from(glyphs).length;
         // Too close after the unit's start, it joins it (even past four); else a new unit past four characters.
         const join = cur && (w.start - cur.start < MIN_GAP || room(cur) + n <= 4);
-        if (join && cur && room(cur) + n <= 6) cur.parts.push({ text: glyphs, start: w.start });
-        else { cur = { parts: [{ text: glyphs, start: w.start }], start: w.start, cjk, line: index }; out.push(cur); }
+        if (join && cur && room(cur) + n <= 6) cur.parts.push({ text: glyphs, start: w.start, color: w.color });
+        else { cur = { parts: [{ text: glyphs, start: w.start, color: w.color }], start: w.start, cjk, line: index }; out.push(cur); }
       }
       if (ends) cur = null;
       continue;
@@ -133,9 +134,9 @@ export function unitsOf(line: LyricLine, index: number): Unit[] {
     // (Marks inside a word stay — world.execute — those round it go.)
     const text = w.text.toUpperCase().replace(/[()（）\[\]［］「」『』\u300A\u300B<>]/g, ' ').trim().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').replace(/\s+/g, ' ');
     if (!text) continue;
-    if (cur && w.start - cur.start < MIN_GAP && room(cur) + text.length < 18) { cur.parts.push({ text, start: w.start }); continue; }
-    if (text.length <= 2 && !carry && w !== line.words[line.words.length - 1]) { carry = { text, start: w.start }; continue; }
-    const parts = carry ? [carry, { text, start: w.start }] : [{ text, start: w.start }];
+    if (cur && w.start - cur.start < MIN_GAP && room(cur) + text.length < 18) { cur.parts.push({ text, start: w.start, color: w.color }); continue; }
+    if (text.length <= 2 && !carry && w !== line.words[line.words.length - 1]) { carry = { text, start: w.start, color: w.color }; continue; }
+    const parts = carry ? [carry, { text, start: w.start, color: w.color }] : [{ text, start: w.start, color: w.color }];
     cur = { parts, start: parts[0].start, cjk, line: index };
     out.push(cur);
     carry = null;
@@ -167,6 +168,8 @@ export class KineticType implements MvScene {
   private cmds: Cmd[] = [];
   private W = 16;
   private colors: THREE.Color[];
+  /** A unit's text (as sung so far, or whole) that holds a word naming a colour → that colour (the first such word's). */
+  private named = new Map<string, THREE.Color>();
   private paper: THREE.Color;
   private ink: THREE.Color;
   private title: string;
@@ -197,6 +200,14 @@ export class KineticType implements MvScene {
       if (line.backing) return;
       const units = unitsOf(line, i);
       if (!units.length) return;
+      // A unit with a word that names a colour is set in it, as sung so far and whole (the texts the layouts draw).
+      for (const u of units) {
+        let own: string | undefined;
+        u.parts.forEach((p, k) => {
+          own ??= p.color;
+          if (own) this.named.set(u.parts.slice(0, k + 1).map(q => q.text).join(u.cjk ? '' : ' '), new THREE.Color(own));
+        });
+      }
       const end = track.leaveAt(i) + track.exitOf(i);
       // A long line in two layouts, split at the unit nearest its middle.
       const span = line.end - units[0].start;
@@ -343,7 +354,7 @@ export class KineticType implements MvScene {
   }
 
   private word(text: string, px: number, em: number, cx: number, cy: number, color: THREE.Color, opacity = 1, extra: Partial<WordCmd> = {}): WordCmd {
-    const c: WordCmd = { kind: 'word', text, px, em, cx, cy, color, opacity, rot: 0, mirror: false, vertical: false, vx: 0, reveal: 2, order: 20, ...extra };
+    const c: WordCmd = { kind: 'word', text, px, em, cx, cy, color: this.named.get(text) ?? color, opacity, rot: 0, mirror: false, vertical: false, vx: 0, reveal: 2, order: 20, ...extra };
     this.cmds.push(c);
     return c;
   }

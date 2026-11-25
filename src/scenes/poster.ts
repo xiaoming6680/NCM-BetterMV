@@ -201,14 +201,15 @@ export class Poster implements MvScene {
     });
     const lineH = h * (cjk ? 1.2 : 1.02);
     if (variant === 'slab') y0 = ((rows.length - 1) * lineH) / 2;
-    const barMat = () => flat(this.sig);
+    // A word that names a colour sits on a bar of that colour while sung (the type keeps the print's two inks).
+    const barMat = (i: number) => flat(line.words[i].color ? new THREE.Color(line.words[i].color) : this.sig);
     rows.forEach((row, r) => {
       const rowW = row.reduce((a, i) => a + (probe[i].userData.width as number), 0) + gap * scale * (row.length - 1);
       let x = align === 'left' ? x0 : x0 - rowW;
       for (const i of row) {
         const m = probe[i], w = m.userData.width as number;
         const y = y0 - r * lineH;
-        const bar = new THREE.Mesh(new THREE.PlaneGeometry(1, h * 0.92), barMat()) as unknown as Mesh;
+        const bar = new THREE.Mesh(new THREE.PlaneGeometry(1, h * 0.92), barMat(i)) as unknown as Mesh;
         bar.geometry.translate(0.5, 0, 0);
         bar.position.set(x - h * 0.06, y, 0.1);
         bar.scale.x = 0.0001;

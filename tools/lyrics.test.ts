@@ -118,3 +118,23 @@ test('ordinary lyrics are not affected', () => {
   assert.deepEqual(lines.map(l => l.words.map(w => w.text)), [['I', 'walk', 'alone'], ['Under', 'the', 'sky,', 'again']]);
 });
 
+test('words that name a colour are set in it; the same characters in other words are not', () => {
+  const colored = (text: string) => {
+    const [line] = parseNeteaseLyric({ lrc: { lyric: lrc([[1, text]]) } }, 10);
+    return line.words.filter(w => w.color).map(w => w.text.replace(/[\p{P}]/gu, '')).join(' ');
+  };
+  assert.equal(colored('我看见蓝色的天'), '蓝 色');
+  assert.equal(colored('深蓝的海和火红的云'), '深 蓝 火 红');
+  assert.equal(colored('白云飘过 我明白了'), '白');
+  assert.equal(colored('青春的青山'), '青');
+  assert.equal(colored('粉丝送我粉红的花'), '粉 红');
+  assert.equal(colored('金钱买不到金色的光'), '金 色');
+  assert.equal(colored('Blue skies, golden hair, RED,dawn'), 'Blue golden RED');
+  assert.equal(colored('Read the news, I feel blue'), 'blue');
+  assert.equal(colored('真っ赤なピンクの花'), '真 っ 赤 ピ ン ク');
+  assert.equal(colored('黑夜'), '');
+  assert.equal(colored('是纯白色的'), '纯 白 色');
+  const [line] = parseNeteaseLyric({ lrc: { lyric: lrc([[1, '蓝色 green']]) } }, 10);
+  assert.ok(line.words.every(w => /^#[0-9a-f]{6}$/.test(w.color!)));
+  assert.notEqual(line.words[0].color, line.words[2].color);
+});

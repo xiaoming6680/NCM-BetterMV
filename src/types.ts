@@ -72,6 +72,8 @@ export interface LyricWord {
   text: string;
   start: number;
   end: number;
+  /** The colour the word names, as an sRGB hex string (src/lyrics/colors.ts): it is set in that colour. */
+  color?: string;
 }
 
 export interface LyricLine {
