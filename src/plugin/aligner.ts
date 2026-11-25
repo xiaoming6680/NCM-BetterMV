@@ -224,9 +224,9 @@ export async function cachedAlignment(id: number, lines: LyricLine[]): Promise<A
   } catch { return null; }
 }
 
-/** The lines as the pack takes them: backing lines (wholly in brackets) are not aligned. */
+/** The lines as the pack takes them: backing lines (wholly in brackets) and typed-out ones (src/lyrics/typed.ts) are not aligned. */
 export const jobLines = (lines: LyricLine[], duration: number) =>
-  lines.map((l, i) => ({ start: l.start, next: lines[i + 1]?.start ?? duration, words: l.backing ? [] : l.words.map(w => w.text) }));
+  lines.map((l, i) => ({ start: l.start, next: lines[i + 1]?.start ?? duration, words: l.backing || l.typed ? [] : l.words.map(w => w.text) }));
 
 /** The song as the pack hears it: 16 kHz mono, 16-bit. */
 export async function pcm16k(audio: ArrayBuffer): Promise<Int16Array<ArrayBuffer>> {

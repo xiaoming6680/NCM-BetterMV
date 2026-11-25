@@ -1,6 +1,7 @@
 // NetEase lyric JSON (/api/song/lyric/v1) → timed lines and words.
 // Word times come from yrc when NetEase has it; otherwise each line's words are spread over the line by syllable count.
 import type { LyricLine, LyricWord } from '../types.ts';
+import { mergeTyped } from './typed.ts';
 
 export interface NeteaseLyric {
   lrc?: { lyric?: string };
@@ -275,7 +276,7 @@ export function parseNeteaseLyric(doc: NeteaseLyric, duration: number): LyricLin
   if (!doc || doc.pureMusic || doc.nolyric || doc.uncollected) return [];
   const trans = translations(doc);
   const timed = fromYrc(doc);
-  if (!timed.length) return fromLrc(doc, trans, duration);
+  if (!timed.length) return mergeTyped(fromLrc(doc, trans, duration));
   // A yrc that runs late is brought back (before the translations are matched: a line not found in the lrc takes
   // the one nearest its corrected start).
   const lag = yrcLag(timed, doc);

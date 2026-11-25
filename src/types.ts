@@ -84,4 +84,9 @@ export interface LyricLine {
   translation?: string;
   /** Sung wholly in brackets in the lyrics: backing vocals or a vocal chop (the brackets are dropped from the text). */
   backing?: boolean;
+  /**
+   * Made from a run of lines that type the text out (src/lyrics/typed.ts): its words come in when the lyrics typed
+   * them, so the aligner leaves them be.
+   */
+  typed?: boolean;
 }

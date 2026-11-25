@@ -197,7 +197,7 @@ export class KineticType implements MvScene {
       if (line.backing) return;
       const units = unitsOf(line, i);
       if (!units.length) return;
-      const end = track.leaveAt(i) + track.exitTime;
+      const end = track.leaveAt(i) + track.exitOf(i);
       // A long line in two layouts, split at the unit nearest its middle.
       const span = line.end - units[0].start;
       if (span > 3.6 && units.length >= 4) {

@@ -59,13 +59,36 @@ export class LyricTrack {
     this.starts = Float64Array.from(lines, l => l.start);
   }
 
+  /**
+   * How early line i comes in (s): `lead`, or half the time since the line before began when that is shorter. Lines
+   * a fraction of a second apart (《Credits EX》, issue #5) came in half a second early and left before they began:
+   * the two lines on screen were always ones still to come, the line being sung never shown.
+   */
+  leadOf(i: number): number {
+    const prev = this.lines[i - 1];
+    return prev ? Math.min(this.lead, Math.max(0, (this.lines[i].start - prev.start) * 0.5)) : this.lead;
+  }
+
+  /**
+   * How long line i takes to leave (s): `exitTime`, or less when the next line comes sooner — a quarter of the time
+   * from this line's start, and for a line typed out (src/lyrics/typed.ts) half the time from its last word's: it shows
+   * that word a moment before the next line begins, and had left before the word came in. (Sung lines keep the longer
+   * exit: their last word is often sung right up to the next line, and a third of all lines would have left faster.)
+   */
+  exitOf(i: number): number {
+    const line = this.lines[i], next = this.lines[i + 1];
+    if (!next) return this.exitTime;
+    const last = line.typed && line.words.length ? Math.max(line.start, line.words[line.words.length - 1].start) : line.start;
+    return Math.min(this.exitTime, Math.max(0.01, Math.min((next.start - line.start) * 0.25, (next.start - last) * 0.5)));
+  }
+
   /** When line i starts to leave. */
   leaveAt(i: number): number {
-    const line = this.lines[i], next = this.lines[i + 1];
+    const line = this.lines[i], next = this.lines[i + 1], exit = this.exitOf(i);
     // Before the next line's first word, so this one has mostly moved off and faded by the time that word lights up
     // where it stood. (Leaving 0.12 s before, it was still three quarters there, and a centred card's first word
     // landed on top of it.)
-    if (next && next.start - line.end < BRIDGE_GAP) return Math.max(line.end, next.start) - this.exitTime - 0.02;
+    if (next && next.start - line.end < BRIDGE_GAP) return Math.max(line.end, next.start) - exit - 0.02 * (exit / this.exitTime);
     return line.end + this.tail;
   }
 
@@ -73,9 +96,10 @@ export class LyricTrack {
   visible(t: number): LineState[] {
     const out: LineState[] = [];
     for (let i = lastIndex(this.starts, t + this.lead); i >= 0 && out.length < 2; i--) {
-      const leave = this.leaveAt(i);
-      if (t >= leave + this.exitTime) break;
-      out.unshift(this.state(i, t, Math.max(0, Math.min(1, (t - leave) / this.exitTime))));
+      if (t < this.lines[i].start - this.leadOf(i)) continue;
+      const leave = this.leaveAt(i), exit = this.exitOf(i);
+      if (t >= leave + exit) break;
+      out.unshift(this.state(i, t, Math.max(0, Math.min(1, (t - leave) / exit))));
     }
     return out;
   }
